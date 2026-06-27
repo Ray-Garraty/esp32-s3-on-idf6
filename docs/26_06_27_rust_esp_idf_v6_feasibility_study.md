@@ -630,14 +630,110 @@ This is because the NimBLE v1.7 GAP event union layout is **identical** to the N
 
 The patch will be submitted upstream to `taks/esp32-nimble` once the migration is stable.
 
-## 12. Key Decisions Summary
+## 13. Phase 1 — RMT Stepper Validation Results (2026-06-27)
+
+Phase 1 executed on the same hardware: **ESP32-WROOM-32** (rev v3.1). Goal: validate RMT-based stepper pulse generation on real hardware.
+
+### Files Created
+
+```
+src/
+├── lib.rs                   # Module declarations
+├── pins.rs                  # GPIO pin constants (cfg-gated, xtensa only)
+├── types.rs                 # Steps, Hz, Direction, Ml
+├── errors.rs                # StepperError (InitFailed, Rmt, InvalidConfig)
+├── main.rs                  # Entry point — RMT stepper test loop
+└── stepper/
+    ├── mod.rs               # Re-exports
+    ├── ramp.rs              # Trapezoidal acceleration + 10 host-based unit tests
+    └── rmt_stepper.rs       # RMT stepper driver (TxChannelDriver + PinDriver)
+```
+
+### RMT Stepper Implementation (`rmt_stepper.rs`)
+
+| Parameter | Value |
+|---|---|
+| RMT channel | 0 (TX) |
+| STEP pin | GPIO25 |
+| DIR pin | GPIO26 (PinDriver::output) |
+| EN pin | GPIO27 (PinDriver::output, active LOW) |
+| RMT resolution | 1 MHz (1 tick = 1 µs) |
+| Pulse width | 1 tick (1 µs HIGH) |
+| Chunk size | 128 symbols per `send_and_wait()` |
+| Transmit mode | `CopyEncoder` + `TransmitConfig { loop_count: None, eot_level: false }` |
+
+Key implementation details:
+- `PinDriver<'d, Output>` has **1** generic argument (MODE), not 2 — the pin type is erased
+- `TxChannelDriver` takes `impl OutputPin + 'd` — **no `RmtOutputPin` trait** exists
+- `apply_carrier(None)` is optional — not needed for stepper pulses
+- `RmtChannel` trait must be in scope for `disable()` method
+- `EspError` is re-exported from `esp_idf_sys`, not directly in `esp_idf_hal`
+- GPIO pin constructors (`Gpio25`, etc.) have **private fields** — cannot be used as `const` values. Use `peripherals.pins.gpioXX.degrade_output()` at runtime.
+
+### Host-Based Tests (ramp.rs)
+
+```
+cargo test --lib stepper::ramp::tests
+running 10 tests
+test stepper::ramp::tests::accel_decel_monotonic ... ok
+test stepper::ramp::tests::accel_first_is_max_interval ... ok
+test stepper::ramp::tests::cruise_at_full_speed ... ok
+test stepper::ramp::tests::decel_last_is_max_interval ... ok
+test stepper::ramp::tests::deterministic ... ok
+test stepper::ramp::tests::interval_bounds ... ok
+test stepper::ramp::tests::single_step ... ok
+test stepper::ramp::tests::triangular_no_cruise ... ok
+test stepper::ramp::tests::two_steps ... ok
+test stepper::ramp::tests::zero_steps ... ok
+test result: ok. 10 passed; 0 failed
+```
+
+### Real-Hardware Validation
+
+| Test | Condition | Result |
+|---|---|---|
+| 500 Hz continuous rotation | `interval_us=2000`, chunk=128, loop | ✅ Stepper motor rotates continuously |
+| STEP pin waveform | Oscilloscope on GPIO25 | ✅ 500 Hz square wave, 1 µs HIGH pulse, ~1999 µs LOW |
+| DIR pin | EN=26 HIGH (CW) | ✅ Correct |
+| EN pin | GPIO27 = LOW (active LOW) | ✅ Driver enabled |
+
+### Issues Encountered and Resolved
+
+| Problem | Root Cause | Fix |
+|---|---|---|
+| TG1WDT_SYS_RESET on first `send_and_wait` | Task Watchdog Timer fires when `send_and_wait` blocks main task for ~256 ms (128 × 2000 µs) | `unsafe { esp_idf_sys::esp_task_wdt_deinit(); }` at startup |
+| EN pin default state after `PinDriver::output()` | Fresh boot leaves GPIO at default level (may be HIGH) | Set `en.set_low()` immediately in `RmtStepper::new()` |
+| `PinDriver` struct takes 2 generic args (compiler error) | `PinDriver<'d, MODE>` has only 1 type parameter, not 2 | Changed to `PinDriver<'d, Output>` |
+| `Gpio25` constructor has private fields | GPIO pins use private fields — cannot be `const` values | Removed const pin definitions; use `peripherals.pins.gpioXX.degrade_output()` |
+
+### Implementation Order Update
+
+The actual implementation diverged from the original plan in §10:
+
+| Original Plan | Actual | Notes |
+|---|---|---|
+| Phase 1: timer_stepper.rs (busy-wait) | **rmt_stepper.rs** (RMT) | RMT chosen over busy-wait by stakeholder |
+| Phase 2: ramp.rs | **Phase 1** | ramp.rs implemented concurrently with rmt_stepper.rs |
+| Phase 2: controller.rs | **Not yet** | Burette state machine is next |
+| Phase 2: valve.rs | **Not yet** | Next phase |
+
+### Key Architectural Corrections
+
+1. **No `RmtOutputPin` trait** — `TxChannelDriver::new()` accepts `impl OutputPin + 'd`. Any GPIO pin that implements `OutputPin` works directly.
+2. **`PinDriver<P, MODE>` has 1 type parameter** — `PinDriver<'d, MODE>`. The pin type `P` is not exposed in the struct. Conversion from concrete pins uses `degrade_output()` -> `AnyOutputPin<'d>` -> `PinDriver::output()`.
+3. **WDT must be disabled** for any blocking RMT transmission > 100 ms. All stepper moves use `send_and_wait()` which blocks the calling task. Use `esp_task_wdt_deinit()` or feed the WDT between chunks.
+4. **EN pin active LOW** must be set immediately in the constructor — don't rely on `enable()` being called before `move_steps()`.
+
+## 15. Key Decisions Summary (Updated 2026-06-27)
 
 | Decision | Choice | Rationale |
 |---|---|---|
 | Stack | `esp-idf-hal` (std) | Need WiFi, BLE, NVS, std threads |
 | IDF version | v6.0.1 | Latest stable; crates have git patches |
-| Stepper | TimerStepper (from asmpl) + ramp | Proven on hardware |
+| Stepper pulse gen | **RMT** (TxChannelDriver) | Hardware pulse train, 0 CPU load per pulse. Validated at 500 Hz on real hardware. |
+| Fallback stepper | `Ets::delay_us` busy-wait (from asmpl) | Available if RMT API has undiscovered bugs |
 | Acceleration | Trapezoidal pre-computed | Good enough for titrator (no S-curve needed) |
+| WDT | **Disabled** (`esp_task_wdt_deinit()`) | RMT `send_and_wait()` blocks > 250ms; idle task can't feed TWDT |
 | JSON | serde + serde_json | Standard, efficient, well-tested |
 | Web server | EspHttpServer + custom SSE | embedded-svc HTTP traits available |
 | BLE | esp32-nimble (NUS) | Same as asmpl |
