@@ -1,13 +1,28 @@
-#[cfg(target_arch = "xtensa")]
-use ecotiter_fw::stepper::rmt_stepper::RmtStepper;
-#[cfg(target_arch = "xtensa")]
-use ecotiter_fw::types::Direction;
-#[cfg(target_arch = "xtensa")]
+use core::sync::atomic::AtomicBool;
+
+use log::info;
+
+use esp_idf_hal::gpio::Pull;
 use esp_idf_hal::peripherals::Peripherals;
 
-#[cfg(target_arch = "xtensa")]
-fn run_stepper_continuous() {
-    use log::info;
+use ecotiter_fw::errors::StepperError;
+use ecotiter_fw::limitswitch::LimitSwitch;
+use ecotiter_fw::stepper::rmt_stepper::RmtStepper;
+use ecotiter_fw::types::Direction;
+
+static LIMIT_FULL_TRIGGERED: AtomicBool = AtomicBool::new(false);
+static LIMIT_EMPTY_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+fn main() {
+    esp_idf_sys::link_patches();
+    esp_idf_svc::log::EspLogger::initialize_default();
+    log::set_max_level(log::LevelFilter::Info);
+
+    unsafe {
+        esp_idf_sys::esp_task_wdt_deinit();
+    }
+
+    info!("=== Limit switch + LED test ===");
 
     let peripherals = Peripherals::take().expect("Peripherals::take()");
 
@@ -18,35 +33,77 @@ fn run_stepper_continuous() {
     )
     .expect("RmtStepper::new()");
 
+    stepper.set_stop_flag(&LIMIT_FULL_TRIGGERED);
+
+    let mut limit_full = LimitSwitch::new(
+        peripherals.pins.gpio32,
+        Pull::Down,
+        &LIMIT_FULL_TRIGGERED,
+    )
+    .expect("LimitSwitch FULL (GPIO32)");
+
+    let mut limit_empty = LimitSwitch::new(
+        peripherals.pins.gpio35,
+        Pull::Floating,
+        &LIMIT_EMPTY_TRIGGERED,
+    )
+    .expect("LimitSwitch EMPTY (GPIO35)");
+
+    let mut led = esp_idf_hal::gpio::PinDriver::output(
+        peripherals.pins.gpio2.degrade_output(),
+    )
+    .expect("LED GPIO2");
+
+    led.set_low().ok();
     stepper.enable().expect("enable");
     stepper
         .set_direction(Direction::Cw)
         .expect("set_direction");
 
-    info!("500 Hz CW: STEP=25 DIR=26 EN=27");
+    info!("Stepper 500 Hz CW — LED=ON when GPIO32=HIGH");
 
-    let chunk: Vec<u32> = vec![2000; 128];
+    let chunk: Vec<u32> = vec![2000; 64];
+    let mut motor_stopped = false;
 
     loop {
-        stepper.move_steps(&chunk).expect("send");
-    }
-}
+        let full_active = limit_full.level();
 
-fn main() {
-    esp_idf_sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
-    log::set_max_level(log::LevelFilter::Info);
+        if full_active {
+            led.set_high().ok();
+        } else {
+            led.set_low().ok();
+        }
 
-    // Disable TWDT — RMT send_and_wait blocks > 250ms, idle task can't feed WDT
-    unsafe { esp_idf_sys::esp_task_wdt_deinit(); }
+        if !motor_stopped {
+            if full_active {
+                stepper.emergency_stop().ok();
+                info!("FULL switch active — motor stopped, LED ON");
+                motor_stopped = true;
+            } else {
+                match stepper.move_steps(&chunk) {
+                    Ok(()) => {}
+                    Err(StepperError::LimitSwitchReached) => {
+                        stepper.emergency_stop().ok();
+                        info!("FULL switch hit during chunk — motor stopped");
+                        motor_stopped = true;
+                    }
+                    Err(e) => {
+                        info!("Stepper error: {:?}", e);
+                        motor_stopped = true;
+                    }
+                }
+            }
+        }
 
-    log::info!("=== 500 Hz RMT stepper test ===");
+        if limit_empty.is_triggered() {
+            info!("EMPTY switch GPIO35 HIGH (latched)");
+            limit_empty.clear();
+            limit_empty.rearm().ok();
+        }
 
-    #[cfg(target_arch = "xtensa")]
-    run_stepper_continuous();
-
-    #[cfg(not(target_arch = "xtensa"))]
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        if motor_stopped && limit_full.is_triggered() {
+            limit_full.clear();
+            limit_full.rearm().ok();
+        }
     }
 }

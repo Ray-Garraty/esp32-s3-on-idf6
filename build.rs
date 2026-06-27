@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+
 fn main() {
+    // ESP-IDF linker args (existing)
     if let Ok(link_args) = std::env::var("DEP_ESP_IDF_EMBUILD_LINK_ARGS") {
         let mut args = Vec::new();
         let mut current = String::new();
         let mut in_quotes = false;
-
         for c in link_args.chars() {
             match c {
                 '"' => in_quotes = !in_quotes,
@@ -18,9 +20,103 @@ fn main() {
         if !current.is_empty() {
             args.push(current);
         }
-
         for arg in &args {
             println!("cargo:rustc-link-arg-bins={}", arg);
         }
     }
+
+    // Suppress cfg warning for esp32-nimble IDF v6 patches
+    println!("cargo::rustc-check-cfg=cfg(esp_idf_version_major, values(\"6\"))");
+
+    // Only patch on xtensa targets
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if !target.contains("xtensa") {
+        return;
+    }
+
+    let Some(file) = find_esp32_nimble_source() else {
+        eprintln!("[build.rs] esp32-nimble source not found, skipping patch");
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", file.display());
+
+    let src = std::fs::read_to_string(&file).unwrap_or_default();
+
+    // Check if IDF v6 patch is already present
+    if src.contains("esp_idf_version_major = \"6\"") {
+        return;
+    }
+
+    eprintln!("[build.rs] Patching esp32-nimble {} for IDF v6...", file.display());
+
+    let patched = src
+        .replace(
+            "all(\n      esp_idf_version_major = \"5\",\n      esp_idf_version_minor = \"5\"),",
+            "all(\n      esp_idf_version_major = \"5\",\n      esp_idf_version_minor = \"5\"),\n    all(\n      esp_idf_version_major = \"6\"),",
+        )
+        .replace(
+            "all(\n      esp_idf_version_major = \"5\",\n      esp_idf_version_minor = \"5\",\n    )",
+            "all(\n      esp_idf_version_major = \"5\",\n      esp_idf_version_minor = \"5\",\n    ),\n    all(\n      esp_idf_version_major = \"6\",\n    )",
+        );
+
+    if src != patched {
+        std::fs::write(&file, &patched).expect("Failed to write patched ble_characteristic.rs");
+        eprintln!("[build.rs] Patch applied OK");
+    } else {
+        eprintln!("[build.rs] Patch pattern not matched — file may need manual update");
+    }
+}
+
+fn find_esp32_nimble_source() -> Option<PathBuf> {
+    let cargo_home = std::env::var("CARGO_HOME")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".into());
+            format!("{}/.cargo", home)
+        });
+
+    // Check git checkouts first (git dependency)
+    let checkouts = PathBuf::from(&cargo_home).join("git/checkouts");
+    if checkouts.exists() {
+        if let Ok(entries) = std::fs::read_dir(&checkouts) {
+            for entry in entries.flatten() {
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                if dir_name.starts_with("esp32-nimble") {
+                    if let Ok(revs) = std::fs::read_dir(entry.path()) {
+                        for rev in revs.flatten() {
+                            let candidate = rev.path().join("src/server/ble_characteristic.rs");
+                            if candidate.exists() {
+                                return Some(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: local path dependency via Cargo.toml
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let cargo_toml = PathBuf::from(&manifest_dir).join("Cargo.toml");
+    let content = std::fs::read_to_string(&cargo_toml).ok()?;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("esp32-nimble") && trimmed.contains("path =") {
+            if let Some(start) = trimmed.find("path = \"") {
+                let rest = &trimmed[start + 8..];
+                if let Some(end) = rest.find('"') {
+                    let path_str = &rest[..end];
+                    let candidate = PathBuf::from(path_str).join("src/server/ble_characteristic.rs");
+                    if candidate.exists() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }

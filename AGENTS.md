@@ -2,7 +2,8 @@
 
 - `cargo +esp build --target xtensa-esp32-espidf` — build firmware
 - `cargo test --lib stepper::ramp::tests` — host-based ramp unit tests
-- `espflash flash --monitor --port COM5 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash + monitor
+- `espflash flash --port COM5 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash (без monitor)
+- `timeout 30 python scripts/serial_monitor.py COM5` — монитор с таймаутом 30 с
 - WDT must be disabled: `unsafe { esp_idf_sys::esp_task_wdt_deinit(); }`
 
 # RMT Stepper API (esp-idf-hal v0.46, IDF v6)

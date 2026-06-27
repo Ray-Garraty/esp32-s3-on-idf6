@@ -1,3 +1,5 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use esp_idf_hal::gpio::{AnyOutputPin, Output, PinDriver};
 use esp_idf_hal::rmt::config::{Loop, TransmitConfig, TxChannelConfig};
 use esp_idf_hal::rmt::encoder::CopyEncoder;
@@ -9,12 +11,13 @@ use crate::types::Direction;
 
 const PULSE_WIDTH_TICKS: u16 = 1;
 const RMT_RESOLUTION: u32 = 1_000_000;
-const CHUNK_MAX: usize = 128;
+const CHUNK_MAX: usize = 16;
 
 pub struct RmtStepper<'d> {
     channel: TxChannelDriver<'d>,
     dir: PinDriver<'d, Output>,
     en: PinDriver<'d, Output>,
+    stop_flag: Option<&'static AtomicBool>,
 }
 
 impl<'d> RmtStepper<'d> {
@@ -36,11 +39,21 @@ impl<'d> RmtStepper<'d> {
             },
         )?;
 
-        Ok(Self { channel, dir, en })
+        Ok(Self {
+            channel,
+            dir,
+            en,
+            stop_flag: None,
+        })
     }
 
     pub fn enable(&mut self) -> Result<(), StepperError> {
         self.en.set_low()?;
+        Ok(())
+    }
+
+    pub fn emergency_stop(&mut self) -> Result<(), StepperError> {
+        self.channel.disable()?;
         Ok(())
     }
 
@@ -58,14 +71,39 @@ impl<'d> RmtStepper<'d> {
         Ok(())
     }
 
+    pub fn set_stop_flag(&mut self, flag: &'static AtomicBool) {
+        self.stop_flag = Some(flag);
+    }
+
+    pub fn clear_stop_flag(&mut self) {
+        self.stop_flag = None;
+    }
+
     pub fn move_steps(&mut self, intervals_us: &[u32]) -> Result<(), StepperError> {
         if intervals_us.is_empty() {
             return Ok(());
         }
 
+        if let Some(flag) = self.stop_flag {
+            if flag.load(Ordering::Acquire) {
+                return Err(StepperError::LimitSwitchReached);
+            }
+        }
+
         let mut chunk = Vec::with_capacity(CHUNK_MAX);
 
         for &interval in intervals_us {
+            if chunk.len() >= CHUNK_MAX {
+                self.transmit(&chunk)?;
+                chunk.clear();
+
+                if let Some(flag) = self.stop_flag {
+                    if flag.load(Ordering::Acquire) {
+                        return Err(StepperError::LimitSwitchReached);
+                    }
+                }
+            }
+
             let low_ticks = (interval.saturating_sub(PULSE_WIDTH_TICKS as u32))
                 .min(32767) as u16;
 
@@ -74,11 +112,6 @@ impl<'d> RmtStepper<'d> {
                 Pulse::new(PinState::Low, PulseTicks::new(low_ticks)?),
             );
             chunk.push(symbol);
-
-            if chunk.len() >= CHUNK_MAX {
-                self.transmit(&chunk)?;
-                chunk.clear();
-            }
         }
 
         if !chunk.is_empty() {
