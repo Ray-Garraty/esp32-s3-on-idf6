@@ -1,0 +1,31 @@
+[package]
+name = "ecotiter-fw"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[lib]
+name = "ecotiter_fw"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ecotiter"
+path = "src/main.rs"
+
+[dependencies]
+log = "0.4"
+
+[target.'cfg(target_arch = "xtensa")'.dependencies]
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys", features = ["binstart"] }
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc" }
+esp32-nimble = { path = "C:/Users/vlbes/esp32-nimble" }
+
+[build-dependencies]
+embuild = { git = "https://github.com/ivmarkov/embuild", branch = "master" }
+
+[patch.crates-io]
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys", features = ["binstart"] }
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc" }
+embuild = { git = "https://github.com/ivmarkov/embuild", branch = "master" }

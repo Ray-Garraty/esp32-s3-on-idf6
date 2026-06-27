@@ -1,0 +1,11 @@
+[target.xtensa-esp32-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32"
+ESP_IDF_VERSION = "v6.0.1"
+LIBCLANG_PATH = "C:\\Users\\vlbes\\.rustup\\toolchains\\esp\\xtensa-esp32-elf-clang\\esp-clang\\bin"

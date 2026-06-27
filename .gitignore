@@ -1,0 +1,12 @@
+/target
+/.embuild
+sdkconfig
+sdkconfig.old
+nul
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+*.swp
+*.swo
+.env
