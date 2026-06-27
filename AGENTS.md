@@ -1,6 +1,6 @@
 # Build & Check Commands
 
-- `cargo +esp build --target xtensa-esp32-espidf` — build firmware
+- `PATH="/c/Users/vlbes/.pyenv/pyenv-win/versions/3.11.9:$PATH" cargo +esp build --target xtensa-esp32-espidf` — build firmware (pyenv fix for Windows)
 - `cargo test --lib stepper::ramp::tests` — host-based ramp unit tests
 - `espflash flash --port COM5 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash (без monitor)
 - `timeout 30 python scripts/serial_monitor.py COM5` — монитор с таймаутом 30 с

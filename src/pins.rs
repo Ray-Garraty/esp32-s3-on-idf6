@@ -1,5 +1,2 @@
-#[cfg(target_arch = "xtensa")]
-pub use xtensa::*;
-
-#[cfg(target_arch = "xtensa")]
-mod xtensa {}
+// GPIO pin constants are defined per-target.
+// For xtensa, pins are used inline via peripherals.pins.gpioXX.degrade_output().

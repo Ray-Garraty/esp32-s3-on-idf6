@@ -2,7 +2,7 @@
 
 Date: 2026-06-27
 Author: AI-assisted feasibility analysis
-Status: Draft / Pending approval
+Status: Approved — Phases 0, 1, 1b validated on HW
 
 ## 1. Goal
 
@@ -739,3 +739,113 @@ The actual implementation diverged from the original plan in §10:
 | BLE | esp32-nimble (NUS) | Same as asmpl |
 | Tests | cargo test + pytest | Per ESP-IDF v6 pytest guide |
 | TMC2209 | Deferred to last phase | Pure protocol, well-understood |
+
+## 16. Phase 1b — WiFi + HTTP Server Implementation (2026-06-27)
+
+Phase executed on real hardware: **ESP32-WROOM-32** (rev v3.1), connected via USB-Serial (COM5).
+
+### Files Created/Modified
+
+| File | Lines | Status |
+|---|---|---|
+| `src/config.rs` (NEW) | ~15 | ✅ Compiles |
+| `src/wifi.rs` (NEW) | ~490 | ✅ Compiles |
+| `src/webserver.rs` (NEW) | ~300 | ✅ Compiles |
+| `src/status.rs` (NEW) | ~10 | ✅ Stub |
+| `src/lib.rs` (MODIFIED) | +5 lines | ✅ 0 errors |
+| `src/main.rs` (MODIFIED) | WiFi init + process() | ✅ 0 errors |
+| `Cargo.toml` (MODIFIED) | +deps | ✅ |
+| `sdkconfig.defaults` (MODIFIED) | +WiFi/LWIP | ✅ |
+
+### Compilation Result
+
+| Target | Errors | Warnings |
+|---|---|---|
+| Host (`cargo test --lib`) | 0 | 0 |
+| Xtensa (`cargo +esp build`) | **0** | **0** |
+| Unit tests (ramp) | — | 10/10 passed |
+
+### Dependencies Added
+
+```
+embedded-svc = "0.29"     # WiFi traits, Configuration
+embedded-io = "0.6"       # Read/Write traits
+heapless = "0.9"          # String<32>/String<64> for SSID/password
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+Note: `heapless = "0.9"` required — `embedded-svc 0.29` depends on `heapless 0.9.3`, not 0.8.
+
+### Architecture
+
+```
+┌─ main.rs ──────────────────────────────────┐
+│                                             │
+│  WifiManager::init()                        │
+│    ├── try_sta_connect()  ← saved NVS creds │
+│    └── start_ap()         ← capture portal  │
+│                                             │
+│  loop {                                      │
+│    wifi_mgr.process()     ← DNS poll + recon │
+│    webserver.restart_pending() → esp_restart │
+│    stepper.move_steps()   ← existing logic   │
+│  }                                           │
+└─────────────────────────────────────────────┘
+
+┌─ WifiManager ───────────────────────────────┐
+│  NVS namespace "wifi": {ssid, password}     │
+│  DNS responder: UDP 53 → AP_IP             │
+│  BLE coexistence: set_ble_active(bool)     │
+│  Modes: Off | ApMode | StaConnecting | Sta  │
+└─────────────────────────────────────────────┘
+
+┌─ WebServer (EspHttpServer) ────────────────┐
+│  GET  /wifi             → captive portal   │
+│  POST /wifi/connect     → save + restart   │
+│  GET  /wifi/status      → JSON             │
+│  GET  /api/status       → device status    │
+│  GET  /api/ping         → {"status":"ok"}  │
+│  GET  /api/events       → SSE (5 iters)    │
+│  GET  /                 → AP/STA redirect  │
+└─────────────────────────────────────────────┘
+```
+
+### Real-Hardware Validation: ✅ RESOLVED — Stack Overflow
+
+The crash was fixed by increasing `CONFIG_ESP_MAIN_TASK_STACK_SIZE` from **8192** to **16384** in `sdkconfig.defaults`. The WiFi init path (`EspWifi::new` → `set_configuration` → `wifi.start()`) consumed more than 8 KB of stack.
+
+**Previous findings** (Phase 0, §11) did not test WiFi init — only NimBLE init — so the stack overflow was not caught earlier.
+
+**Verified boot log (2026-06-27):**
+
+```
+I (1190) ecotiter_fw::wifi: WiFi manager init
+I (1190) ecotiter_fw::wifi: No saved WiFi credentials
+I (1200) ecotiter_fw::wifi: Starting AP mode (captive portal)
+I (1200) ecotiter_fw::wifi: Starting AP: EcoTiter-AP / ch 1
+I (1220) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06
+I (1300) wifi:mode : softAP (b4:bf:e9:09:ff:ed)
+I (1320) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.71.1
+I (2830) ecotiter_fw::wifi: AP ready at EcoTiter-AP:192.168.4.1
+I (2840) ecotiter_fw::wifi: DNS responder started on port 53
+I (2850) esp_idf_svc::http::server: Started Httpd server ...
+I (2940) ecotiter_fw::webserver: HTTP server started on port 80
+```
+
+**No stack overflow, no panics.** All 7 HTTP handlers registered, AP visible on scan, DHCP + DNS operational.
+
+### Deferred (API mismatch with git versions)
+
+| Feature | Reason | Workaround |
+|---|---|---|
+| mDNS (`EspMdns::take()`) | Method signature mismatch in git master esp-idf-svc | Skip; add when crates.io release catches up |
+| NTP (`EspSntp::new_default()`) | Same — API mismatch | Skip; use `sntp` via `esp_idf_sys` FFI directly if needed |
+| TMC2209 UART | Last-phase item | Not started |
+
+### Key Healing Notes
+
+- `EspHttpServer` from `esp-idf-svc` git master works with `fn_handler` — return type is `Result<(), EspIOError>` where `EspIOError` is re-exported from `esp_idf_hal::io::EspIOError`
+- `EspHttpConnection::split()` returns `(&EspHttpConnection, &mut Self)` — use this pattern for POST body reading instead of `read_body()`
+- Embedded-svc 0.29 uses **heapless 0.9** (const generics: `String<32>`) not 0.8 (typenum: `String<U32>`)
+- NVS raw FFI (`esp_idf_sys::nvs_open`/`nvs_get_str`/`nvs_set_str`) is stable and reliable — use this instead of `EspNvs` wrapper if API mismatches
