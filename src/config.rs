@@ -12,6 +12,14 @@ pub const STA_RECONNECT_INTERVAL_MS: u32 = 30_000;
 pub const STA_POLL_MS: u32 = 500;
 pub const STA_POST_CONNECT_DELAY_MS: u32 = 500;
 
+pub const ADC_PIN: u8 = 34;
+pub const ADC_SAMPLES: u32 = 64;
+pub const ADC_ATTENUATION_DB: u8 = 12;
+
+pub const TEMP_PIN: u8 = 33;
+pub const TEMP_READ_INTERVAL_MS: u64 = 1000;
+pub const TEMP_CONVERSION_WAIT_MS: u64 = 800;
+
 pub const NTP_MIN_VALID_TIMESTAMP: i64 = 1_000_000_000;
 pub const MDNS_HOSTNAME: &str = "ecotiter";
 pub const HTTP_PORT: u16 = 80;

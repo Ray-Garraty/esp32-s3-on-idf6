@@ -11,6 +11,12 @@ pub mod stepper;
 pub mod limitswitch;
 
 #[cfg(target_arch = "xtensa")]
+pub mod adc;
+
+#[cfg(target_arch = "xtensa")]
+pub mod temperature;
+
+#[cfg(target_arch = "xtensa")]
 pub mod wifi;
 
 #[cfg(target_arch = "xtensa")]

@@ -46,9 +46,19 @@ impl Log for Logger {
     fn log(&self, record: &Record) {
         let level = record.level();
         let args = record.args();
+        let target = record.target();
+
+        // Suppress HTTP disconnect noise from esp-idf-svc
+        if target.starts_with("esp_idf_svc::http") && level <= log::Level::Warn {
+            return;
+        }
 
         let mut msg: heapless::String<256> = heapless::String::new();
         write!(msg, "{}", args).ok();
+
+        // Print to UART console (std mode — println! maps to ESP-IDF console)
+        #[cfg(target_arch = "xtensa")]
+        println!("[{}] {}", level, args);
 
         let ts_ms = unsafe { esp_idf_sys::esp_timer_get_time() as u64 / 1000 };
 

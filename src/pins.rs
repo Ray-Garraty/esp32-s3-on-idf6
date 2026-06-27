@@ -1,2 +1,10 @@
-// GPIO pin constants are defined per-target.
-// For xtensa, pins are used inline via peripherals.pins.gpioXX.degrade_output().
+pub const PIN_STEP: u8 = 25;
+pub const PIN_DIR: u8 = 26;
+pub const PIN_EN: u8 = 27;
+pub const PIN_LIMIT_FULL: u8 = 32;
+pub const PIN_LIMIT_EMPTY: u8 = 35;
+pub const PIN_ADC: u8 = 34;
+pub const PIN_TEMP: u8 = 33;
+pub const PIN_LED: u8 = 2;
+pub const PIN_VALVE_OPEN: u8 = 12;
+pub const PIN_VALVE_CLOSE: u8 = 13;

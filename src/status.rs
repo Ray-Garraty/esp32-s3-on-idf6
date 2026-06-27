@@ -10,7 +10,28 @@ pub struct DeviceStatus {
     pub ap_mode: bool,
 }
 
-/// Format status response matching C++ format_status_response JSON shape
+fn current_temp() -> Option<f32> {
+    #[cfg(target_arch = "xtensa")]
+    {
+        crate::temperature::temp_celsius()
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        None
+    }
+}
+
+fn current_mv() -> Option<i16> {
+    #[cfg(target_arch = "xtensa")]
+    {
+        Some(crate::adc::calibrated_mv())
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        None
+    }
+}
+
 pub fn format_status_response(
     connected: bool,
     ssid: Option<&str>,
@@ -35,8 +56,8 @@ pub fn format_status_response(
         "wifi_rssi": rssi,
         "wifi_ip": ip,
         "ap_mode": ap_mode,
-        "temp": null,
-        "mv": null,
+        "temp": current_temp(),
+        "mv": current_mv(),
         "vlv": "unk",
         "brt": {
             "sts": "idle",

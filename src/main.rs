@@ -1,7 +1,7 @@
 use core::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use log::info;
+use log::*;
 
 use esp_idf_hal::gpio::Pull;
 use esp_idf_hal::peripherals::Peripherals;
@@ -22,6 +22,12 @@ fn main() {
 
     unsafe {
         esp_idf_sys::esp_task_wdt_deinit();
+
+        // Suppress noise from HTTP client disconnects
+        esp_idf_sys::esp_log_level_set(
+            b"httpd_txrx\0".as_ptr() as *const core::ffi::c_char,
+            esp_idf_sys::esp_log_level_t_ESP_LOG_ERROR,
+        );
     }
 
     info!("=== EcoTiter firmware ===");
@@ -58,6 +64,51 @@ fn main() {
 
     led.set_low().ok();
 
+    // === ADC (pH electrode on GPIO34, ADC1_CH6) ===
+    use esp_idf_hal::adc::attenuation::DB_12;
+    use esp_idf_hal::adc::oneshot::config::AdcChannelConfig;
+    use esp_idf_hal::adc::oneshot::{AdcChannelDriver, AdcDriver};
+
+    let adc = AdcDriver::new(peripherals.adc1).expect("AdcDriver::new()");
+    let mut adc_channel = AdcChannelDriver::new(
+        &adc,
+        peripherals.pins.gpio34,
+        &AdcChannelConfig {
+            attenuation: DB_12,
+            ..Default::default()
+        },
+    )
+    .expect("AdcChannelDriver::new()");
+
+    let mut adc_buf = [0u16; 64];
+    let mut adc_idx = 0usize;
+
+    // === Temperature (DS18B20 on GPIO4 via software bitbang) ===
+    {
+        let gpio33 = peripherals.pins.gpio33;
+        info!("DS18B20: software bitbang on GPIO33");
+        let _ = std::thread::Builder::new()
+            .stack_size(16384)
+            .name("temp".into())
+            .spawn(move || {
+                info!("Temperature thread started");
+                let mut bus = match ecotiter_fw::temperature::OneWireBus::new(gpio33) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("OneWireBus::new() failed: {:?}", e);
+                        return;
+                    }
+                };
+                loop {
+                    if let Some(temp) = ecotiter_fw::temperature::read_sensor(&mut bus) {
+                        info!("Temperature: {:.1}°C", temp);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                }
+            })
+            .expect("temp thread spawn");
+    }
+
     {
         use esp_idf_svc::eventloop::EspSystemEventLoop;
         use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -79,10 +130,8 @@ fn main() {
 
         wifi_mgr.lock().unwrap().init();
 
-        let webserver =
-            WebServer::new(wifi_mgr.clone());
+        let webserver = WebServer::new(wifi_mgr.clone());
 
-        // Ensure WiFi is started before loop
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         stepper.enable().expect("enable");
@@ -90,7 +139,9 @@ fn main() {
             .set_direction(Direction::Cw)
             .expect("set_direction");
 
-        info!("Stepper 500 Hz CW — LED=ON when GPIO32=HIGH");
+        info!("Stepper 500 Hz CW");
+        info!("ADC sampling on GPIO34 (pH)");
+        info!("DS18B20 temperature on GPIO33");
 
         let chunk: Vec<u32> = vec![2000; 64];
         let mut motor_stopped = false;
@@ -103,7 +154,6 @@ fn main() {
                 wifi.process();
             }
 
-            // Restart if WiFi credentials updated via captive portal
             if webserver.restart_pending() {
                 info!("Restart pending after WiFi config — restarting");
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -112,7 +162,22 @@ fn main() {
                 }
             }
 
-            // Stepper + limit switch loop (existing logic)
+            // ADC sample (single read, non-blocking — ~30 µs)
+            match adc_channel.read() {
+                Ok(mv) => {
+                    adc_buf[adc_idx] = mv;
+                    adc_idx = (adc_idx + 1) % 64;
+                    if adc_idx == 0 {
+                        let sum: u32 = adc_buf.iter().map(|&v| v as u32).sum();
+                        let avg = (sum / 64) as u16;
+                        ecotiter_fw::adc::set_raw_mv(avg);
+                        info!("ADC: raw_mv={}, calibrated_mv={}", avg, ecotiter_fw::adc::calibrated_mv());
+                    }
+                }
+                Err(e) => warn!("ADC read error: {:?}", e),
+            }
+
+            // Stepper + limit switches (existing logic)
             let full_active = limit_full.level();
 
             if full_active {

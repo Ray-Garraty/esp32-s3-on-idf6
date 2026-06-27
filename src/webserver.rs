@@ -8,6 +8,28 @@ use esp_idf_hal::io::EspIOError;
 use esp_idf_svc::http::server::{EspHttpServer, Method};
 
 use crate::config;
+
+fn current_temp() -> Option<f32> {
+    #[cfg(target_arch = "xtensa")]
+    {
+        crate::temperature::temp_celsius()
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        None
+    }
+}
+
+fn current_mv() -> Option<i16> {
+    #[cfg(target_arch = "xtensa")]
+    {
+        Some(crate::adc::calibrated_mv())
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        None
+    }
+}
 use crate::wifi::WifiManager;
 
 pub type SharedWifi = Arc<Mutex<WifiManager>>;
@@ -181,8 +203,8 @@ impl WebServer {
                     "wifi_rssi": wifi.wifi_rssi(),
                     "wifi_ip": wifi.wifi_ip(),
                     "ap_mode": wifi.is_ap_mode(),
-                    "temp": null,
-                    "mv": null,
+                    "temp": current_temp(),
+                    "mv": current_mv(),
                     "vlv": "unk",
                     "brt": {
                         "sts": "idle",
@@ -239,8 +261,8 @@ impl WebServer {
                         "wifi_ssid": wifi.wifi_ssid(),
                         "wifi_rssi": wifi.wifi_rssi(),
                         "ap_mode": wifi.is_ap_mode(),
-                        "temp": null,
-                        "mv": null,
+                        "temp": current_temp(),
+                        "mv": current_mv(),
                         "vlv": "unk",
                         "brt": {
                             "sts": "idle",
