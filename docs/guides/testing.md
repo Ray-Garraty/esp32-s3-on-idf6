@@ -1,11 +1,19 @@
-# Testing Guide — EcoTiter Firmware
+---
+type: Testing Guide
+title: Testing Guide
+description: Three-tier testing strategy — host unit, on-device integration, and pytest HIL
+tags: [testing, unit-test, integration, hil]
+timestamp: 2026-06-29
+---
+
+# Testing Guide
 
 ## Overview
 
 Three-tier testing strategy derived from the ASMPL autosampler project and adapted for the Rust + ESP-IDF v6 (`std` mode) stack with `espflash` as the runner.
 
 | Tier | Scope | Command | Coverage |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | 1 | Host-based unit + property-based tests | `cargo test --lib` | ~70% — pure logic + mocks |
 | 2 | On-device integration tests | Custom test binary + `espflash flash` | ~20% — hardware-dependent code |
 | 3 | pytest HIL (hardware-in-the-loop) | `pytest --target esp32` | ~10% — end-to-end validation |
@@ -21,19 +29,19 @@ Three-tier testing strategy derived from the ASMPL autosampler project and adapt
 ### Test Pyramid
 
 ```
-          ╱  E2E (pytest HIL)  ╲          ~10%
-         ╱   - Full dose via API   ╲
-        ╱   - Captive portal flow   ╲
-       ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━╲
-      ╱  Integration (on-device)    ╲     ~20%
-     ╱   - RMT stepper at 500 Hz    ╲
-    ╱   - ADC calibration loop      ╲
-   ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╲
-  ╱  Unit + Property-Based (host)   ╲     ~70%
- ╱   - compute_ramp()               ╲
-╱    - State machine transitions     ╲
-╱    - Command parsing + validation  ╲
-╱    - Ramp invariants (proptest)    ╲
+           /  E2E (pytest HIL)  \          ~10%
+          /   - Full dose via API   \
+         /   - Captive portal flow   \
+        /=============================\
+       /  Integration (on-device)    \     ~20%
+      /   - RMT stepper at 500 Hz    \
+     /   - ADC calibration loop      \
+    /=================================\
+   /  Unit + Property-Based (host)   \     ~70%
+  /   - compute_ramp()               \
+ /    - State machine transitions     \
+/    - Command parsing + validation  \
+/    - Ramp invariants (proptest)    \
 ```
 
 ---
@@ -52,7 +60,7 @@ src/
 ├── config.rs            # Constants — host-testable
 ├── stepper/
 │   ├── mod.rs
-│   ├── ramp.rs          # ✅ Pure logic — 10 host tests exist
+│   ├── ramp.rs          # Pure logic — 10 host tests exist
 │   └── rmt_stepper.rs   # xtensa only — not host-testable
 ├── wifi.rs              # DNS builder — has host tests
 ├── adc.rs               # Atomics only — host-testable calibration
@@ -542,8 +550,9 @@ D:\ecttr/
 ├── prototype/                        # Read-only reference implementation
 │   └── src/                          # Do NOT edit — consult for patterns
 │
-├── TESTING.md                        # This file
-└── CODING_STYLE.md
+└── docs/
+    ├── guides/testing.md             # This file
+    └── refs/coding_style.md
 ```
 
 ### cfg Attributes

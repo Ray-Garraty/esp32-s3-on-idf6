@@ -47,4 +47,7 @@ fi
 echo "=== 8. Check for blocking calls in main loop ==="
 python scripts/check_blocking.py
 
+echo "=== 9. Docs OKF validation ==="
+python docs/validate_okf.py
+
 echo "=== All checks passed ==="

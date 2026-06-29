@@ -99,4 +99,4 @@ Concurrency: `std::thread` + atomics + `mpsc` channels. The main loop never bloc
 
 ---
 
-For the full technical specification — protocol reference, state machines, NVS layout, error hierarchy, thread model, build configuration, and dependencies — see [PROJECT.md](./PROJECT.md).
+For the full technical specification — protocol reference, state machines, NVS layout, error hierarchy, thread model, build configuration, and dependencies — see [project.md](./docs/refs/project.md).

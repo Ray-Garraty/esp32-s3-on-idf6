@@ -1,14 +1,22 @@
-# Coding Style Guide — EcoTiter Firmware
+---
+type: Architecture Reference
+title: Coding Style Guide
+description: Coding conventions, error hierarchy, state machine patterns, memory budget, and concurrency rules for EcoTiter firmware
+tags: [coding-style, conventions, architecture]
+timestamp: 2026-06-29
+---
+
+# Coding Style Guide
 
 Based on proven conventions from the ASMPL autosampler project, adapted for the EcoTiter's ESP32 + Rust + ESP-IDF v6 stack, and extended with [Qwen-recommended](https://github.com/qwen-lm) architectural principles.
 
 ## 1. Layered Architecture
 
-Four layers with strict one-way dependency: `domain` → `application` → `infrastructure` → `interface`.
+Four layers with strict one-way dependency: `domain` -> `application` -> `infrastructure` -> `interface`.
 
 **Golden rule:** `domain/` must NEVER import `esp-idf-*` crates. Only `infrastructure/` talks to hardware. `application/` coordinates using domain types and infrastructure traits.
 
-See [PROJECT.md](./PROJECT.md) for the full crate structure.
+See [project.md](./project.md) for the full crate structure.
 
 ## 2. Error Hierarchy
 
@@ -103,7 +111,7 @@ pub trait BuretteState { fn process(&self) -> Result<(), Error>; }
 struct IdleState; struct DosingState;  // Use enum instead!
 ```
 
-See [PROJECT.md](./PROJECT.md) for the concrete `RmtStepper` implementation.
+See [project.md](./project.md) for the concrete `RmtStepper` implementation.
 
 ## 4. State Machine: Explicit Enum + Exhaustive Match
 
@@ -128,11 +136,11 @@ pub enum BuretteCommand {
 ```
 
 Validation pipeline order:
-1. **Safety** — limit switches, valve position
-2. **Concurrency** — return `Busy` if already moving
-3. **State Logic** — reject invalid transitions via exhaustive match
-4. **Parameter Validation** — bounds, ranges
-5. **Execution** — perform the action
+1. **Safety** -- limit switches, valve position
+2. **Concurrency** -- return `Busy` if already moving
+3. **State Logic** -- reject invalid transitions via exhaustive match
+4. **Parameter Validation** -- bounds, ranges
+5. **Execution** -- perform the action
 
 ```rust
 impl BuretteController {
@@ -156,7 +164,7 @@ impl BuretteController {
 Fixed-size buffers for all hot paths. No heap allocations in main loop or motor thread.
 
 ```rust
-// src/domain/memory.rs — central budget definition
+// src/domain/memory.rs -- central budget definition
 pub mod memory {
     use heapless::{String, Vec, Deque};
     use crate::logging::LogEntry;
@@ -181,14 +189,14 @@ let mut dns_buf = [0u8; memory::DNS_BUF_SIZE];
 
 ```rust
 // ALLOWED: Vec at init or config-change time only
-let intervals = compute_ramp(total_steps, &config); // Vec — computed once per config
+let intervals = compute_ramp(total_steps, &config); // Vec -- computed once per config
 ```
 
 ```rust
 // BAD: Vec/String allocation in main loop or motor thread
 loop {
-    let data: Vec<u32> = some_dynamic_data();  // NO — use fixed buffer
-    let json = serde_json::to_string(&status).unwrap(); // NO — pre-allocate
+    let data: Vec<u32> = some_dynamic_data();  // NO -- use fixed buffer
+    let json = serde_json::to_string(&status).unwrap(); // NO -- pre-allocate
 }
 ```
 
@@ -308,7 +316,7 @@ error!("Limit switch triggered"; switch = ?switch_id, action = "emergency_stop")
 
 ### 9.1 WDT
 
-Must be disabled at boot — RMT `send_and_wait()` blocks > 250 ms.
+Must be disabled at boot -- RMT `send_and_wait()` blocks > 250 ms.
 
 ```rust
 unsafe {
@@ -319,14 +327,14 @@ unsafe {
 
 ### 9.2 RMT Stepper
 
-- `TxChannelDriver::new(step_pin, &config)` — accepts `impl OutputPin + 'd`
+- `TxChannelDriver::new(step_pin, &config)` -- accepts `impl OutputPin + 'd`
 - `send_and_wait()` **only in motor thread**, never in main loop
 - `RmtChannel` trait must be in scope for `disable()`
 
 ### 9.3 GPIO Pins
 
-- `GpioXX` have private fields — use `peripherals.pins.gpioXX.degrade_output()`
-- TMC2209 EN is active LOW — call `set_low()` in constructor
+- `GpioXX` have private fields -- use `peripherals.pins.gpioXX.degrade_output()`
+- TMC2209 EN is active LOW -- call `set_low()` in constructor
 
 ### 9.4 Unsafe
 
@@ -356,7 +364,7 @@ pub struct RmtStepper<'d> {
 
 ## 10. Testing
 
-See `TESTING.md` for the 3-tier strategy, and `PROJECT.md` for key test scenarios.
+See [testing.md](../guides/testing.md) for the 3-tier strategy, and [project.md](./project.md) for key test scenarios.
 
 ## 11. Documentation
 
@@ -415,7 +423,7 @@ stepper.move_steps(config::HOMING_STEPS, config::HOMING_SPEED_HZ);
 ## 13. Pre-Merge Checklist
 
 ### Architecture
-- [ ] Code follows layered architecture (`domain/` → no `esp-idf` imports)
+- [ ] Code follows layered architecture (`domain/` -> no `esp-idf` imports)
 - [ ] State machine uses exhaustive matching on enum pairs
 - [ ] No circular dependencies between modules
 
@@ -431,7 +439,7 @@ stepper.move_steps(config::HOMING_STEPS, config::HOMING_SPEED_HZ);
 
 ### Error Handling
 - [ ] No `unwrap()`/`expect()` in library code
-- [ ] Errors use typed hierarchy (`AppError → HardwareError → StepperError`)
+- [ ] Errors use typed hierarchy (`AppError -> HardwareError -> StepperError`)
 - [ ] Every `unsafe` block has a safety comment
 
 ### Testing
@@ -441,7 +449,7 @@ stepper.move_steps(config::HOMING_STEPS, config::HOMING_SPEED_HZ);
 
 ## 14. Dependency Version Duplicates
 
-Embedded ecosystem is in transition — multiple major versions of core crates coexist:
+Embedded ecosystem is in transition -- multiple major versions of core crates coexist:
 
 | Crate | Versions | Rationale |
 |---|---|---|
@@ -451,7 +459,7 @@ Embedded ecosystem is in transition — multiple major versions of core crates c
 | `bitflags` | 1.3 + 2.13 | Host build tooling vs firmware deps |
 
 **Policy:**
-- Duplicates are **accepted** — ~5–10 KB binary overhead is acceptable on ESP32 (520 KB SRAM)
+- Duplicates are **accepted** -- ~5-10 KB binary overhead is acceptable on ESP32 (520 KB SRAM)
 - **DO NOT** `[patch]` versions without verifying API compatibility
 - Monitor binary size (`cargo bloat`), not version count
 - Warning suppressed via `#![allow(clippy::multiple_crate_versions)]`
@@ -460,11 +468,11 @@ Embedded ecosystem is in transition — multiple major versions of core crates c
 
 | Principle | Rule |
 |---|---|
-| **Layers** | `domain` → `application` → `infrastructure` → `interface`. One-way deps only. |
-| **Error Handling** | 3-level hierarchy: `AppError → HardwareError → StepperError`. No `unwrap` in lib. |
+| **Layers** | `domain` -> `application` -> `infrastructure` -> `interface`. One-way deps only. |
+| **Error Handling** | 3-level hierarchy: `AppError -> HardwareError -> StepperError`. No `unwrap` in lib. |
 | **Memory** | Fixed-size `heapless` buffers for hot paths. `Vec` only at init/config-change. |
-| **State Machine** | Explicit enum + exhaustive match. Pipeline: Safety → Busy → State → Params → Execute. |
-| **Concurrency** | `Atomic*` for ISR→task. `mpsc` for task→task. **Never block main loop.** `try_lock()`. |
-| **Types** | Newtype for domain units (`Steps`, `Hz`, `Ml`). Named constants — no magic numbers. |
+| **State Machine** | Explicit enum + exhaustive match. Pipeline: Safety -> Busy -> State -> Params -> Execute. |
+| **Concurrency** | `Atomic*` for ISR->task. `mpsc` for task->task. **Never block main loop.** `try_lock()`. |
+| **Types** | Newtype for domain units (`Steps`, `Hz`, `Ml`). Named constants -- no magic numbers. |
 | **Testing** | Host units + on-device integration + pytest HIL + **property-based** (proptest). |
 | **Anti-patterns** | No global state, no blocking in main loop, no `unwrap` in lib, no magic numbers. |
