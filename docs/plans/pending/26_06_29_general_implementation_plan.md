@@ -1,13 +1,13 @@
 ---
 type: Plan
-title: Production Implementation Plan — EcoTiter Firmware (Rust, ESP-IDF v6)
-description: Atomic build plan for production-grade Rust firmware, derived from legacy C++ reference and Rust feasibility prototype. All changes scoped to src/.
+title: General Implementation Plan — EcoTiter Firmware (Rust, ESP-IDF v6)
+description: Full-scope build plan for production-grade Rust firmware from legacy C++ business logic. All changes scoped to src/. LittleFS logging excluded.
 tags: [plan, implementation, firmware, esp32, production]
 timestamp: 2026-06-29
 status: draft
 ---
 
-# Production Implementation Plan
+# General Implementation Plan
 
 ## References (read-only)
 
@@ -17,7 +17,7 @@ status: draft
 | Rust prototype | `prototype/` | Feasibility validation (RMT config, WiFi AP DHCP fix, NimBLE patch, sdkconfig) |
 | Serial API contract | `C:\Users\vlbes\projects\ecotiter_firmware\docs\API\SERIAL_API.md` | Wire protocol: commands, responses, errors, broadcast — MUST NOT change |
 | HTTP API contract | `C:\Users\vlbes\projects\ecotiter_firmware\docs\API\HTTP_API.md` | REST endpoints, SSE — will be unified with serial format |
-| Tauri client | `C:\Users\vlbes\projects\ecotiter_tauri` | Primary consumer of the serial/BLE API. 31 invoke commands, `parse_broadcast()`, NUS BLE UUIDs |
+| Tauri client | `C:\Users\vlbes\projects\ecotiter_tauri` | Primary consumer of the serial/BLE API. 10 ESP32 commands used, `parse_broadcast()`, NUS BLE UUIDs |
 | Project spec | `docs/refs/project.md` | SSOT: hardware pinout, thread architecture, error hierarchy, module tree |
 | Coding style | `docs/refs/coding_style.md` | 4-layer arch, enum over trait, heapless hot paths, no async, thiserror errors |
 | Testing strategy | `docs/refs/guides/testing.md` | 3-tier: host unit tests, on-device integration, pytest HIL |
@@ -72,7 +72,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 ### Error codes (frozen)
 `burette_busy`, `start_failed`, `limit_full_reached`, `limit_empty_reached`, `stall_detected`, `stopped`, `watchdog_timeout`, `invalid_params`
 
-### Commands (31 total, from Tauri `backend.ts` + SERIAL_API.md)
+### Commands (32 total, from legacy dispatch table)
 | Command | Params | Phases |
 |---|---|---|
 | `system.getStatus` | none | single |
@@ -82,11 +82,14 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | `burette.doseVolume` | `volume_ml`, `speed_ml_min` | two-phase |
 | `burette.rinse` | `cycles`, `speed_ml_min` | two-phase |
 | `burette.stop` | none | single (aborts current, result on original id) |
-| `burette.emergencyStop` | none | single, **internal only** — NOT exposed in API |
+| `burette.emergencyStop` | none | single (auto on Tauri timeout, no UI invocation) |
 | `burette.getStatus` | none | single |
 | `burette.cal.get` | none | single |
 | `burette.cal.calcVolume` | `mass_g`, `temp_c`, `pressure_kpa`, `target_vol_ml` | single |
 | `burette.cal.calcSpeed` | `measurements: [{freq_hz, speed_ml_min}]` | single |
+| `burette.cal.run` | `mode: "dose"|"speed"`, `freq_hz`, `speed_ml_min` | two-phase |
+| `burette.cal.runSpeedSeq` | `freqs: [u16;3]`, `speed_ml_min` | two-phase |
+| `burette.cal.getResult` | none | single |
 | `burette.cal.save` | none | single |
 | `burette.cal.reset` | none | single |
 | `valve.setPosition` | `position: "input"|"output"` | single |
@@ -102,6 +105,8 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | `burette.moveSteps` | `steps`, `speed_hz` | single |
 | `burette.moveToStop` | `dir`, `speed_hz` | single |
 | `burette.setDirection` | `dir` | single |
+| `system.getFormattedLogs` | `start`, `limit`, `level` | single |
+| `system.readLog` | `start`, `limit` | single |
 
 ### BLE GATT (NUS)
 | Attribute | UUID |
@@ -128,7 +133,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 - `src/domain/types.rs`: newtype wrappers — `Steps(i32)`, `Hz(u32)`, `Ml(f32)`, `MlMin(f32)`, `Direction { Cw, Ccw }`
 - `src/domain/memory.rs`: fixed-size buffer aliases — `CommandBuffer::<256>`, `ResponseBuffer::<512>`, `LogBuffer::<100>`
 - `src/domain/logging.rs`: `LogEntry { ts, level, msg }`, ring buffer `heapless::Deque<LogEntry, 100>`, `Log` trait impl
-- `src/main.rs`: `fn main()` — `link_patches()`, `logger::init()`, `esp_task_wdt_deinit()`, `Peripherals::take()`, empty loop
+- `src/main.rs`: `fn main()` — `link_patches()`, `logger::init()`, `esp_task_wdt_deinit()`, suppress httpd_txrx log noise via `esp_log_level_set()`, disable brownout detector via `WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)`, `Peripherals::take()`, empty loop
 
 **Also:** update `sdkconfig.defaults` from prototype (NimBLE, WiFi, ADC, main task stack 16384, pthread stack 8192), verify `Cargo.toml` deps + `build.rs` (esp32-nimble patch), `.cargo/config.toml`, `clippy.toml`
 
@@ -159,8 +164,10 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 - `speed_to_frequency()` / `frequency_to_speed()` — with clamping
 - `get_z_factor()` — bilinear interpolation from ISO 8655 table (31 temp × 6 pressure)
 - `calculate_new_steps_per_ml()` — gravimetric correction
-- `calculate_speed_calibration()` — OLS regression, returns `k`, `r_squared`
-- `AdcCalibration`: `a`, `b` coefficients, OLS from 5 reference points
+- `calculate_speed_calibration()` — OLS regression through origin: `k = Σ(f·v) / Σ(f²)`, returns `k`, `r_squared`
+- `burette_cal_is_default()` — compare all fields within epsilon
+- `burette_cal_set_pending()` / `burette_cal_get_pending_copy()` — thread-safe pending cal pattern (spinlock-protected)
+- `AdcCalibration`: `a`, `b` coefficients, OLS from reference points. Model: `raw = a*ref + b` → `calibrated = (raw - b) / a`
 - All domain types: `no_std` compatible, no `esp-idf-*` imports
 
 **`src/domain/planner.rs`** — Pure planning/validation logic:
@@ -206,12 +213,12 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | Driver | Key Details |
 |---|---|
 | `RmtStepper` | `TxChannelDriver` (channel 0, 1 MHz). `move_steps(&[u32])`: converts intervals to RMT Symbols, `CopyEncoder` + `send_and_wait()`. `PinDriver::output` for DIR (GPIO26) and EN (GPIO27, active LOW). `set_direction()` / `enable()` / `disable()` / `emergency_stop()`. |
-| `AdcDriver` | `AdcDriver<ADC1>` + `AdcChannelDriver` (GPIO34, DB_12). 64-read ring buffer → rolling average. `set_raw_mv()` / `calibrated_mv()` via atomics. |
+| `AdcDriver` | `AdcDriver<ADC1>` + `AdcChannelDriver` (GPIO34, DB_12). 64-read ring buffer → rolling average. `set_raw_mv()` / `calibrated_mv()` via atomics. **Stabilization**: up to 10 attempts, range ≤5mV over 32 samples → then 32-sample median. **Calibration**: `calibrated = a * raw + b`. OLS: `raw = a*ref + b` → invert `coeff_a=1/a, coeff_b=-b/a`. |
 | `OneWireBus` | Software bitbang via `PinDriver::input_output_od()` (GPIO33) + `Ets::delay_us()`. `reset()`, `write_byte()`, `read_byte()`, `skip_rom()`, `convert_t()`, `read_scratchpad()`. Runs in dedicated thread. |
 | `Valve` | `set_position("input"/"output")` → GPIO12 HIGH / GPIO13 HIGH. Last-value atomic. |
 | `LimitSwitch` | `PinDriver::input` + `PosEdge` interrupt → `AtomicBool`. `is_triggered()`, `clear()`, `rearm()`. |
 | `Led` | `set_transport_mode(TransportMode)`. Blink state machine: `IDLE → ON_PHASE → OFF_BETWEEN → OFF_FINAL`. Transport: `OFF (USB)`, `ON (advertising)`, `1Hz (connected)`. |
-| `Nvs` | Raw `esp-idf-sys` FFI (same pattern as prototype). Namespaces: `wifi` (ssid, password), `cal` (steps_per_ml, nominal_vol, speed_coeff, a_x1000, b). |
+| `Nvs` | Raw `esp-idf-sys` FFI (same pattern as prototype). Namespaces: `burette_cal` (steps_per_ml, nominal_vol, speed_coeff, min_freq, max_freq, cal_date), `adc_cal` (coeff_a, coeff_b, r_squared, cal_date), `wifi` (ssid, password), `stallguard` (threshold). |
 
 **Acceptance:**
 
@@ -236,7 +243,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 ### Phase 3: Application — Command Dispatch + REST API + Unify Broadcast
 
 **Files:**
-- `src/application/command.rs` — 31-variant `Command` enum, `serde::Deserialize`, `match` dispatch
+- `src/application/command.rs` — 32-variant `Command` enum, `serde::Deserialize`, `match` dispatch
 - `src/application/state_machine.rs` — Burette SM + transport SM transitions
 - `src/application/scheduler.rs` — 300ms broadcast timer, task pacing
 - `src/interface/serial.rs` — USB UART reader (newline-split JSON, `heapless::String<256>` buffer)
@@ -257,7 +264,29 @@ enum Command {
     #[serde(rename = "burette.stop")] BuretteStop,
     #[serde(rename = "burette.getStatus")] BuretteGetStatus,
     #[serde(rename = "burette.cal.get")] BuretteCalGet,
-    // ... all remaining commands
+    #[serde(rename = "burette.cal.run")] BuretteCalRun { mode: String, freq_hz: Option<u16>, speed_ml_min: Option<f32> },
+    #[serde(rename = "burette.cal.runSpeedSeq")] BuretteCalRunSpeedSeq { freqs: [u16; 3], speed_ml_min: Option<f32> },
+    #[serde(rename = "burette.cal.getResult")] BuretteCalGetResult,
+    #[serde(rename = "burette.cal.save")] BuretteCalSave,
+    #[serde(rename = "burette.cal.reset")] BuretteCalReset,
+    #[serde(rename = "burette.cal.calcVolume")] BuretteCalCalcVolume { mass_g: f32, temp_c: Option<f32>, pressure_kpa: Option<f32> },
+    #[serde(rename = "burette.cal.calcSpeed")] BuretteCalCalcSpeed { measurements: Vec<Measurement> },
+    #[serde(rename = "valve.setPosition")] ValveSetPosition { position: ValvePosition },
+    #[serde(rename = "valve.getState")] ValveGetState,
+    #[serde(rename = "temperature.read")] TemperatureRead,
+    #[serde(rename = "stallGuard.getThreshold")] StallGuardGetThreshold,
+    #[serde(rename = "stallGuard.setThreshold")] StallGuardSetThreshold { value: u8 },
+    #[serde(rename = "adc.cal.get")] AdcCalGet,
+    #[serde(rename = "adc.cal.measure")] AdcCalMeasure { known_mv: f32 },
+    #[serde(rename = "adc.cal.compute")] AdcCalCompute,
+    #[serde(rename = "adc.cal.save")] AdcCalSave,
+    #[serde(rename = "adc.cal.reset")] AdcCalReset,
+    #[serde(rename = "burette.moveSteps")] BuretteMoveSteps { steps: i32, speed_hz: u16 },
+    #[serde(rename = "burette.moveToStop")] BuretteMoveToStop { dir: Direction, speed_hz: u16 },
+    #[serde(rename = "burette.setDirection")] BuretteSetDirection { dir: Direction },
+    #[serde(rename = "system.getFormattedLogs")] SystemGetFormattedLogs { start: Option<u32>, limit: Option<u8>, level: Option<String> },
+    #[serde(rename = "system.readLog")] SystemReadLog { start: Option<u32>, limit: Option<u8> },
+}
 }
 ```
 
@@ -272,6 +301,7 @@ trait CommandHandler {
 - Ring buffer accumulates bytes until `\n`
 - `serde_json::Deserializer::from_slice(&buf)` — no `Value` alloc
 - Response serialized to `heapless::String<512>` via `write!` or `json!()`
+- **Serial silent mode**: `AtomicBool g_serial_silent` suppresses `Serial.print` / `println!` during command processing. Set `true` on entering `execute_command()`, restore on exit. Prevents UART echo from corrupting JSON response.
 
 **SSE architecture (single endpoint, typed events):**
 ```
@@ -299,7 +329,8 @@ main loop (every tick):
 | POST | `/api/valve/set` | Valve control (dedicated endpoint for simpler POST from WebUI) |
 | GET | `/api/valve/state` | Current position |
 | GET | `/api/events` | SSE stream |
-| GET | `/api/logs` | Ring buffer entries (query: `start`, `limit`) |
+| GET | `/api/logs` | Ring buffer entries (query: `start`, `limit`, `level`) |
+| DELETE | `/api/logs` | Clear ring buffer |
 | GET | `/api/ping` | `{"status":"ok"}` |
 | GET | `/` | WebUI |
 | GET | `/wifi` | Captive portal form |
@@ -333,7 +364,7 @@ main loop (every tick):
 | SSE `event: debug` | ✅ debug data when available |
 | SSE `event: log` | ✅ log entries when generated |
 | HTTP blocks for long ops | ✅ `POST /api/command` for dose returns only after motor completes (not suitable from browser — documented) |
-| All 31 commands respond | ✅ every command from the table returns correct JSON |
+| All 32 commands respond | ✅ every command from the table returns correct JSON |
 
 **Reference files:** `legacy/src/command.cpp`, `legacy/src/handlers/`, `prototype/src/webserver.rs`, `prototype/src/status.rs`, `prototype/src/logger.rs`
 
@@ -356,13 +387,16 @@ main loop (every tick):
 
 **BLE architecture:**
 - `esp32-nimble` (patched for IDF v6 via `build.rs`)
+- BT/WiFi coexistence: `esp_coex_preference_set(ESP_COEX_PREFER_BT)` at init
 - NUS service: `6E400001-B5A3-F393-E0A9-E50D24DCCA9E`
 - RX characteristic: `6E400002`, write / write-without-response
 - TX characteristic: `6E400003`, notify
-- Advertising: `EcoTiter-XXXX`, connectable, every 1s
+- Advertising: `EcoTiter-XXXX`, connectable, every 100ms
+- Connection params (deferred 2s after connect): min 30ms, max 50ms, latency 4, supervision timeout 30s
 - Command queue: bounded `mpsc` (8 entries), drained from main loop
 - Zombie defense level 1: 5 consecutive failed notifications → disconnect + flush + restart advertising
 - Zombie defense level 2: `connected_count() == 0` but internal flag says connected → kill
+- Zombie defense level 3: in `ble_send()` — if `getConnectedCount() == 0` but local `g_ble_connected == true`, kill zombie
 - BLE notify thread: `std::thread` (8 KB stack), `recv` from mpsc → `notify()`
 
 **Acceptance:**
@@ -438,7 +472,7 @@ After BLE is integrated, the firmware has three concurrent command sources (UART
 #### Scenario 5: BT/WiFi radio coexistence
 | Condition | Expected |
 |---|---|
-| WiFi STA connected, streaming data, BLE advertising + connected | Both active. NimBLE + lwIP share radio via ESP_IDF_COEX. |
+| WiFi STA connected, streaming data, BLE advertising + connected | Both active. NimBLE + lwIP share radio via `ESP_COEX_PREFER_BT`. |
 
 **Known ESP32 limitation:** BT/WiFi coexistence can cause throughput degradation on both radios, but must NOT cause panics, disconnects, or command loss.
 
@@ -545,6 +579,39 @@ fn transport_process(serial: &SerialReader, ble: &BleService) {
 6. Main loop drains `response_rx` → sends result via original transport
 7. Watchdog: 60s timeout → automatic `emergencyStop` + `"watchdog_timeout"` error
 
+**Pending command execution state machines (added to state_machine.rs):**
+
+**Calibration Dose SM (PENDING_CAL_DOSE):**
+```
+CAL_IDLE → CAL_FILLING → CAL_EMPTYING → CAL_DONE → CAL_IDLE
+```
+- IDLE: if volume not near full → fill, else skip to emptying
+- FILLING: record position, set valve OUTPUT, start empty at test frequency
+- EMPTYING: compute `steps_taken = abs(pos_after - pos_before)`, set volume=0, send result `{"steps_taken": N}`
+- DONE: reset phase to IDLE
+
+**Calibration Speed SM (PENDING_CAL_SPEED):**
+```
+CAL_IDLE → CAL_FILLING → CAL_EMPTYING → CAL_DONE → CAL_IDLE
+```
+- IDLE: if not at FULL limit → fill
+- FILLING: record start time, set valve OUTPUT, move to EMPTY at test frequency
+- EMPTYING: compute `speed = nominal_vol / (elapsed_ms / 60000)`, send result `{"speed_ml_min": S, "elapsed_ms": T}`
+
+**Speed Sequence SM (PENDING_CAL_SPEED_SEQ):**
+```
+START → FILL → EMPTY@freq[0] → FILL → EMPTY@freq[1] → FILL → EMPTY@freq[2] → DONE
+```
+- 3-point sequence: fill at computed speed, then empty at 3 different frequencies measuring time
+- Results stored in internal array, no response sent — client fetches via `burette.cal.getResult`
+
+**Homing SM (called once at boot):**
+```
+START → valve=INPUT → move to FULL at max_freq/2 → set volume=nominal_vol → DONE
+```
+- 120s timeout → emergency stop + error log
+- Called from `main.rs` after hardware init, before entering main loop
+
 **Acceptance:**
 - ✅ Tauri auto-connect: scan USB ports → `{"id":0,"cmd":"system.getStatus"}` → handshake → `{"cmd":"burette.cal.get"}`
 - ✅ Tauri manual control: Fill / Empty / Dose(1ml@5) / Rinse(3 cycles) / Valve toggle / Stop — all buttons work
@@ -563,11 +630,15 @@ fn transport_process(serial: &SerialReader, ble: &BleService) {
 **Files:** `src/infrastructure/drivers/stepper_drv.rs` `src/infrastructure/drivers/tmc_regs.rs`
 
 - TMC2209 register map: `GCONF`, `GSTAT`, `IOIN`, `CHOPCONF`, `PWMCONF`, `COOLCONF`, `SGTHRS`, `DRV_STATUS`, `TPWMTHRS`
-- UART single-wire half-duplex on UART1 (GPIO17/GPIO16, 115200 baud)
+- UART single-wire half-duplex on UART2 (GPIO17/GPIO16, 115200 baud)
 - Shadow register cache (write-through)
-- `stepperDrv_init()`: test_connection(), dump version, configure StealthChop
+- `stepperDrv_init()`: test_connection(), dump version, configure StealthChop + CoolStep
 - `stepperDrv_read_sg_result()`, `stepperDrv_read_drv_status()`
-- `stepperDrv_set_current()`, `stepperDrv_set_microsteps()`
+- `stepperDrv_set_current()` (800mA RMS), `stepperDrv_set_microsteps()` (16 µsteps, mres=4)
+- **StealthChop configuration**: `en_spreadCycle = false`, `toff=4`, `tbl=1`, `vsense=false`
+- **CoolStep**: `semin=5`, `semax=2`, `sedn=0b01`
+- **TCOOLTHRS**: `0xFFFFF` (StallGuard enabled at all speeds above threshold)
+- **StallGuard**: 10-bit SG_RESULT (0-1023). Debounce filter: 3 consecutive readings below `threshold × 2` before reporting stall. SGTHRS register written from NVS value.
 
 **Acceptance:**
 - ✅ `stallGuard.getThreshold` → returns current value
@@ -584,7 +655,7 @@ fn transport_process(serial: &SerialReader, ble: &BleService) {
 The Tauri client at `C:\Users\vlbes\projects\ecotiter_tauri` is already complete. This phase covers firmware-side compatibility verification and any edge-case fixes discovered during integration testing.
 
 **Acceptance:**
-- ✅ All 31 Tauri commands round-trip correctly
+- ✅ All 32 ESP32 commands round-trip correctly
 - ✅ Two-phase protocol timing: ACK ≤ 1s, result ≤ 600s
 - ✅ Broadcast: every 300ms, exact compact format
 - ✅ Reboot detection: ts monotonic, rollback triggers reconnect
@@ -614,7 +685,7 @@ The Tauri client at `C:\Users\vlbes\projects\ecotiter_tauri` is already complete
 - `SERIAL_API.md` is the frozen contract — any deviation requires user approval
 - All error codes from `SERIAL_API.md` must be supported
 - Broadcast format must match `parse_broadcast()` in Tauri `broadcast.rs`
-- `emergencyStop` must NOT be exposed in the external command API
+- `emergencyStop` IS used by Tauri backend automatically on two-phase command timeout (connection.rs), must remain public
 
 ## Notes
 
@@ -623,4 +694,10 @@ The Tauri client at `C:\Users\vlbes\projects\ecotiter_tauri` is already complete
 - PinDriver in `esp-idf-hal` v0.46: `PinDriver<'d, MODE>` has 1 type parameter (not 2), no `RmtOutputPin` trait exists
 - GPIO constructors have private fields — use `peripherals.pins.gpioXX.degrade_output()` at runtime
 - EN pin for TMC2209 is active LOW — must be set immediately in constructor
+- Brownout detector disabled at boot (`WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)`) — prevents ESP32 reset during RMT/RF bursts
 - All heap measurements from prototype Phase 0: 184 KB free, 108 KB largest block — ample margin
+
+### Excluded from legacy
+
+- **LittleFS** — file system and all file-based logging (`logger.cpp`: `getFormattedLogsFromFile()`, `syncTime()`, `compactFile()`, `LittleFS.begin()`). Logging is RAM ring buffer only. HTTP endpoint `GET /api/logs/download` is NOT implemented.
+- **`burette.emergencyStop`** is a public command per frozen API (Tauri calls it automatically on two-phase timeout)
