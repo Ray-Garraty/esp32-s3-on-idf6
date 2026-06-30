@@ -4,7 +4,7 @@ description: >
   subagents in sequence: planner, verifier, implementer, validator,
   reviewer, reporter. Handles rework cycles and escalation.
 mode: primary
-temperature: 0.2
+temperature: 0.1
 color: success
 permission:
   edit: ask

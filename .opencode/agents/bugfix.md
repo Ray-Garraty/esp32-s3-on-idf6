@@ -5,7 +5,7 @@ description: >
   regression tests in implementation, extra checks in validation
   and review. Handles rework cycles and escalation.
 mode: primary
-temperature: 0.2
+temperature: 0.1
 color: error
 permission:
   edit: ask
