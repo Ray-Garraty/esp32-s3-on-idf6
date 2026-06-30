@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 // ── WiFi Access Point ─────────────────────────────────────────
 pub const AP_SSID: &str = "EcoTiter-AP";
 pub const AP_PASSWORD: &str = "12345678";

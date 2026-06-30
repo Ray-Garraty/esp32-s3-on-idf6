@@ -392,11 +392,13 @@ impl HttpServer {
                             );
                             let bytes = frame.as_bytes();
 
-                            // Safety: raw_req is a valid *mut httpd_req_t obtained
-                            // from the ESP-IDF HTTP server. The handler is still
-                            // running so the request structure is alive.
-                            // httpd_resp_send_chunk sends a chunk without completing
-                            // the response, which is correct for SSE.
+                            // SAFETY(http_server:sse_send_chunk):
+                            //   Invariant: raw_req is a valid *mut httpd_req_t from
+                            //   ESP-IDF HTTP server. Handler is still running (blocking
+                            //   on rx.recv()), so httpd_req_t is alive.
+                            //   httpd_resp_send_chunk sends one chunk without completing.
+                            //   Context: HTTP server task (12KB stack).
+                            //   Risk: ESP-IDF API change would cause UB.
                             let ret = unsafe {
                                 esp_idf_sys::httpd_resp_send_chunk(
                                     raw_req,
@@ -418,8 +420,11 @@ impl HttpServer {
                     if let Ok(mut guard) = sse_tx_clone.lock() {
                         *guard = None;
                     }
-                    // Safety: zero-length chunk signals response complete to ESP-IDF.
-                    // raw_req is still valid because the handler hasn't returned yet.
+                    // SAFETY(http_server:sse_final_chunk):
+                    //   Invariant: zero-length chunk signals response completion.
+                    //   raw_req still valid — handler has not returned.
+                    //   Context: HTTP server task, cleanup before handler return.
+                    //   Risk: ESP-IDF API change would cause UB.
                     unsafe {
                         esp_idf_sys::httpd_resp_send_chunk(raw_req, core::ptr::null(), 0);
                     }

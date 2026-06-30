@@ -50,6 +50,7 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
 multiple_crate_versions = "allow"
+undocumented_unsafe_blocks = "deny"
 
 [features]
 strict-lints = []

@@ -4,6 +4,7 @@
 //! compatibility with xtensa which lacks hardware 64-bit atomics) and
 //! a `should_broadcast()` helper for the main loop.
 
+#![forbid(unsafe_code)]
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::config::MAIN_LOOP_TICK_MS;

@@ -13,6 +13,7 @@
 //! `From<EspError>` impl. BLE and HTTP init construct their respective
 //! variants manually.
 
+#![forbid(unsafe_code)]
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

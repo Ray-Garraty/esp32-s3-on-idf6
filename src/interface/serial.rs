@@ -3,6 +3,7 @@
 //! Accumulates bytes until a newline is received, then returns the
 //! complete command line. Designed for non-blocking use in the main loop.
 
+#![forbid(unsafe_code)]
 use crate::domain::memory::MAX_COMMAND_SIZE;
 use core::sync::atomic::AtomicBool;
 use heapless::Vec;

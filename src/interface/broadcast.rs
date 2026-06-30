@@ -3,6 +3,7 @@
 //! The broadcast event is a snapshot of device state sent every 300 ms
 //! to all connected clients (SSE and BLE GATT notify).
 
+#![forbid(unsafe_code)]
 use crate::domain::memory::MAX_RESPONSE_SIZE;
 use crate::domain::types::ValvePosition;
 use core::fmt::Write as CoreWrite;

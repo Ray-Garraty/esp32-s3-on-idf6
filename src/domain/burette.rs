@@ -4,6 +4,7 @@
 //! pipeline (safety → concurrency → state logic → params).
 //! This module is pure domain logic — no ESP-IDF imports.
 
+#![forbid(unsafe_code)]
 use crate::domain::types::{Ml, MlMin};
 use crate::errors::StateError;
 

@@ -5,6 +5,7 @@
 //!
 //! The actual EspHttpServer registration will be in `infrastructure/network/http_server.rs`.
 
+#![forbid(unsafe_code)]
 use core::fmt::Write as CoreWrite;
 
 use crate::domain::memory::MAX_RESPONSE_SIZE;

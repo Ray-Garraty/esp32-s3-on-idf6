@@ -3,6 +3,7 @@
 //! Commands: fill, empty, doseVolume, rinse, stop, emergencyStop,
 //! getStatus, moveSteps, moveToStop, setDirection.
 
+#![forbid(unsafe_code)]
 use crate::application::command::{
     Command, CommandHandler, CommandResponse, CompactJson, HandlerContext,
 };

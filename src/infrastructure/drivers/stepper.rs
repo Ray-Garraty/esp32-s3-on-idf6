@@ -24,6 +24,7 @@
 //! - `emergency_stop()` calls `channel.disable()` immediately.
 //! - `Drop` impl disables the channel first, then sets EN HIGH.
 
+#![forbid(unsafe_code)]
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use esp_idf_hal::gpio::{AnyOutputPin, Output, PinDriver};

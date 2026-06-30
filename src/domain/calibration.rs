@@ -1,11 +1,11 @@
+#![forbid(unsafe_code)]
 //! Calibration math — volume/steps conversion, speed/frequency conversion,
 //! Z-factor bilinear interpolation, OLS regression, and pending-cal spinlock.
 //!
 //! Pure domain logic — no ESP-IDF imports.
 
 use crate::domain::types::{Ml, MlMin, Steps};
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 // ── Default constants ──────────────────────────────────────────
 
@@ -336,24 +336,15 @@ pub fn calculate_speed_calibration(frequencies: &[f32], speeds: &[f32]) -> Speed
     SpeedCalResult { k, r_squared }
 }
 
-// ── Pending calibration (thread-safe spinlock) ─────────────────
+// ── Pending calibration (thread-safe via Mutex) ─────────────────
 
 /// Thread-safe wrapper for a pending calibration configuration.
 ///
-/// Uses an `AtomicBool` flag with `Release`/`Acquire` ordering semantics,
-/// paired with an `UnsafeCell<CalibrationConfig>` for the actual data.
-///
-/// # Safety
-///
-/// This type is `Sync` because:
-/// - The `AtomicBool` gate ensures only one thread writes while others observe.
-/// - Writers use `Ordering::Release` and readers use `Ordering::Acquire`,
-///   establishing a happens-before relationship.
-/// - The `UnsafeCell` is only accessed when the atomic flag confirms data is present.
-/// - This mirrors the legacy C++ `portMUX` critical section pattern.
+/// Uses `Mutex<Option<CalibrationConfig>>` for thread-safe access.
+/// `Mutex<T>` is `Sync` when `T: Send`; `Option<CalibrationConfig>` is `Send`
+/// because all fields are primitives (`f32`, `u16`, `i64`).
 pub struct PendingCal {
-    has_pending: AtomicBool,
-    data: UnsafeCell<CalibrationConfig>,
+    data: Mutex<Option<CalibrationConfig>>,
 }
 
 impl Default for PendingCal {
@@ -362,58 +353,26 @@ impl Default for PendingCal {
     }
 }
 
-/// # Safety
-/// PendingCal is safe to share across threads due to the atomic gate;
-/// see the struct-level safety comment for details.
-unsafe impl Sync for PendingCal {}
-
 impl PendingCal {
-    /// Create a new pending calibration state with default values.
+    /// Create a new pending calibration state with no pending value.
     pub const fn new() -> Self {
         Self {
-            has_pending: AtomicBool::new(false),
-            data: UnsafeCell::new(CalibrationConfig::new()),
+            data: Mutex::new(None),
         }
     }
 
     /// Store a pending calibration config.
-    ///
-    /// # Safety
-    ///
-    /// The write to `UnsafeCell` is safe because:
-    /// - The atomic store with `Release` ordering ensures the write is visible
-    ///   to any subsequent `Acquire` load.
-    /// - Only this function writes to `data`, and only when the caller explicitly
-    ///   invokes it — no concurrent writes occur.
     pub fn set_pending(&self, cfg: &CalibrationConfig) {
-        // SAFETY: Writing to the UnsafeCell is safe because:
-        // 1. The AtomicBool gate ensures happens-before ordering.
-        // 2. Only this function performs the write.
-        // 3. The caller must ensure no concurrent access (enforced by atomic ordering).
-        unsafe {
-            *self.data.get() = *cfg;
+        if let Ok(mut guard) = self.data.lock() {
+            *guard = Some(*cfg);
         }
-        self.has_pending.store(true, Ordering::Release);
     }
 
     /// Get a copy of the pending config, if one has been set.
     ///
     /// Returns `None` if no pending config exists.
-    ///
-    /// # Safety
-    ///
-    /// The read from `UnsafeCell` is safe because:
-    /// - The atomic load with `Acquire` ordering ensures we see the most recent
-    ///   `Release`-ordered write.
-    /// - The caller gets a `Copy` value, so no reference escapes the lifetime of `self`.
     pub fn get_pending_copy(&self) -> Option<CalibrationConfig> {
-        if self.has_pending.load(Ordering::Acquire) {
-            // SAFETY: Atomic gate ensures the data is initialized and visible.
-            // Copying out an f32/u16/i64 value is safe; no reference is leaked.
-            Some(unsafe { *self.data.get() })
-        } else {
-            None
-        }
+        self.data.lock().ok().and_then(|guard| *guard)
     }
 }
 

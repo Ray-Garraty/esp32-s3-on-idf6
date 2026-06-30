@@ -3,6 +3,7 @@
 //! Combines the burette state machine with transport state tracking.
 //! Compiles on host — pure domain logic.
 
+#![forbid(unsafe_code)]
 use crate::domain::burette::BuretteState;
 use crate::domain::types::TransportState;
 use crate::errors::{AppError, StateError};

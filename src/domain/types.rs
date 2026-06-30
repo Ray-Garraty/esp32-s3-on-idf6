@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use core::ops::{Add, Sub};
 use serde::{Deserialize, Serialize};
 

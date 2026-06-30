@@ -4,6 +4,7 @@
 //! These are referenced by `infrastructure::network::http_server` for route
 //! handling.
 
+#![forbid(unsafe_code)]
 /// Main dashboard HTML page with SSE connection for live status display.
 pub const INDEX_HTML: &str = include_str!("../webui/index.html");
 

@@ -75,9 +75,10 @@ impl Log for Logger {
         // UART console output — only available on the ESP32 target
         println!("[{}] {}", level, record.args());
 
-        // Safety: esp_timer_get_time() is safe to call at any point after
-        // the FreeRTOS scheduler has started (which it has by main()).
-        // Return value is microseconds since boot, always non-negative.
+        // SAFETY(logger:timestamp):
+        //   Invariant: esp_timer_get_time is a read-only FFI call, safe after
+        //   FreeRTOS scheduler init (which completed before main()).
+        //   Return value is microseconds since boot, always non-negative.
         let ts_ms = unsafe { u64::try_from(esp_idf_sys::esp_timer_get_time()).unwrap_or(0) / 1000 };
 
         let mut module: heapless::String<MAX_LOG_MODULE_SIZE> = heapless::String::new();

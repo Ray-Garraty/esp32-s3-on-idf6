@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![warn(clippy::cargo)]
@@ -45,6 +46,9 @@ pub mod logger;
 
 #[cfg(target_arch = "xtensa")]
 pub mod infrastructure;
+
+#[cfg(target_arch = "xtensa")]
+pub mod esp_safe;
 
 pub mod application;
 

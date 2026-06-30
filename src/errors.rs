@@ -11,6 +11,7 @@
 //!  +-- Resource(ResourceError)
 //! ```
 
+#![forbid(unsafe_code)]
 use crate::domain::types::LimitSwitchId;
 
 // ── Top-level error ───────────────────────────────────────────

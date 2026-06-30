@@ -28,10 +28,9 @@
 //! - Level 2: In `process()` — if `connected_count()==0` but `G_BLE_CONNECTED==true`
 //! - Level 3: In `ble_send()` — if `getConnectedCount()==0` but local flag→true
 
+#![forbid(unsafe_code)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-
-use esp_idf_sys::{esp_coex_prefer_t_ESP_COEX_PREFER_BT, esp_coex_preference_set};
 
 use esp32_nimble::enums::{PowerLevel, PowerType};
 use esp32_nimble::utilities::BleUuid;
@@ -98,15 +97,7 @@ impl BleManager {
     /// Returns `NetworkError::BleInitFailed` on any init error.
     pub fn init(&mut self) -> Result<(), NetworkError> {
         // Set BT/WiFi coexistence: prefer BLE for reliable notifications
-        // Safety: esp_coex_preference_set is a simple register write that sets
-        // the BT/WiFi coexistence priority. Safe to call once at init before
-        // any radio activity. Returns ESP_OK on success.
-        unsafe {
-            if esp_coex_preference_set(esp_coex_prefer_t_ESP_COEX_PREFER_BT) != esp_idf_sys::ESP_OK
-            {
-                log::warn!("BLE: esp_coex_preference_set failed (non-fatal)");
-            }
-        }
+        crate::esp_safe::set_coex_ble_preferred();
 
         // Initialise NimBLE stack — does not return Result
         BLEDevice::init();

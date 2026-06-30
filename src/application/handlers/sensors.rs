@@ -3,6 +3,7 @@
 //! Commands: temperature.read, stallGuard.getThreshold, stallGuard.setThreshold,
 //! adc.cal.get, adc.cal.measure, adc.cal.compute, adc.cal.save, adc.cal.reset.
 
+#![forbid(unsafe_code)]
 use crate::application::command::{
     Command, CommandHandler, CommandResponse, CompactJson, HandlerContext,
 };

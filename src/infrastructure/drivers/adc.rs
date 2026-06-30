@@ -9,6 +9,7 @@
 //! This matches the prototype (`prototype/src/adc.rs`) pattern exactly,
 //! adapted to a struct-based API with proper lifetime management.
 
+#![forbid(unsafe_code)]
 use core::sync::atomic::Ordering;
 
 use heapless::Vec;

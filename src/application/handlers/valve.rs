@@ -2,6 +2,7 @@
 //!
 //! Commands: valve.setPosition, valve.getState.
 
+#![forbid(unsafe_code)]
 use crate::application::command::{
     Command, CommandHandler, CommandResponse, CompactJson, HandlerContext,
 };

@@ -43,6 +43,25 @@ Check against `docs/refs/coding_style.md`:
 - **Testing**: `#[cfg(test)]` inline, proptest for invariants, proper test naming
 
 ### Step 4: Safety & Correctness
+
+#### ⚠️ UNSAFE CODE — PRIORITY #1
+Unsafe blocks are the single highest-risk item in this firmware. Review them with extreme scrutiny:
+
+1. **Every `unsafe { }` block MUST have** a `// SAFETY(id):` comment documenting:
+   - `Invariant:` what must be true for this to be safe
+   - `Context:` which task/thread it runs in
+   - `Risk:` what happens if the invariant is violated
+2. **Pointer lifetime analysis is MANDATORY** — confirm that raw pointers NEVER:
+   - Cross task/thread boundaries (the classic dangling `httpd_req_t` bug)
+   - Outlive the objects they point to
+   - Escape their valid scope
+3. **Require implementer to rewrite** any unsafe block whose safety cannot be
+   rigorously proven. "It works in testing" is NOT sufficient — demand a
+   formal argument for correctness.
+4. **FFI pointer parameters** must be validated (non-null, aligned, correct type).
+
+**If you find an undocumented or suspicious unsafe block → BLOCKING issue.**
+
 - **Main loop**: no blocking operations (`send_and_wait`, `lock()`, `recv()`)
 - **RMT**: `send_and_wait()` only in motor thread, never main loop
 - **WDT**: `esp_task_wdt_deinit()` at boot

@@ -4,7 +4,7 @@
 - `cargo test --lib stepper::ramp::tests` — host-based ramp unit tests
 - `espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash only (adjust port as needed)
 - `timeout 30 python3 scripts/serial_monitor.py` — monitor with 30s timeout (auto-detects port)
-- WDT must be disabled during debugging: `unsafe { esp_idf_sys::esp_task_wdt_deinit(); }`
+- WDT must be disabled during debugging: `ecotiter_fw::esp_safe::disable_wdt()` (safe wrapper)
 
 # GOLDEN RULE: NEVER BLOCK THE MAIN LOOP
 
@@ -85,3 +85,34 @@ Mandatory steps:
   PYEOF
   python "$TMPDIR/test_serial.py"
   ```
+
+# Unsafe Policy
+
+**Total unsafe blocks: 23** (Last audited: 2026-06-30, baseline in `scripts/check_unsafe.py`)
+
+## Modules with `#![forbid(unsafe_code)]`
+
+See `docs/plans/pending/26_06_30_unsafe_code_audit.md` Step 4 for the complete
+list of safe leaf modules. These modules must never contain `unsafe` code.
+
+## Modules with controlled unsafe
+
+| File | Blocks | Reason |
+|------|--------|--------|
+| `infrastructure/storage/nvs.rs` | 13 | NVS FFI wrappers inside safe public API |
+| `esp_safe.rs` | 5 | Safe wrappers around ESP-IDF boot-time FFI calls |
+| `infrastructure/network/http_server.rs` | 2 | SSE raw-pointer `httpd_resp_send_chunk` (blocking handler pattern) |
+| `infrastructure/drivers/limitswitch.rs` | 1 | GPIO ISR `subscribe()` callback |
+| `infrastructure/drivers/onewire.rs` | 1 | `unsafe impl Send` for MMIO-based PinDriver |
+| `logger.rs` | 1 | `esp_timer_get_time()` inside safe `Log::log()` fn |
+
+## Enforcement
+
+1. Every `unsafe { }` block MUST have a preceding `// SAFETY:` comment with
+   invariant, context, and risk.
+2. New `unsafe` blocks require justification in the commit message.
+3. `cargo clippy --lib -- -D warnings` must pass (includes
+   `undocumented_unsafe_blocks` lint and `unsafe_op_in_unsafe_fn`).
+4. `scripts/check_unsafe.py` runs on every commit — checks documentation + count baseline.
+6. Do NOT add `#[allow(unsafe_code)]` to override `forbid(unsafe_code)` in safe
+   modules.

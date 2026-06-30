@@ -11,6 +11,7 @@
 //! `MotorContext` to call a blocking function, that is a **code smell**
 //! caught during review.
 
+#![forbid(unsafe_code)]
 /// Marker: execution inside a dedicated thread.
 pub struct MotorContext;
 

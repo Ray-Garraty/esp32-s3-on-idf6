@@ -6,6 +6,7 @@
 //!
 //! Initial state: Input (LOW).
 
+#![forbid(unsafe_code)]
 use esp_idf_hal::gpio::{Output, OutputPin, PinDriver};
 
 use crate::domain::types::ValvePosition;

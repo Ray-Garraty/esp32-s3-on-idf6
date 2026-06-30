@@ -2,6 +2,7 @@
 //!
 //! Uses `std::sync::mpsc` Sender/Receiver pairs. Pure domain — no ESP-IDF imports.
 
+#![forbid(unsafe_code)]
 use crate::domain::burette::{BuretteCommand, BuretteOperation, BuretteState};
 use crate::domain::logging::LogEntry;
 use crate::domain::types::Ml;

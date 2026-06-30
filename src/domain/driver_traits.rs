@@ -6,6 +6,7 @@
 //!
 //! See `docs/refs/coding_style.md §3` for trait versus enum guidance.
 
+#![forbid(unsafe_code)]
 use crate::domain::calibration::CalibrationConfig;
 use crate::domain::context::MotorContext;
 use crate::domain::types::{Hz, Steps};

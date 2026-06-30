@@ -9,6 +9,7 @@
 //!
 //! This module has NO hardware dependencies — it compiles on any target.
 
+#![forbid(unsafe_code)]
 use core::sync::atomic::{AtomicI16, AtomicU16, Ordering};
 
 // ── Default calibration constants ──────────────────────────────

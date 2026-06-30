@@ -4,6 +4,7 @@
 //! These constants are re-exported by `domain::memory` for use by
 //! the infrastructure logger.
 
+#![forbid(unsafe_code)]
 use log::Level;
 
 /// Maximum length of a log message string (bytes).

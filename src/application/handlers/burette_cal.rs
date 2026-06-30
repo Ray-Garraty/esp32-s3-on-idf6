@@ -2,6 +2,7 @@
 //!
 //! Commands: get, calcVolume, calcSpeed, save, reset, run, runSpeedSeq, getResult.
 
+#![forbid(unsafe_code)]
 use crate::application::command::{
     Command, CommandHandler, CommandResponse, CompactJson, HandlerContext,
 };

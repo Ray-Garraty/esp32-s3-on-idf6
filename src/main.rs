@@ -1,5 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
-
+#![forbid(unsafe_code)]
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -37,42 +37,21 @@ fn main() {
     }
 
     esp_idf_sys::link_patches();
+    ecotiter_fw::esp_safe::disable_wdt();
+    ecotiter_fw::esp_safe::suppress_httpd_txrx_logs();
     ecotiter_fw::logger::init();
-
-    unsafe {
-        // Safety: called once at boot, before any task uses WDT.
-        // No task depends on hardware watchdog after this point.
-        esp_idf_sys::esp_task_wdt_deinit();
-
-        // Safety: c"httpd_txrx" is a valid null-terminated C-string literal.
-        // esp_log_level_set only modifies a global int, no side effects.
-        esp_idf_sys::esp_log_level_set(
-            c"httpd_txrx".as_ptr(),
-            esp_idf_sys::esp_log_level_t_ESP_LOG_ERROR,
-        );
-
-        // Brownout detector is disabled via CONFIG_BROWNOUT_DET=n in
-        // sdkconfig.defaults (handles it at the Kconfig/ROM level).
-    }
 
     log::info!("=== EcoTiter firmware ===");
 
     let peripherals = esp_idf_hal::peripherals::Peripherals::take().expect("Peripherals::take()");
 
     // Boot-time heap report
-    // Safety: esp_get_free_heap_size and heap_caps_get_largest_free_block
-    // are ESP-IDF FFI calls that only read hardware registers — no side
-    // effects. Safe to call after FreeRTOS scheduler init (main context).
-    unsafe {
-        let free = esp_idf_sys::esp_get_free_heap_size();
-        let largest =
-            esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_DEFAULT);
-        log::info!(
-            "Heap: free={} KB, largest={} KB",
-            free / 1024,
-            largest / 1024
-        );
-    }
+    let (free, largest) = ecotiter_fw::esp_safe::heap_stats();
+    log::info!(
+        "Heap: free={} KB, largest={} KB",
+        free / 1024,
+        largest / 1024
+    );
 
     // ── Initialise hardware drivers ──────────────────────────────
 
@@ -226,12 +205,7 @@ fn main() {
             if http_server.restart_pending() {
                 log::info!("WiFi configured, restarting...");
                 std::thread::sleep(Duration::from_millis(100));
-                // Safety: esp_restart() is an IDF function that resets the chip.
-                // Safe to call here: all state is saved to NVS before this point,
-                // and this is the last operation before the CPU resets.
-                unsafe {
-                    esp_idf_sys::esp_restart();
-                }
+                ecotiter_fw::esp_safe::restart();
             }
 
             // Log raw and calibrated every ~1 second (100 ticks × 10 ms)

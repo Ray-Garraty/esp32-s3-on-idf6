@@ -3,6 +3,7 @@
 //! Pure domain logic: validates command parameters, computes multi-cycle plans,
 //! and returns planning decisions. No ESP-IDF imports.
 
+#![forbid(unsafe_code)]
 use crate::domain::types::{Ml, MlMin};
 
 // ── Validation constants ───────────────────────────────────────

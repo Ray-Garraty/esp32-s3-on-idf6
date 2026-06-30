@@ -64,12 +64,12 @@ impl LimitSwitch {
                 reason: "LimitSwitch set_interrupt_type",
             })?;
 
-        // SAFETY: The ISR callback stores `true` in an AtomicBool with
-        // Ordering::Relaxed. This is safe in ISR context because:
-        // 1. No blocking calls, no heap allocation, no I/O.
-        // 2. Atomic stores are lock-free on ESP32.
-        // 3. The `'static` lifetime ensures the reference is valid for
-        //    the entire program lifetime.
+        // SAFETY(limitswitch:isr_subscribe):
+        //   Invariant: ISR callback only does AtomicBool::store(_, Relaxed).
+        //   No blocking, no heap, no I/O. Lock-free on ESP32.
+        //   `'static` lifetime ensures flag reference valid for program lifetime.
+        //   Context: GPIO interrupt context (ISR).
+        //   Risk: blocking in ISR would cause WDT reset; our callback is safe.
         unsafe {
             pin.subscribe(move || {
                 triggered.store(true, Ordering::Relaxed);

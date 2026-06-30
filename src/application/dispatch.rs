@@ -3,6 +3,7 @@
 //! Uses a single match expression that maps every variant to its handler
 //! module. This is the central routing table for all 32 wire-protocol commands.
 
+#![forbid(unsafe_code)]
 use crate::application::command::{Command, CommandHandler, CommandResponse, HandlerContext};
 use crate::application::handlers::burette_cal::BuretteCalHandler;
 use crate::application::handlers::burette_ops::BuretteOpsHandler;

@@ -10,6 +10,7 @@
 //! The blink state machine runs from `process()` which must be called
 //! from the main loop every tick (~10 ms). No blocking calls.
 
+#![forbid(unsafe_code)]
 use esp_idf_hal::gpio::{Output, OutputPin, PinDriver};
 
 use crate::domain::types::TransportMode;

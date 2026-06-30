@@ -4,6 +4,7 @@
 //! The ramp is computed once per motion config; `Vec` is allowed at config-change time
 //! per `docs/refs/coding_style.md §5`.
 
+#![forbid(unsafe_code)]
 /// Configuration for a trapezoidal acceleration ramp.
 ///
 /// # Fields

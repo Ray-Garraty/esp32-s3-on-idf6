@@ -6,7 +6,7 @@
 //! Serde derive macros internally use `std::vec::Vec` for deserialization buffers.
 //! This is outside our control — the lint is suppressed at module level.
 #![allow(clippy::disallowed_types)]
-
+#![forbid(unsafe_code)]
 use crate::domain::calibration::CalibrationConfig;
 use crate::domain::channels::SystemChannels;
 use crate::domain::memory::MAX_RESPONSE_SIZE;

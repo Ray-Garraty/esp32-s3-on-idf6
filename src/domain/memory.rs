@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 // ── Fixed-size buffer constants ───────────────────────────────
 pub const MAX_COMMAND_SIZE: usize = 256;
 pub const MAX_RESPONSE_SIZE: usize = 512;

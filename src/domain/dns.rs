@@ -6,6 +6,7 @@
 //! The max DNS response size is 512 bytes (DNS standard). The function
 //! uses `heapless::Vec` to avoid heap allocation.
 
+#![forbid(unsafe_code)]
 use heapless::Vec;
 
 /// Maximum DNS response size (standard DNS limit).
