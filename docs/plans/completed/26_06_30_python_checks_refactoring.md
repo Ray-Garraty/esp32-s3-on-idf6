@@ -4,7 +4,7 @@ title: Python check scripts refactoring
 description: Replace scripts/check_unwrap.py and scripts/check_blocking.py with compile-time/linter equivalents
 tags: [refactoring, clippy, semgrep, ci, linting]
 timestamp: 2026-06-30
-status: pending
+status: completed
 ---
 
 # Python check scripts refactoring
@@ -113,29 +113,37 @@ The Python script has false-negative bugs (fails to detect unwraps in certain te
 | Fast: ~1s on a 3k-line Rust codebase | Misses `xTaskCreate` unless explicitly listed |
 | Works cross-platform, no Rust version dependency | |
 
-**Decision: Option B4 (Semgrep)** — best effort-to-value ratio. Type-context / dylint are supersets
-that can be layered later if false positives become a problem. The current codebase is small enough
-(3k lines) that Semgrep's tree-sitter AST provides sufficient accuracy.
+**Decision: Option B4 (Semgrep) + B3 (Type-context)** — hybrid approach.
+Initial plan chose Semgrep alone; during implementation the user noted that `stepper.rs` contains
+blocking calls and "not yet integrated" is not an excuse. Type-context markers were added to
+provide compile-time gating for blocking operations, with Semgrep as a secondary safety net
+for main-loop files.
 
 ---
 
-## Final execution plan
+## Execution log
 
-### Step 1: Delete `scripts/check_unwrap.py`
+### Commit 1: `dafa49f` — Python scripts + Semgrep + Type-context
 
-- Remove file `scripts/check_unwrap.py`
-- Remove line 41 from `scripts/pre_commit.sh` (step 7)
+**Planned vs actual:**
 
-### Step 2: Harden `src/main.rs` against unwrap/expect
+| Step | Planned | Actual | Delta |
+|------|---------|--------|-------|
+| 1 | Delete `check_unwrap.py` | Deleted | ✅ |
+| 2 | Harden `main.rs` | `#![deny(clippy::unwrap_used, clippy::expect_used)]` + `#[allow(clippy::expect_used)]` on `fn main()` | ✅ |
+| 3 | Create `.semgrep/blocking.yml` | Created, but syntax evolved to `$X.spawn(...)` (semgrep's Rust parser rejects `....` deep ellipsis). Added `#[cfg(test)]` exclusion | ⚠️ Simplified |
+| 4 | Delete `check_blocking.py` + `test_check_blocking.py` | Deleted | ✅ |
+| 5 | Update `pre_commit.sh` | Steps 3.5, 7 removed; step 8 → `semgrep --config .semgrep/ --error src/` | ✅ |
+| 6 | Verify | clippy, tests, semgrep, smoke tests all pass | ✅ |
+| **Extra** | Type-context markers | Added `src/domain/context.rs` (`MotorContext`, `MainContext`), `&MotorContext` to `StepperMotor::move_steps()`, `RmtStepper::move_steps_intervals()` | 🆕 Added mid-execution per user feedback |
 
-- Add `#![deny(clippy::unwrap_used, clippy::expect_used)]` to `src/main.rs` (crate-level)
-- Add `#[allow(clippy::expect_used)]` on the 5 boot-time `expect()` calls (lines 35, 53, 56, 60, 63)
+**Type-context architecture:**
+- `src/domain/context.rs` — `MotorContext` (must be instantiated only in thread context) and `MainContext` (symmetric marker for future use)
+- `StepperMotor::move_steps(&mut self, ctx: &MotorContext, steps: Steps, speed: Hz)` — compile-time gated
+- `RmtStepper::move_steps_intervals(&mut self, _ctx: &MotorContext, ...)` — same
+- Any attempt to call blocking methods from main loop without `MotorContext` → **compile error**
 
-This ensures the binary crate is covered just like the library crate, and intentional boot-time
-panics are explicitly marked.
-
-### Step 3: Create `.semgrep/blocking.yml`
-
+**Semgrep rule final state (`.semgrep/blocking.yml`):**
 ```yaml
 rules:
   - id: blocking-call-outside-thread
@@ -146,84 +154,60 @@ rules:
       - pattern-not-inside: |
           std::thread::spawn(...)
       - pattern-not-inside: |
-          std::thread::Builder::new()....spawn(...)
-    message: "Blocking call detected outside dedicated thread context. Use std::thread::spawn or xTaskCreate."
+          $X.spawn(...)
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $TEST { ... }
+    message: "Blocking call detected outside dedicated thread context"
     severity: ERROR
     languages: [rust]
+    paths:
+      include:
+        - /src/main.rs
+        - /src/logger.rs
+        - /src/lib.rs
 ```
 
-Rationale for included/excluded patterns:
+### Commit 2: `f758aa1` — Undocumented unsafe check
 
-| Pattern | Included? | Reason |
-|---------|-----------|--------|
-| `.send_and_wait(...)` | Yes | RMT blocking transmit (core concern) |
-| `.recv()` | Yes | Blocks until message arrives |
-| `.lock().unwrap()` | No | `.lock()` alone is not blocking (try_lock pattern); `unwrap()` is caught by Clippy |
-| `std::thread::sleep(...)` | No | Heartbeat tick exception (10ms) is near-impossible to express cleanly in Semgrep |
-| `.wait(...)` | No | False positive risk (e.g. `joinhandle.wait()`, future `.wait()` that aren't used here) |
+**Trigger:** pre-commit hook showed `WARNING: Too many unsafe blocks! (19)`. User requested
+to mark justified unsafe blocks with exceptions and proper comments rather than raising the threshold.
 
-`xTaskCreate` is intentionally omitted — the project uses `std::thread::spawn` / `Builder::spawn`.
-If `xTaskCreate` is introduced later, add `pattern-not-inside`.
+**Changes:**
+- Created `scripts/check_unsafe.py` — scans all `src/**/*.rs`, finds every `unsafe {` / `unsafe impl`,
+  verifies a `// SAFETY:` / `// Safety:` / `// CHECKED_SAFE:` comment exists within 6 lines before/after
+- Replaced raw `grep -r "unsafe {" | wc -l` in `pre_commit.sh` with `python3 scripts/check_unsafe.py`
+- Added missing `// Safety:` comment to heap-report block in `main.rs:41`
+- `unsafe impl Sync for PendingCal` in `calibration.rs:368` was documented via `/// # Safety` doc
+  comment — script now recognizes `///` doc comments without requiring `:` on the same line
 
-### Step 4: Remove blocking Python scripts
+**Result:** `Total undocumented unsafe blocks: 0` — no warnings, no exceptions list needed,
+just properly documented unsafe blocks.
 
-- Delete `scripts/check_blocking.py`
-- Delete `scripts/test_check_blocking.py`
+### Hardware verification
 
-### Step 5: Update `scripts/pre_commit.sh`
-
-- Remove step 3.5 (`python3 scripts/test_check_blocking.py`)
-- Replace old step 8 with:
-  ```bash
-  echo "=== 8. Semgrep blocking check ==="
-  semgrep --config .semgrep/ src/
-  ```
-- Renumber remaining steps
-
-### Step 6: Verify
-
-```bash
-# 1. Clippy (lib + bin) must pass
-cargo clippy --lib -- -D warnings
-cargo clippy --bin ecotiter -- -D warnings
-
-# 2. Host build must pass
-cargo test --lib
-
-# 3. Semgrep must pass on current codebase
-semgrep --config .semgrep/ src/ --error
-# Expected: no matches (no blocking calls outside threads)
-
-# 4. Semgrep catches a deliberate violation (smoke test)
-echo 'fn main() { stepper.send_and_wait(e, s, &c); }' > /tmp/test_block.rs
-semgrep --config .semgrep/ /tmp/test_block.rs --error && false || true
-rm /tmp/test_block.rs
-```
+After both commits, firmware was flashed to ESP32 via `espflash` and monitored for 30 seconds:
+- Boot clean — no WDT resets, no Guru Meditation
+- Temperature thread: DS18B20 on GPIO33 reading stable ~32.3°C
+- ADC: 0 mV (pH electrode disconnected — expected)
+- Main loop: 10ms heartbeat tick, LED state machine, every-100-tick logging
+- No blocking calls in main loop (protected by compiler + Semgrep)
 
 ---
 
-## Files affected
+## Files affected (final)
 
 | File | Action |
 |------|--------|
-| `scripts/check_unwrap.py` | **Delete** |
-| `scripts/check_blocking.py` | **Delete** |
-| `scripts/test_check_blocking.py` | **Delete** |
-| `scripts/pre_commit.sh` | Edit: remove steps 3.5, 7; replace step 8 |
-| `src/main.rs` | Edit: add `#![deny(...)]` + `#[allow(...)]` on 5 lines |
-| `.semgrep/blocking.yml` | **Create** |
-| `docs/plans/pending/26_06_30_python_checks_refactoring.md` | This file |
-
----
-
-## Future considerations (not in scope)
-
-1. **Type-context markers (`MotorContext` / `MainContext`)** — if Semgrep ever misses a real blocking call
-   in the main loop, migrate to type-state. Would add `&MotorContext` param to `StepperMotor::move_steps()`
-   and `RmtStepper::move_steps_intervals()`.
-
-2. **dylint custom lint** — if the team grows and multiple custom rules are needed, consolidate into
-   a single dylint plugin. Not worth the effort for one rule.
-
-3. **CrankShaft / Rust-analyzer inline diagnostics** — Semgrep results can be surfaced in-editor via
-   `semgrep --json` + editor plugin. Not needed now.
+| `scripts/check_unwrap.py` | **Deleted** |
+| `scripts/check_blocking.py` | **Deleted** |
+| `scripts/test_check_blocking.py` | **Deleted** |
+| `scripts/pre_commit.sh` | Edited: removed steps 3.5, 7; step 8 → semgrep; step 6 → `check_unsafe.py` |
+| `src/main.rs` | Added `#![deny(clippy::unwrap_used, clippy::expect_used)]` + `#[allow(clippy::expect_used)]` on `fn main()` + `// Safety:` for heap-report block |
+| `.semgrep/blocking.yml` | **Created** — Semgrep rule |
+| `src/domain/context.rs` | **Created** — `MotorContext`, `MainContext` |
+| `src/domain/mod.rs` | Added `pub mod context;` |
+| `src/domain/driver_traits.rs` | Changed `move_steps` signature: added `ctx: &MotorContext` |
+| `src/infrastructure/drivers/stepper.rs` | Import `MotorContext`, add `_ctx: &MotorContext` to `move_steps_intervals`, pass `ctx` through |
+| `scripts/check_unsafe.py` | **Created** — validates SAFETY-justification comments on all unsafe blocks |
+| `docs/plans/pending/26_06_30_python_checks_refactoring.md` | Updated: status `completed`, this execution log |
