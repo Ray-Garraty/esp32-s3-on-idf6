@@ -34,15 +34,8 @@ if [ "$fast_mode" = false ]; then
     fi
 fi
 
-echo "=== 7. Check for unwrap/expect in library code ==="
-UNWRAP_COUNT=$(grep -r "\.unwrap()" src/ --include="*.rs" 2>/dev/null | grep -v "main.rs" | wc -l)
-EXPECT_COUNT=$(grep -r "\.expect(" src/ --include="*.rs" 2>/dev/null | grep -v "main.rs" | wc -l)
-if [ "$UNWRAP_COUNT" -gt 0 ] || [ "$EXPECT_COUNT" -gt 0 ]; then
-    echo "ERROR: Found unwrap/expect in library code!"
-    grep -r "\.unwrap()" src/ --include="*.rs" 2>/dev/null | grep -v "main.rs"
-    grep -r "\.expect(" src/ --include="*.rs" 2>/dev/null | grep -v "main.rs"
-    exit 1
-fi
+echo "=== 7. Check for unwrap/expect in production code ==="
+python3 scripts/check_unwrap.py
 
 echo "=== 8. Check for blocking calls in main loop ==="
 python scripts/check_blocking.py
