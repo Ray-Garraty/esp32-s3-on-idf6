@@ -5,7 +5,7 @@ description: Full-scope build plan for production-grade Rust firmware from legac
 tags: [plan, implementation, firmware, esp32, production]
 timestamp: 2026-06-29
 status: active
-phases_completed: [0, 1]
+phases_completed: [0, 1, 2, 3]
 ---
 
 # General Implementation Plan - EcoTiter Firmware (Rust, ESP-IDF v6)
@@ -16,8 +16,8 @@ phases_completed: [0, 1]
 |-------|--------|------|--------|
 | 0 — Scaffold + Build Pipeline | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase0_scaffold_report.md` |
 | 1 — Domain Pure Business Logic | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase_1_domain.md` |
-| 2 — Infrastructure Hardware Drivers | ⏳ PENDING | — | — |
-| 3 — Application | ⏳ PENDING | — | — |
+| 2 — Infrastructure Hardware Drivers | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase2_infrastructure_report.md` |
+| 3 — Application | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase3_application_report.md` |
 | 4 — Network | ⏳ PENDING | — | — |
 | 5 — Integration | ⏳ PENDING | — | — |
 | 6 — TMC2209 UART Driver | ⏳ DEFERRED | — | — |
