@@ -8,20 +8,21 @@ use embuild::build::LinkArgs;
 use std::path::PathBuf;
 
 fn main() {
-    // Propagate linker arguments from esp-idf-sys
-    // NOTE: lib_name must be UPPERCASE to match cargo's env var naming (DEP_{LIB_NAME}_EMBUILD_LINK_ARGS)
-    LinkArgs::output_propagated("ESP_IDF").unwrap_or_else(|e| {
-        println!("cargo:warning=LinkArgs::output_propagated failed: {e}");
-    });
-
     // Suppress cfg warning for esp32-nimble IDF v6 patches (our crate only)
     println!("cargo::rustc-check-cfg=cfg(esp_idf_version_major, values(\"6\"))");
 
-    // Only patch on xtensa targets
+    // Only esp-idf linker args + NimBLE patching are needed on xtensa targets
     let target = std::env::var("TARGET").unwrap_or_default();
     if !target.contains("xtensa") {
         return;
     }
+
+    // Propagate linker arguments from esp-idf-sys (xtensa only — DEP_ESP_IDF_*
+    // env vars are not set on host builds).
+    // NOTE: lib_name must be UPPERCASE to match cargo's env var naming.
+    LinkArgs::output_propagated("ESP_IDF").unwrap_or_else(|e| {
+        println!("cargo:warning=LinkArgs::output_propagated failed: {e}");
+    });
 
     let Some(file) = find_esp32_nimble_source() else {
         eprintln!("[build.rs] esp32-nimble source not found, skipping patch");
