@@ -27,12 +27,8 @@ if [ "$fast_mode" = false ]; then
     echo "=== 5. Build (xtensa) ==="
     xtensa build --target xtensa-esp32-espidf
 
-    echo "=== 6. Check for unsafe blocks ==="
-    UNSAFE_COUNT=$(grep -r "unsafe {" src/ 2>/dev/null | wc -l)
-    echo "Found $UNSAFE_COUNT unsafe blocks"
-    if [ "$UNSAFE_COUNT" -gt 10 ]; then
-        echo "WARNING: Too many unsafe blocks! Review if all are necessary."
-    fi
+echo "=== 6. Check for undocumented unsafe blocks ==="
+python3 scripts/check_unsafe.py
 fi
 
 echo "=== 7. Semgrep blocking check ==="

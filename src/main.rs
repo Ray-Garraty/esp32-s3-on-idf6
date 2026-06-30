@@ -38,6 +38,9 @@ fn main() {
     let peripherals = esp_idf_hal::peripherals::Peripherals::take().expect("Peripherals::take()");
 
     // Boot-time heap report
+    // Safety: esp_get_free_heap_size and heap_caps_get_largest_free_block
+    // are ESP-IDF FFI calls that only read hardware registers — no side
+    // effects. Safe to call after FreeRTOS scheduler init (main context).
     unsafe {
         let free = esp_idf_sys::esp_get_free_heap_size();
         let largest =
