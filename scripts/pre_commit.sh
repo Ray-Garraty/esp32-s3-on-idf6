@@ -2,6 +2,7 @@
 set -e
 
 PYTHON_PATH=""  # Set to pyenv path on Windows if needed
+export PATH="$HOME/.local/bin:$PATH"
 
 fast_mode=false
 [ "$1" = "--fast" ] && fast_mode=true
@@ -14,9 +15,6 @@ cargo test --lib
 
 echo "=== 3. Clippy (host target, lib only — binary needs xtensa) ==="
 cargo clippy --lib -- -D warnings
-
-echo "=== 3.5. Blocking check regression tests ==="
-python3 scripts/test_check_blocking.py
 
 if [ "$fast_mode" = false ]; then
     xtensa() {
@@ -37,13 +35,10 @@ if [ "$fast_mode" = false ]; then
     fi
 fi
 
-echo "=== 7. Check for unwrap/expect in production code ==="
-python3 scripts/check_unwrap.py
+echo "=== 7. Semgrep blocking check ==="
+semgrep --config .semgrep/ --error src/
 
-echo "=== 8. Check for blocking calls in main loop ==="
-python scripts/check_blocking.py
-
-echo "=== 9. Docs OKF validation ==="
+echo "=== 8. Docs OKF validation ==="
 python docs/validate_okf.py
 
 echo "=== All checks passed ==="

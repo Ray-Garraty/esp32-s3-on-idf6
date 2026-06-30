@@ -6,6 +6,7 @@
 //!
 //! See `docs/refs/coding_style.md §3` for trait versus enum guidance.
 
+use crate::domain::context::MotorContext;
 use crate::domain::types::{Hz, Steps};
 use crate::errors::StepperError;
 
@@ -17,13 +18,21 @@ use crate::errors::StepperError;
 pub trait StepperMotor {
     /// Move the motor by `steps` at the given `speed`.
     ///
+    /// Requires `&MotorContext` — blocking call, may only be invoked from
+    /// a dedicated motor/task thread. The main loop MUST NOT call this.
+    ///
     /// - Positive `steps` moves in the LiqIn (fill) direction.
     /// - Negative `steps` moves in the LiqOut (dispense) direction.
     ///
     /// # Errors
     ///
     /// Returns `StepperError` on RMT failure, limit switch hit, or timeout.
-    fn move_steps(&mut self, steps: Steps, speed: Hz) -> Result<(), StepperError>;
+    fn move_steps(
+        &mut self,
+        ctx: &MotorContext,
+        steps: Steps,
+        speed: Hz,
+    ) -> Result<(), StepperError>;
 
     /// Stop the motor immediately (soft stop with position tracking).
     fn stop(&mut self) -> Result<(), StepperError>;

@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::time::Duration;
 
 use log::info;
@@ -10,6 +12,7 @@ use ecotiter_fw::infrastructure::drivers::led::Led;
 use ecotiter_fw::infrastructure::drivers::limitswitch::{LimitSwitch, STOP_EMPTY, STOP_FULL};
 use ecotiter_fw::infrastructure::drivers::onewire;
 
+#[allow(clippy::expect_used)]
 fn main() {
     esp_idf_sys::link_patches();
     ecotiter_fw::logger::init();

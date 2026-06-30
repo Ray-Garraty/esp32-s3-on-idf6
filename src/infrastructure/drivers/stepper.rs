@@ -33,6 +33,7 @@ use esp_idf_hal::rmt::{PinState, Pulse, PulseTicks, RmtChannel, Symbol, TxChanne
 use esp_idf_hal::units::FromValueType;
 
 use crate::config;
+use crate::domain::context::MotorContext;
 use crate::domain::driver_traits::StepperMotor;
 use crate::domain::types::{Direction, Hz, Steps};
 use crate::errors::StepperError;
@@ -205,14 +206,19 @@ impl<'d> RmtStepper<'d> {
     ///
     /// # BLOCKING
     ///
-    /// This function blocks during `send_and_wait()`. It MUST be called
-    /// from a dedicated motor thread, NOT from the main loop.
+    /// This function blocks during `send_and_wait()`. It requires
+    /// `&MotorContext` and MUST be called from a dedicated motor thread,
+    /// NOT from the main loop.
     ///
     /// # Errors
     ///
     /// - `StepperError::LimitSwitchReached` — stop flag was set.
     /// - `StepperError::Rmt` — RMT transmit or encoder error.
-    pub fn move_steps_intervals(&mut self, intervals_us: &[u32]) -> Result<(), StepperError> {
+    pub fn move_steps_intervals(
+        &mut self,
+        _ctx: &MotorContext,
+        intervals_us: &[u32],
+    ) -> Result<(), StepperError> {
         if intervals_us.is_empty() {
             return Ok(());
         }
@@ -293,7 +299,12 @@ impl Drop for RmtStepper<'_> {
 }
 
 impl StepperMotor for RmtStepper<'_> {
-    fn move_steps(&mut self, steps: Steps, speed: Hz) -> Result<(), StepperError> {
+    fn move_steps(
+        &mut self,
+        ctx: &MotorContext,
+        steps: Steps,
+        speed: Hz,
+    ) -> Result<(), StepperError> {
         if steps.0 == 0 {
             return Ok(());
         }
@@ -313,7 +324,7 @@ impl StepperMotor for RmtStepper<'_> {
             config::STEPPER_MIN_HZ,
         );
         let intervals = compute_ramp(steps.abs(), &ramp_config);
-        self.move_steps_intervals(&intervals)?;
+        self.move_steps_intervals(ctx, &intervals)?;
 
         // Update position after successful motion (steps is signed)
         self.position.fetch_add(steps.0, Ordering::Release);
