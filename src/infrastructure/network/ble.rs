@@ -96,12 +96,7 @@ impl BleManager {
     ///
     /// Returns `NetworkError::BleInitFailed` on any init error.
     pub fn init(&mut self) -> Result<(), NetworkError> {
-        // Set BT/WiFi coexistence: prefer BLE for reliable notifications
-        crate::esp_safe::set_coex_ble_preferred();
-
-        // Initialise NimBLE stack — does not return Result
         BLEDevice::init();
-        log::info!("BLE: NimBLE stack initialised");
 
         // Set device name (static method)
         BLEDevice::set_device_name(config::BLE_ADV_NAME_PREFIX)

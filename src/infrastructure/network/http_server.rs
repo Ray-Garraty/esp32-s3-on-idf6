@@ -162,7 +162,10 @@ impl HttpServer {
             ..Default::default()
         };
 
-        let server = EspHttpServer::new(&config).map_err(|_| NetworkError::HttpServerInitFailed)?;
+        let server = EspHttpServer::new(&config).map_err(|e| {
+            log::error!("EspHttpServer::new() failed: {e:?}");
+            NetworkError::HttpServerInitFailed
+        })?;
 
         let mut http = Self { server };
 

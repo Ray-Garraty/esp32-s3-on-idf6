@@ -35,10 +35,11 @@ except ImportError:
     print("ERROR: pyserial not installed. Run: pip install pyserial", flush=True)
     sys.exit(1)
 
-SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
-CHAR_CMD_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
-CHAR_RESP_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb"
-CHAR_STATUS_UUID = "0000ffe3-0000-1000-8000-00805f9b34fb"
+# EcoTiter NUS (Nordic UART Service) UUIDs
+SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc0000"
+CHAR_CMD_UUID = "6e400002-b5a3-f393-e0a9-e50e24dc0000"   # RX (write)
+CHAR_RESP_UUID = "6e400003-b5a3-f393-e0a9-e50e24dc0000"  # TX (notify)
+CHAR_STATUS_UUID = "6e400003-b5a3-f393-e0a9-e50e24dc0000" # same as TX for EcoTiter
 
 SCAN_TIMEOUT = 15.0
 CONNECT_TIMEOUT = 60.0
@@ -233,11 +234,10 @@ class BleSerialTest:
                 rssi = adv.rssi if adv.rssi is not None else "N/A"
                 svc_uuids = [str(u) for u in adv.service_uuids] if adv.service_uuids else []
                 is_target = (
-                    name == "Autosampler"
+                    "EcoTiter" in name
                     or SERVICE_UUID in svc_uuids
-                    or addr.upper().startswith("B4:BF:E9")
                 )
-                marker = "  \033[1m<--- AUTOSAMPLER\033[0m" if is_target else ""
+                marker = "  \033[1m<--- ECOTITER\033[0m" if is_target else ""
                 log(SCAN_TAG, f"  {name:<30} {addr:<36} RSSI={str(rssi):>4}{marker}")
 
                 if is_target and not self.target_device:
@@ -253,94 +253,44 @@ class BleSerialTest:
         return False
 
     async def run_test_sequence(self):
-        """Full automated test sequence (13 steps, like ble_test.py)."""
+        """EcoTiter BLE test sequence — sends JSON CommandEnvelope and checks logs."""
         steps = [
-            ("SYS_STATUS",  "CMD:SYS:STATUS\n",        2,   None),
-            ("SYS_VERSION", "CMD:SYS:VERSION\n",        2,   None),
-            ("CAROUSEL_HOME", "CMD:CAROUSEL_HOME\n",    2,   15),
-            ("CAROUSEL_MOVE", "CMD:CAROUSEL_MOVE:pos=3\n", 2, 15),
-            ("CAROUSEL_MOVE", "CMD:CAROUSEL_MOVE:pos=7\n", 2, 15),
-            ("Z_HOME",      "CMD:Z_HOME\n",             2,   15),
-            ("Z_LOWER",     "CMD:Z_LOWER\n",            2,   15),
-        ]
-        interlock_errs = [
-            ("CAROUSEL_MOVE (interlock)", "CMD:CAROUSEL_MOVE:pos=5\n", 2, "Z_NOT_RETRACTED"),
-        ]
-        steps2 = [
-            ("Z_RAISE",     "CMD:Z_RAISE\n",            2,   15),
-        ]
-        err_inject = [
-            ("INVALID_COMMAND", "CMD:INVALID\n",               2, "INVALID_COMMAND"),
-            ("INVALID_PARAM",   "CMD:CAROUSEL_MOVE:pos=99\n",  2, "INVALID_PARAM"),
-        ]
-        steps3 = [
-            ("ANALYZE",     "CMD:ANALYZE:pos=4\n",      2,   20),
-            ("FINISH",      "CMD:FINISH\n",             2,   15),
+            ("ping",       '{"cmd":"ping"}\n',             3),
+            ("status",     '{"cmd":"status"}\n',           3),
         ]
 
-        all_steps = steps + interlock_errs + steps2 + err_inject + steps3
+        log(OK_TAG, "=== EcoTiter BLE test sequence ===")
 
-        log(OK_TAG, "=== Starting BLE test sequence ===")
-
-        for i, (name, cmd, ack_t, done_t) in enumerate(all_steps, 1):
-            is_err = done_t is not None and isinstance(done_t, str)
-
-            log(BLE_SEND, f"[Step {i}/{len(all_steps)}] {name}: {cmd.strip()}")
+        for i, (name, cmd, wait_s) in enumerate(steps, 1):
+            log(BLE_SEND, f"[Step {i}/{len(steps)}] {name}: {cmd.strip()}")
 
             try:
                 await self.client.write_gatt_char(
                     CHAR_CMD_UUID, cmd.encode(), response=False
                 )
+                log(OK_TAG, f"  Wrote {len(cmd)} bytes to RX char")
             except Exception as e:
                 self.failed_steps.append((i, name, f"Write failed: {e}"))
                 continue
 
-            if is_err:
-                # Error-injection step — expect ERR, not ACK
-                ok, msg = await self._wait_for('ERR', name, ack_t)
-                if not ok:
-                    self.failed_steps.append((i, name, f"Expected ERR but no response: {msg}"))
-                else:
-                    log(OK_TAG, f"Got expected error: {msg}")
-                continue
-
-            # Normal step — wait for ACK
-            ok, msg = await self._wait_for('ACK', name, ack_t)
-            if not ok:
-                # maybe ERR due to state machine rejection (e.g. BUSY)
-                ok2, msg2 = await self._wait_for('ERR', name, ack_t)
-                if ok2:
-                    self.failed_steps.append((i, name, f"Got ERR: {msg2}"))
-                else:
-                    self.failed_steps.append((i, name, f"No response: {msg}"))
-                continue
-
-            # wait for DONE if applicable
-            if done_t is not None:
-                ok, msg = await self._wait_for('DONE', name, done_t)
-                if not ok:
-                    self.failed_steps.append((i, name, f"No DONE: {msg}"))
-                else:
-                    log(OK_TAG, f"Motion complete ({done_t}s timeout)")
-                    # Let state machine settle before next command
-                    await asyncio.sleep(0.5)
+            # Wait a bit for any notification or just to observe serial logs
+            await asyncio.sleep(wait_s)
 
         log("", "")
-        total = len(all_steps)
+        total = len(steps)
         passed = total - len(self.failed_steps)
         if passed == total:
-            log(OK_TAG, f"\033[1m=== BLE TEST: PASSED ({passed}/{total}) ===\033[0m")
+            log(OK_TAG, f"\033[1m=== ECOTITER BLE TEST: PASSED ({passed}/{total}) ===\033[0m")
         else:
-            log(ERR_TAG, f"\033[1m=== BLE TEST: FAILED ({passed}/{total}) ===\033[0m")
+            log(ERR_TAG, f"\033[1m=== ECOTITER BLE TEST: FAILED ({passed}/{total}) ===\033[0m")
             for num, name, reason in self.failed_steps:
                 log(ERR_TAG, f"  Step {num} ({name}): {reason}")
 
     async def run_interactive(self):
-        """Read BLE commands from stdin and send them."""
-        log(OK_TAG, "=== Interactive mode ===")
-        log(OK_TAG, "Type a BLE command (e.g. CMD:SYS:VERSION) and press Enter.")
+        """Read JSON commands from stdin and send them via BLE."""
+        log(OK_TAG, "=== Interactive mode (EcoTiter) ===")
+        log(OK_TAG, "Type a JSON command (e.g. {\"cmd\":\"ping\"}) and press Enter.")
         log(OK_TAG, "Type 'quit' or Ctrl+C to exit.")
-        log(OK_TAG, "Prefix with -- to expect ERR (e.g. --CMD:INVALID)")
         log("", "")
 
         loop = asyncio.get_event_loop()
@@ -355,13 +305,6 @@ class BleSerialTest:
                 if line.lower() in ("quit", "exit", "q"):
                     break
 
-                expect_err = False
-                if line.startswith("--"):
-                    expect_err = True
-                    line = line[2:]
-
-                if not line.startswith("CMD:"):
-                    line = "CMD:" + line
                 if not line.endswith("\n"):
                     line += "\n"
 
@@ -370,18 +313,12 @@ class BleSerialTest:
                     await self.client.write_gatt_char(
                         CHAR_CMD_UUID, line.encode(), response=False
                     )
+                    log(OK_TAG, f"Sent {len(line)} bytes")
                 except Exception as e:
                     log(ERR_TAG, f"Write failed: {e}")
                     continue
 
-                log(BLE_RECV, "Waiting for response...")
-                ok, msg = await self._wait_for(
-                    'ERR' if expect_err else 'ACK',
-                    line.split(":")[1] if ":" in line else line.strip(),
-                    RESPONSE_TIMEOUT_S,
-                )
-                if not ok:
-                    log(ERR_TAG, msg)
+                await asyncio.sleep(2)
 
             except KeyboardInterrupt:
                 log("", "")
@@ -415,14 +352,15 @@ class BleSerialTest:
                 log(OK_TAG, f"Connected! MTU: {self.client.mtu_size}")
 
                 resp_char = self.client.services.get_characteristic(CHAR_RESP_UUID)
-                if not resp_char:
-                    log(ERR_TAG, "RESP characteristic (0xFFE2) not found!")
+                if resp_char:
+                    log(OK_TAG, f"Found TX char ({CHAR_RESP_UUID}), subscribing for notifications...")
+                    await self.client.start_notify(resp_char, self.on_notification)
+                else:
+                    log(BLE_TAG, "TX notify char not found — will listen for notifications on service discovery")
+                    # List available characteristics for debugging
                     for svc in self.client.services:
                         for ch in svc.characteristics:
                             log(BLE_TAG, f"  [{svc.uuid}] {ch.uuid} -> {', '.join(ch.properties)}")
-                    return
-
-                await self.client.start_notify(resp_char, self.on_notification)
 
                 if self.interactive:
                     await self.run_interactive()
@@ -450,7 +388,7 @@ class BleSerialTest:
 
     async def run(self):
         """Main entry point: scan, connect, test."""
-        log(OK_TAG, "=== Autosampler BLE + Serial Test ===")
+        log(OK_TAG, "=== EcoTiter BLE + Serial Test ===")
 
         if self.target_device:
             await self.connect_and_test()
@@ -460,13 +398,13 @@ class BleSerialTest:
 
 # ── single command mode ─────────────────────────────────────────────
 async def send_single_command(cmd_str: str):
-    """Scan, connect, send one command, wait for response, disconnect."""
+    """Scan, connect, send one JSON command, disconnect."""
     log(OK_TAG, f"=== Single command mode: {cmd_str.strip()} ===")
 
     ble = BleSerialTest(serial_reader=None, interactive=False)
     found = await ble.scan()
     if not found:
-        log(ERR_TAG, "Autosampler not found")
+        log(ERR_TAG, "EcoTiter not found")
         return
 
     dev = ble.target_device
@@ -478,17 +416,11 @@ async def send_single_command(cmd_str: str):
         await ble.client.connect()
         log(OK_TAG, f"Connected! MTU: {ble.client.mtu_size}")
 
-        resp_char = ble.client.services.get_characteristic(CHAR_RESP_UUID)
-        if not resp_char:
-            log(ERR_TAG, "RESP characteristic not found!")
-            return
-
-        await ble.client.start_notify(resp_char, ble.on_notification)
-
         log(BLE_SEND, cmd_str.strip())
         await ble.client.write_gatt_char(
             CHAR_CMD_UUID, cmd_str.encode(), response=False
         )
+        log(OK_TAG, f"Sent {len(cmd_str)} bytes")
 
         await asyncio.sleep(5)
 

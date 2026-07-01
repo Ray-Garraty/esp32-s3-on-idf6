@@ -96,8 +96,8 @@ fn main() {
 
     let mut ble_mgr = ecotiter_fw::infrastructure::network::ble::BleManager::new(ble_cmd_tx);
 
-    // BLE init is gated — enable after NimBLE testing
-    // let _ = ble_mgr.init();
+    // Channel: ble_mgr from Owner Thread → main
+    let (ble_mgr_tx, ble_mgr_rx) = std::sync::mpsc::channel::<ecotiter_fw::infrastructure::network::ble::BleManager>();
 
     // ── Temperature thread (DS18B20 on GPIO33) ───────────────────
     {
@@ -124,27 +124,40 @@ fn main() {
             });
     }
 
-    // ── Owner thread: WiFi + HTTP (32 KB stack) ────────────────
+    // ── Owner thread: WiFi + HTTP + BLE (32 KB stack) ──────────
     {
         let wifi_tx = wifi_tx;
+        let ble_mgr_tx = ble_mgr_tx;
         let _ = std::thread::Builder::new()
             .stack_size(config::NET_OWNER_STACK)
             .name("net_owner".into())
             .spawn(move || {
-                info!("Network owner: WiFi + HTTP init on 32 KB stack");
+                info!("Network owner: WiFi + HTTP + BLE init on 32 KB stack");
 
-                let mut wifi_mgr = WifiManager::new(modem, sys_loop, Some(nvs), ble_active_clone)
+                let wifi_mgr = WifiManager::new(modem, sys_loop, Some(nvs), ble_active_clone)
                     .expect("WifiManager::new()");
-                wifi_mgr.init();
 
                 let wifi_mgr = Arc::new(Mutex::new(wifi_mgr));
                 let wifi_mgr_for_http = Arc::clone(&wifi_mgr);
+                let wifi_mgr_for_late_init = Arc::clone(&wifi_mgr);
                 wifi_tx.send(wifi_mgr).expect("send wifi_mgr to main");
 
                 let _http_server = HttpServer::new(wifi_mgr_for_http).expect("HttpServer::new()");
 
+                // Init BLE while DRAM is still pristine (before WiFi radio allocations)
+                match ble_mgr.init() {
+                    Ok(()) => info!("BLE: init OK"),
+                    Err(e) => log::error!("BLE init failed: {e:?}"),
+                }
+                let _ = ble_mgr_tx.send(ble_mgr);
+
+                // Init WiFi after BLE (coexistence arbitrator handles fair airtime sharing)
+                if let Ok(mut wifi) = wifi_mgr_for_late_init.try_lock() {
+                    wifi.init();
+                }
+
                 let watermark = ecotiter_fw::esp_safe::stack_watermark();
-                log::info!(
+                info!(
                     "Network owner: HttpServer started (stack watermark: {watermark} bytes)"
                 );
 
@@ -168,6 +181,20 @@ fn main() {
         }
     };
     log::info!("Main: received wifi_mgr, entering event loop");
+
+    // ── Получаем ble_mgr из Owner Thread ──
+    let mut ble_mgr = loop {
+        match ble_mgr_rx.try_recv() {
+            Ok(mgr) => break mgr,
+            Err(TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("ble_mgr channel disconnected");
+            }
+        }
+    };
+    info!("Main: ble_mgr received");
 
     // ── Main loop ───────────────────────────────────────────────
     let mut tick_count: u64 = 0;
