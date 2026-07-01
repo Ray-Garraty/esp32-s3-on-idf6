@@ -97,7 +97,8 @@ fn main() {
     let mut ble_mgr = ecotiter_fw::infrastructure::network::ble::BleManager::new(ble_cmd_tx);
 
     // Channel: ble_mgr from Owner Thread → main
-    let (ble_mgr_tx, ble_mgr_rx) = std::sync::mpsc::channel::<ecotiter_fw::infrastructure::network::ble::BleManager>();
+    let (ble_mgr_tx, ble_mgr_rx) =
+        std::sync::mpsc::channel::<ecotiter_fw::infrastructure::network::ble::BleManager>();
 
     // ── Temperature thread (DS18B20 on GPIO33) ───────────────────
     {
@@ -138,28 +139,27 @@ fn main() {
                     .expect("WifiManager::new()");
 
                 let wifi_mgr = Arc::new(Mutex::new(wifi_mgr));
+                let wifi_mgr_for_init = Arc::clone(&wifi_mgr);
                 let wifi_mgr_for_http = Arc::clone(&wifi_mgr);
-                let wifi_mgr_for_late_init = Arc::clone(&wifi_mgr);
                 wifi_tx.send(wifi_mgr).expect("send wifi_mgr to main");
+
+                // Init WiFi FIRST so HTTP server has correct IP/routing
+                if let Ok(mut wifi) = wifi_mgr_for_init.try_lock() {
+                    wifi.init();
+                }
+                drop(wifi_mgr_for_init);
 
                 let _http_server = HttpServer::new(wifi_mgr_for_http).expect("HttpServer::new()");
 
-                // Init BLE while DRAM is still pristine (before WiFi radio allocations)
+                // Init BLE after HTTP (DRAM still mostly pristine)
                 match ble_mgr.init() {
                     Ok(()) => info!("BLE: init OK"),
                     Err(e) => log::error!("BLE init failed: {e:?}"),
                 }
                 let _ = ble_mgr_tx.send(ble_mgr);
 
-                // Init WiFi after BLE (coexistence arbitrator handles fair airtime sharing)
-                if let Ok(mut wifi) = wifi_mgr_for_late_init.try_lock() {
-                    wifi.init();
-                }
-
                 let watermark = ecotiter_fw::esp_safe::stack_watermark();
-                info!(
-                    "Network owner: HttpServer started (stack watermark: {watermark} bytes)"
-                );
+                info!("Network owner: HttpServer started (stack watermark: {watermark} bytes)");
 
                 loop {
                     std::thread::sleep(Duration::from_hours(1));

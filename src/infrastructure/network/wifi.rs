@@ -388,9 +388,24 @@ impl<'d> WifiManager<'d> {
         let mut connected = false;
         while Instant::now() < deadline {
             if wifi.is_connected().unwrap_or(false) {
-                // Additional delay for DHCP
-                std::thread::sleep(Duration::from_millis(config::STA_POST_CONNECT_DELAY_MS));
-                connected = true;
+                // Wait for DHCP IP assignment before continuing
+                let ip_deadline =
+                    Instant::now() + Duration::from_millis(config::STA_DHCP_TIMEOUT_MS);
+                while Instant::now() < ip_deadline {
+                    if let Ok(info) = wifi.wifi().sta_netif().get_ip_info() {
+                        if info.ip != Ipv4Addr::UNSPECIFIED {
+                            log::info!("WiFi: got IP {}", info.ip);
+                            connected = true;
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if connected {
+                    break;
+                }
+                log::warn!("WiFi: DHCP timeout, continuing without IP");
+                connected = true; // Still mark as connected for AP fallback
                 break;
             }
             std::thread::sleep(Duration::from_millis(config::STA_POLL_MS));

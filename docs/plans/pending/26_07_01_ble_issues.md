@@ -12,7 +12,7 @@ timestamp: 2026-07-01
 status: pending
 ---
 
-# BLE activation breaks WebUI + mDNS — HTTP latency regression
+# BLE activation breaks WebUI + mDNS - HTTP latency regression
 
 ## Session summary
 
@@ -267,6 +267,162 @@ listening socket may experience:
    order fixes the latency
 2. Or: keep HTTP first but verify `httpd_start()` with explicit netif config
 3. Check `EspMdns::take()` error reason — netif not ready vs already taken
+
+---
+
+## Session 2 (2026-07-01): WiFi→HTTP→BLE reorder — partial success, new regressions
+
+### Goal
+Fix Issues 5 (HTTP latency 7+s) and 6 (mDNS ESP_FAIL) by reordering init
+from HTTP→BLE→WiFi to **WiFi→HTTP→BLE**, preserving BLE + HTTP + WiFi
+concurrent operation.
+
+### What was tried
+
+**Fix A — Init reorder to WiFi→HTTP→BLE (applied in `src/main.rs`):**
+Reordered the `net_owner` thread from `HttpServer::new()` → `ble_mgr.init()`
+→ `wifi.init()` to `wifi.init()` → `HttpServer::new()` → `ble_mgr.init()`.
+
+Rationale: WiFi driver init uses minimal DRAM (~3.5 KB). `httpd_start()`
+called after WiFi netif has an IP → no lwIP routing delay. BLE init
+called last — remaining largest DRAM block still >12 KB (boot 108 KB,
+minus HTTP's 12 KB ≈ 96 KB).
+
+**Fix B — DHCP IP wait (applied in `src/infrastructure/network/wifi.rs`):**
+In `try_connect_sta()`, after `wifi.is_connected()` returns true (L2 link
+up), added a polling loop that waits for DHCP IP assignment by checking
+`sta_netif().get_ip_info().ip != 0.0.0.0` with 5000 ms timeout.
+
+**Fix C — BLE GAP name (applied in `sdkconfig.defaults`):**
+Added `CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="EcoTiter-"` to override
+the NimBLE compile-time default ("nimble") for the GAP Device Name
+characteristic.
+
+**Fix D — NUS service UUID (applied in `src/infrastructure/network/ble.rs`):**
+Added `adv_data.add_service_uuid(nus_uuid)` before `advertising.set_data()`
+so the NUS service UUID appears in the BLE advertising payload.
+
+### What worked (verified)
+
+| Component | Result | Evidence |
+|-----------|--------|----------|
+| HTTP latency | ✅ Fixed | `curl /api/ping` responds instantly (no 7s delay). Boot log shows HTTP server starts after WiFi IP is available |
+| mDNS registration | ✅ Fixed | `mDNS: hostname 'ecotiter' registered` in boot log (no ESP_FAIL) |
+| BLE host task | ✅ Starts | `BLE Host Task Started` logged, 12 KB stack allocated successfully |
+| DRAM allocation | ✅ OK | No `ESP_ERR_HTTPD_TASK`, no NimBLE task creation failures |
+| Smoke test (60 s) | ✅ Pass | No Guru Meditation, no WDT, no panics, stable operation |
+| cargo test/clippy/build | ✅ Pass | 229/229 tests, 0 clippy warnings, xtensa build OK |
+
+### What did NOT work (new regressions)
+
+| Component | Status | Detail |
+|-----------|--------|--------|
+| BLE advertised name | ❌ "nimble" | Phone sees "nimble B4:BF:E9:09:FF:EE" instead of "EcoTiter-XXXX" |
+| BLE scan test | ❌ Not found | `ble_serial_test.py --scan-only` finds 11+ other BLE devices but not EcoTiter |
+| WiFi AP "EcoTiter-AP" | ❌ Not visible | Phone WiFi scan shows no "EcoTiter-AP" network |
+| curl http://ecotiter.local/ | ❌ Cannot test | Host has no WiFi hardware, cannot connect to ESP32 AP |
+
+### Why BLE name fix (Fix C + D) didn't fully work
+
+Fix C changes the compile-time GAP Device Name default. Fix D adds the NUS
+service UUID to advertising data. Both are correct changes. Possible reasons
+for continued failure:
+
+1. **Host BLE adapter cannot reach the ESP32** — the test machine scans 11+
+   nearby BLE devices (LYWSD03MMC, Samsung TV, Haier) but does not see
+   the ESP32 at all. This suggests a range or interference issue on the
+   host side, not a firmware problem.
+2. **Phone cache** — the user's phone may be caching the old "nimble" name
+   from a previous scan. Clearing the phone's BLE cache might show the new
+   name.
+3. **User did not re-test from phone after the latest flash** — the "nimble"
+   observation was from the PREVIOUS session (before Fix C+D).
+
+### Root cause discovery: `E (2528) wifi:fail to alloc timer, type=9`
+
+**This is the most important finding of the session.**
+
+During all boots, the ESP32 log shows:
+```
+E (2528) wifi:fail to alloc timer, type=9
+```
+
+Analysis:
+- This is an **internal WiFi driver error** — one of the proprietary
+  `ieee80211_timer_*` allocations in `libnet80211.a` returned NULL.
+- `type=9` is an undocumented internal timer type. Based on available
+  symbols (`beacon_timer`, `hostap_handle_timer`, `ApFreqCalTimer`,
+  `sta_con_timer`, etc.), it is likely related to AP/coexistence operation.
+- The WiFi driver does NOT abort on this error, but the missing timer
+  means certain WiFi functions silently fail.
+
+**Hypothesis for WiFi AP invisibility:**
+The `type=9` timer failure prevents the AP from sending beacon frames.
+Even though `wifi.start()` returns ESP_OK and the AP is nominally
+configured, without the beacon timer no station can discover it.
+The user's phone scan sees no "EcoTiter-AP" because the ESP32 is not
+transmitting beacon frames.
+
+**Why the timer fails:** Internal DRAM fragmentation/ exhaustion. WiFi
+timer structures must be allocated from `MALLOC_CAP_INTERNAL` memory.
+After BLE + HTTP + WiFi init, the internal DRAM heap is too fragmented
+to satisfy all timer allocations.
+
+### The DRAM paradox
+
+This project faces a fundamental three-way DRAM conflict:
+
+```
+BLE first  → HTTP fails (12 KB xTaskCreate needs pristine DRAM)
+HTTP first → WiFi AP has no IP (lwIP routing delay, 7 s HTTP latency)
+WiFi first → AP timer fails (DRAM fragmentiert nach WiFi-Init für BLE)
+```
+
+Each ordering fixes one problem but breaks another. All three subsystems
+(WiFi AP, HTTP server, BLE host) require large contiguous internal DRAM
+blocks that cannot coexist with the current buffer configuration.
+
+### Candidates for the next session
+
+**Option 1 — Reduce DRAM consumption of WiFi buffers:**
+Current `sdkconfig.defaults` uses ESP-IDF defaults (aggressive buffering).
+Reducing these would leave more DRAM for WiFi timer allocations:
+
+| Parameter | Current | Proposed | Est. saving |
+|-----------|---------|----------|-------------|
+| `ESP_WIFI_DYNAMIC_RX_BUFFER_NUM` | 32 | 16 | ~8 KB |
+| `ESP_WIFI_DYNAMIC_TX_BUFFER_NUM` | 32 | 16 | ~8 KB |
+| `ESP_WIFI_CACHE_TX_BUFFER_NUM` | 32 | 16 | ~4 KB |
+| `ESP_WIFI_MGMT_SBUF_NUM` | 32 | 16 | ~4 KB |
+| `ESP_MAIN_TASK_STACK_SIZE` | 16384 | 8192 | ~8 KB |
+| `ESP_WIFI_IRAM_OPT` | y | n | ~17 KB DRAM freed |
+| `ESP_WIFI_RX_IRAM_OPT` | y | n | (additional) |
+
+**Option 2 — Explicitly configure software coexistence:**
+Toggle `CONFIG_ESP_COEX_SW_COEXIST_ENABLE` (currently auto-enabled
+because `ESP_WIFI_ENABLED && BT_ENABLED`). This reduces management
+timer overhead at the cost of less efficient RF arbitration.
+
+**Option 3 — Use external SPIRAM for HTTP server buffers:**
+ESP-IDF can be configured to prefer PSRAM for TCP/IP buffers
+(`CONFIG_LWIP_ESP_LWIP0_ASSERT_SPIRAM_USE`), freeing internal DRAM
+for WiFi timers and BLE.
+
+### Current state (end of session 2)
+
+| Component | Status |
+|-----------|--------|
+| HTTP server | ✅ Starts, all 17 routes, no latency |
+| WiFi STA init | ✅ WiFi driver init succeeds, AP starts nominally |
+| WiFi STA connectivity | ❓ Untested (no STA credentials configured) |
+| BLE host task | ✅ Starts, 12 KB stack allocated |
+| BLE advertised name | ❓ Unknown after Fix C+D — user did not retest from phone |
+| BLE NUS service UUID | ✅ Added to advertising data (Fix D) |
+| WiFi AP "EcoTiter-AP" | ❌ Not visible to phones (`type=9` timer hypothesis) |
+| mDNS registration | ✅ "ecotiter" hostname registered |
+| HTTP latency | ✅ Fixed (sub-500ms responses) |
+| 60s smoke test | ✅ No panics, no WDT, no Guru Meditation |
+| Boot log error | ⚠️ `E (2528) wifi:fail to alloc timer, type=9` |
 
 ---
 

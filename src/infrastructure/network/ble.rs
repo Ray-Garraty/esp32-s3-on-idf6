@@ -178,6 +178,12 @@ impl BleManager {
             let mut advertising = device.get_advertising().lock();
             let mut adv_data = BLEAdvertisementData::new();
             adv_data.name(config::BLE_ADV_NAME_PREFIX);
+
+            // Add NUS service UUID to advertising data for scanner discovery
+            let nus_uuid = BleUuid::from_uuid128_string(config::NUS_SERVICE_UUID)
+                .map_err(|_| NetworkError::BleInitFailed)?;
+            adv_data.add_service_uuid(nus_uuid);
+
             advertising
                 .set_data(&mut adv_data)
                 .map_err(|_| NetworkError::BleInitFailed)?;

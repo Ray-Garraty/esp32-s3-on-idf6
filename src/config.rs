@@ -14,6 +14,7 @@ pub const STA_CONNECT_TIMEOUT_MS: u64 = 15_000;
 pub const STA_RECONNECT_INTERVAL_MS: u64 = 30_000;
 pub const STA_POLL_MS: u64 = 500;
 pub const STA_POST_CONNECT_DELAY_MS: u64 = 500;
+pub const STA_DHCP_TIMEOUT_MS: u64 = 5000;
 
 // ── GPIO Pin Assignments ──────────────────────────────────────
 pub const PIN_STEP: u8 = 25;
@@ -119,3 +120,32 @@ pub const WS_LIMITSW_INTERVAL_TICKS: u64 = 100;
 
 /// Interval in ticks for periodic log output (100 ticks × 10 ms = 1 s).
 pub const LOG_INTERVAL_TICKS: u64 = 100;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard: STA_DHCP_TIMEOUT_MS must be reasonable —
+    /// too low (< 1000 ms) would cause DHCP timeout on slow networks,
+    /// too high (> 30000 ms) would make init unbearably slow.
+    #[test]
+    fn sta_dhcp_timeout_is_sane() {
+        assert!(
+            STA_DHCP_TIMEOUT_MS >= 1000,
+            "DHCP timeout too low: got {STA_DHCP_TIMEOUT_MS}"
+        );
+        assert!(
+            STA_DHCP_TIMEOUT_MS <= 30000,
+            "DHCP timeout too high: got {STA_DHCP_TIMEOUT_MS}"
+        );
+    }
+
+    /// Regression guard: ensure DHCP timeout is less than the total connect timeout.
+    #[test]
+    fn sta_dhcp_timeout_does_not_exceed_connect_timeout() {
+        assert!(
+            STA_DHCP_TIMEOUT_MS < STA_CONNECT_TIMEOUT_MS,
+            "DHCP timeout ({STA_DHCP_TIMEOUT_MS}) must be less than connect timeout ({STA_CONNECT_TIMEOUT_MS})"
+        );
+    }
+}
