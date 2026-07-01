@@ -1,4 +1,4 @@
-//! ESP-IDF HTTP server with REST API, captive portal, SSE, and WebUI.
+//! ESP-IDF HTTP server with REST API, captive portal, WebSocket, and WebUI.
 //!
 //! # Architecture
 //!
@@ -7,29 +7,23 @@
 //!
 //! - REST API handlers call `rest_api.rs` functions for JSON building.
 //! - POST /api/command uses the stub path (Phase 5 adds full dispatch).
-//! - GET /api/events uses the blocking handler pattern with `mpsc::sync_channel`
-//!   and `ManuallyDrop<Response>` to stream SSE events from the HTTP server task.
+//! - WebSocket at `/ws/stream` broadcasts JSON events to all connected clients.
 //! - Captive portal routes redirect common probe URLs to /wifi.
 //! - WebUI routes serve the embedded HTML dashboard.
-//!
-//! # Safety
-//!
-//! The SSE handler blocks inside the HTTP server task (12 KB stack) waiting for
-//! events via `mpsc::Receiver::recv()`. This is safe because:
-//! - ESP-IDF HTTP handlers run in a dedicated task (separate from main loop)
-//! - The `httpd_req_t` pointer stays valid while the handler is running
-//! - `ManuallyDrop` prevents the response from being dropped (closing the connection)
-//! - `httpd_resp_send_chunk()` sends data without completing the response
-//! - A zero-length chunk at the end marks the response as complete
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use core::mem::ManuallyDrop;
+/// Global restart flag set by captive portal when WiFi credentials are saved.
+///
+/// Main loop reads this instead of http_server.restart_pending().
+/// Thread-safe: written by HTTP handler (httpd task), read by main loop.
+pub static G_RESTART_PENDING: AtomicBool = AtomicBool::new(false);
 
 use embedded_svc::http::Method;
-use esp_idf_svc::handle::RawHandle;
+use embedded_svc::ws::FrameType;
+use esp_idf_svc::http::server::ws::EspHttpWsDetachedSender;
 use esp_idf_svc::http::server::{Configuration, EspHttpServer};
 
 use crate::config;
@@ -43,22 +37,47 @@ use crate::interface::webui;
 // `WifiManager` used with `'static` lifetime for `fn_handler` `Send` bound.
 type WifiMgr = Arc<Mutex<WifiManager<'static>>>;
 
-/// SSE message with event type and JSON payload.
-pub struct SseMessage {
-    pub event_type: &'static str,
-    pub data: heapless::String<{ MAX_RESPONSE_SIZE }>,
-}
+/// WebSocket sessions: session_id -> detached sender.
+/// Wrapped in `Mutex` for interior mutability (broadcast from main loop).
+static WS_SESSIONS: Mutex<BTreeMap<i32, EspHttpWsDetachedSender>> = Mutex::new(BTreeMap::new());
 
-/// Shared sender for SSE events — main loop pushes, HTTP handler receives in blocking loop.
-pub type SseTx = Arc<Mutex<Option<mpsc::SyncSender<SseMessage>>>>;
+/// Broadcast a JSON event to all connected WebSocket clients.
+///
+/// Called from main loop (non-blocking — uses `try_lock()` per AGENTS.md
+/// Golden Rule). The event is wrapped in a JSON envelope:
+/// `{"event":"<type>","data":<payload>}`
+pub fn broadcast_websocket_event(event_type: &str, data: &str) {
+    let mut msg: heapless::String<{ MAX_RESPONSE_SIZE + 64 }> = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut msg,
+        format_args!(r#"{{"event":"{event_type}","data":{data}}}"#),
+    );
+
+    if let Ok(mut sessions) = WS_SESSIONS.try_lock() {
+        // Remove closed sessions as we iterate
+        sessions.retain(|session_id, sender| {
+            if sender.is_closed() {
+                log::info!("WS: session {session_id} stale, removing");
+                false
+            } else if let Err(e) = sender.send(FrameType::Text(false), msg.as_bytes()) {
+                log::warn!("WS: session {session_id} send failed: {e:?}");
+                true // keep — might recover
+            } else {
+                true
+            }
+        });
+    }
+}
 
 /// HTTP server wrapper.
 pub struct HttpServer {
     /// The underlying ESP-IDF HTTP server.
     server: EspHttpServer<'static>,
-    /// Set to `true` when WiFi credentials are saved and a restart is needed.
-    restart_pending: Arc<AtomicBool>,
 }
+
+/// Minimum stack bytes required before safely calling EspHttpServer::new().
+/// Below this threshold, C-struct init could overflow the stack.
+const MIN_STACK_FOR_HTTP_INIT: u32 = 4096;
 
 impl HttpServer {
     /// Create a new HTTP server and register all routes.
@@ -66,14 +85,21 @@ impl HttpServer {
     /// # Arguments
     ///
     /// * `wifi_mgr` - Shared WiFi manager (`Arc<Mutex<>>`) for status/connect routes.
-    /// * `sse_tx` - Shared sender for SSE events (main loop → HTTP handler).
     ///
     /// # Errors
     ///
     /// Returns `NetworkError::HttpServerInitFailed` if the server cannot be created.
     // Values are moved into closures; taking references would require extra Arcs.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new(wifi_mgr: WifiMgr, sse_tx: SseTx) -> Result<Self, NetworkError> {
+    pub fn new(wifi_mgr: WifiMgr) -> Result<Self, NetworkError> {
+        // Runtime stack guard: warn if remaining stack is critically low
+        if crate::esp_safe::stack_watermark() < MIN_STACK_FOR_HTTP_INIT {
+            log::warn!(
+                "Low stack ({} bytes) before HTTP init — risk of overflow",
+                crate::esp_safe::stack_watermark()
+            );
+        }
+
         let config = Configuration {
             stack_size: config::HTTP_SERVER_STACK,
             ..Default::default()
@@ -81,25 +107,16 @@ impl HttpServer {
 
         let server = EspHttpServer::new(&config).map_err(|_| NetworkError::HttpServerInitFailed)?;
 
-        let restart_pending = Arc::new(AtomicBool::new(false));
+        let mut http = Self { server };
 
-        let mut http = Self {
-            server,
-            restart_pending: Arc::clone(&restart_pending),
-        };
-
-        http.register_captive_routes(Arc::clone(&wifi_mgr), restart_pending)?;
-        http.register_api_routes(Arc::clone(&wifi_mgr), sse_tx)?;
+        http.register_captive_routes(Arc::clone(&wifi_mgr))?;
+        http.register_api_routes(Arc::clone(&wifi_mgr))?;
+        http.register_ws_routes()?;
         http.register_webui_routes()?;
 
         log::info!("HTTP: server started on port {}", config::HTTP_PORT);
 
         Ok(http)
-    }
-
-    /// Returns `true` if a restart is pending (WiFi credentials were saved via captive portal).
-    pub fn restart_pending(&self) -> bool {
-        self.restart_pending.load(Ordering::Acquire)
     }
 
     // ── Captive portal routes ───────────────────────────────────
@@ -110,11 +127,7 @@ impl HttpServer {
         clippy::option_if_let_else,
         clippy::manual_string_new
     )]
-    fn register_captive_routes(
-        &mut self,
-        wifi_mgr: WifiMgr,
-        restart_pending: Arc<AtomicBool>,
-    ) -> Result<(), NetworkError> {
+    fn register_captive_routes(&mut self, wifi_mgr: WifiMgr) -> Result<(), NetworkError> {
         // GET /wifi — captive portal WiFi configuration form
         self.server
             .fn_handler(
@@ -131,7 +144,6 @@ impl HttpServer {
 
         // POST /wifi/connect — save credentials and trigger restart
         let wifi_mgr_clone = Arc::clone(&wifi_mgr);
-        let restart = Arc::clone(&restart_pending);
         self.server
             .fn_handler(
                 "/wifi/connect",
@@ -152,7 +164,7 @@ impl HttpServer {
                                 // Try connecting (blocking, but this is in HTTP task context)
                                 if wifi.try_connect_sta(ssid, password) {
                                     WifiManager::save_credentials_to_nvs(ssid, password);
-                                    restart.store(true, Ordering::Release);
+                                    G_RESTART_PENDING.store(true, Ordering::Release);
                                 }
                             }
                         }
@@ -228,11 +240,7 @@ impl HttpServer {
         clippy::too_many_lines,
         clippy::option_if_let_else
     )]
-    fn register_api_routes(
-        &mut self,
-        wifi_mgr: WifiMgr,
-        sse_tx: SseTx,
-    ) -> Result<(), NetworkError> {
+    fn register_api_routes(&mut self, wifi_mgr: WifiMgr) -> Result<(), NetworkError> {
         // GET /api/ping — health check
         self.server
             .fn_handler(
@@ -339,106 +347,6 @@ impl HttpServer {
             )
             .map_err(|_| NetworkError::HttpServerInitFailed)?;
 
-        // GET /api/events — SSE stream (blocking handler pattern)
-        // Safety: the handler blocks inside the HTTP server task (12 KB stack)
-        // waiting for events via mpsc channel. This is safe because:
-        // 1. ESP-IDF HTTP handlers run in a dedicated task (separate from main loop)
-        // 2. The httpd_req_t pointer stays valid while the handler is running
-        // 3. ManuallyDrop prevents the response from being dropped
-        // 4. httpd_resp_send_chunk sends data without completing the response
-        let sse_tx_clone = sse_tx;
-        self.server
-            .fn_handler(
-                "/api/events",
-                Method::Get,
-                move |mut request| -> Result<(), esp_idf_svc::io::EspIOError> {
-                    // 1. Extract raw request handle BEFORE consuming the request
-                    // Safety: handle() returns *mut c_void; cast to *mut httpd_req_t
-                    // is safe because the ESP-IDF HTTP server owns the request and
-                    // keeps it alive while the handler runs.
-                    let raw_req = request
-                        .connection()
-                        .handle()
-                        .cast::<esp_idf_sys::httpd_req_t>();
-
-                    // 2. Send response headers — ManuallyDrop prevents closing connection
-                    let resp = request.into_response(
-                        200,
-                        Some("OK"),
-                        &[
-                            ("Content-Type", "text/event-stream"),
-                            ("Cache-Control", "no-cache"),
-                        ],
-                    )?;
-                    let _resp = ManuallyDrop::new(resp);
-
-                    // 3. Create channel for SSE events
-                    let (tx, rx) = mpsc::sync_channel::<SseMessage>(config::SSE_CHANNEL_CAPACITY);
-
-                    // 4. Store sender for main loop
-                    if let Ok(mut guard) = sse_tx_clone.lock() {
-                        *guard = Some(tx);
-                    } else {
-                        log::info!("SSE: mutex poisoned");
-                        return Ok(());
-                    }
-                    log::info!("SSE: client connected");
-
-                    // 5. Blocking loop: push events via httpd_resp_send_chunk
-                    loop {
-                        if let Ok(msg) = rx.recv() {
-                            // Build SSE frame: "event: {type}\ndata: {json}\n\n"
-                            let mut frame: heapless::String<
-                                { MAX_RESPONSE_SIZE + config::SSE_FRAME_OVERHEAD },
-                            > = heapless::String::new();
-                            let _ = core::fmt::write(
-                                &mut frame,
-                                format_args!("event: {}\ndata: {}\n\n", msg.event_type, msg.data),
-                            );
-                            let bytes = frame.as_bytes();
-
-                            // SAFETY:
-                            //   Invariant: raw_req is a valid *mut httpd_req_t from
-                            //   ESP-IDF HTTP server. Handler is still running (blocking
-                            //   on rx.recv()), so httpd_req_t is alive.
-                            //   httpd_resp_send_chunk sends one chunk without completing.
-                            //   Context: HTTP server task (12KB stack).
-                            //   Risk: ESP-IDF API change would cause UB.
-                            let ret = unsafe {
-                                esp_idf_sys::httpd_resp_send_chunk(
-                                    raw_req,
-                                    bytes.as_ptr().cast(),
-                                    bytes.len().cast_signed(),
-                                )
-                            };
-                            if ret != esp_idf_sys::ESP_OK {
-                                log::warn!("SSE: send_chunk error {ret}, client disconnected");
-                                break;
-                            }
-                        } else {
-                            log::info!("SSE: channel closed");
-                            break;
-                        }
-                    }
-
-                    // 6. Cleanup: clear sender, zero-length chunk to end response
-                    if let Ok(mut guard) = sse_tx_clone.lock() {
-                        *guard = None;
-                    }
-                    // SAFETY:
-                    //   Invariant: zero-length chunk signals response completion.
-                    //   raw_req still valid — handler has not returned.
-                    //   Context: HTTP server task, cleanup before handler return.
-                    //   Risk: ESP-IDF API change would cause UB.
-                    unsafe {
-                        esp_idf_sys::httpd_resp_send_chunk(raw_req, core::ptr::null(), 0);
-                    }
-                    log::info!("SSE: client disconnected");
-                    Ok(())
-                },
-            )
-            .map_err(|_| NetworkError::HttpServerInitFailed)?;
-
         // GET /api/logs — return log entries as JSON
         self.server
             .fn_handler(
@@ -491,6 +399,50 @@ impl HttpServer {
         Ok(())
     }
 
+    // ── WebSocket routes ──────────────────────────────────────────
+
+    fn register_ws_routes(&mut self) -> Result<(), NetworkError> {
+        self.server
+            .ws_handler("/ws/stream", None, move |ws| {
+                if ws.is_new() {
+                    let session_id = ws.session();
+                    match ws.create_detached_sender() {
+                        Ok(sender) => {
+                            if let Ok(mut sessions) = WS_SESSIONS.lock() {
+                                sessions.insert(session_id, sender);
+                                log::info!(
+                                    "WS: session {session_id} connected ({} total)",
+                                    sessions.len()
+                                );
+                            }
+                            let _ = ws.send(
+                                FrameType::Text(false),
+                                br#"{"event":"connected","data":{}}"#,
+                            );
+                        }
+                        Err(e) => log::warn!("WS: create_detached_sender failed: {e:?}"),
+                    }
+                    return Ok(());
+                }
+
+                if ws.is_closed() {
+                    let session_id = ws.session();
+                    if let Ok(mut sessions) = WS_SESSIONS.lock() {
+                        sessions.remove(&session_id);
+                        log::info!(
+                            "WS: session {session_id} closed ({} remaining)",
+                            sessions.len()
+                        );
+                    }
+                    return Ok(());
+                }
+
+                Ok::<(), esp_idf_sys::EspError>(())
+            })
+            .map_err(|_| NetworkError::HttpServerInitFailed)?;
+        Ok(())
+    }
+
     // ── WebUI routes ────────────────────────────────────────────
 
     fn register_webui_routes(&mut self) -> Result<(), NetworkError> {
@@ -514,7 +466,7 @@ impl HttpServer {
         static_route!("/", webui::INDEX_HTML);
         static_route!("/style.css", webui::STYLE_CSS);
         static_route!("/js/state.js", webui::STATE_JS);
-        static_route!("/js/sse.js", webui::SSE_JS);
+        static_route!("/js/ws.js", webui::WS_JS);
         static_route!("/js/ui-update.js", webui::UI_UPDATE_JS);
         static_route!("/js/logs.js", webui::LOGS_JS);
         static_route!("/js/stepper.js", webui::STEPPER_JS);

@@ -1,5 +1,5 @@
 /**
- * @file sse.js
+ * @file ws.js
  * @brief SSE connection & state synchronization
  */
 const { SSE_TIMEOUT_MS, SSE_CHECK_INTERVAL_MS, SSE_PING_INTERVAL_MS, SSE_RECONNECT_DELAY_MS, SSE_PING_THRESHOLD_MS, SSE_MAX_ENTRIES } = CONFIG;

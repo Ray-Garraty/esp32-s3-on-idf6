@@ -74,6 +74,13 @@ pub const BLE_NOTIFY_THREAD_STACK: usize = 8192;
 /// HTTP server task.
 pub const HTTP_SERVER_STACK: usize = 12288;
 
+/// Owner thread for !Send EspHttpServer.
+///
+/// 32 KB guarantees safe C-struct init (URI matchers, httpd_start). Holds the
+/// server via RAII, never exits. (Was 16 KB in main — insufficient, caused
+/// SW_CPU_RESET during Debug format. Now isolated to dedicated 32 KB stack.)
+pub const NET_OWNER_STACK: usize = 32768;
+
 // ── RMT ───────────────────────────────────────────────────────
 /// RMT resolution in Hz (1 MHz → 1 tick = 1 µs).
 pub const RMT_RESOLUTION: u32 = 1_000_000;

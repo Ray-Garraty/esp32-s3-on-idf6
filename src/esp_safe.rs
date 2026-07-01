@@ -65,6 +65,20 @@ pub fn heap_stats() -> (u32, u32) {
     }
 }
 
+/// Read the current task's stack watermark (minimum free stack bytes
+/// since task creation).
+///
+/// A return value below 1024 indicates critical risk of stack overflow.
+/// Safe to call from any FreeRTOS task after scheduler init.
+pub fn stack_watermark() -> u32 {
+    // SAFETY:
+    //   Invariant: uxTaskGetStackHighWaterMark(NULL) queries the calling
+    //   task's TCB (read-only field). Valid in any FreeRTOS task context.
+    //   Context: safe after FreeRTOS scheduler init (main task).
+    //   Risk: none — read-only TCB field access, idempotent.
+    unsafe { esp_idf_sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) }
+}
+
 /// Trigger a full ESP32 software restart.
 ///
 /// Saves state to NVS before calling. This function does not return.

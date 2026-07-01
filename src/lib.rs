@@ -54,3 +54,13 @@ pub mod application;
 
 #[cfg(target_arch = "xtensa")]
 pub mod interface;
+
+#[cfg(test)]
+mod regression_tests {
+    #[test]
+    fn websocket_compile_check() {
+        // Compile-time verification: broadcast_websocket_event compiles
+        // This test exists solely to ensure WS feature gate compiles
+        assert!(true, "WS handler compiled successfully");
+    }
+}

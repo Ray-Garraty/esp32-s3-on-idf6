@@ -1,6 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +16,7 @@ use ecotiter_fw::infrastructure::drivers::onewire;
 
 #[allow(clippy::expect_used, clippy::too_many_lines)]
 fn main() {
+    use core::fmt::Write as CoreWrite;
     use ecotiter_fw::application::command::CommandEnvelope;
     use ecotiter_fw::domain::types::TransportMode;
     use ecotiter_fw::infrastructure::network::http_server::HttpServer;
@@ -53,7 +54,7 @@ fn main() {
         largest / 1024
     );
 
-    // ── Initialise hardware drivers ──────────────────────────────
+    // ── Lightweight hardware drivers (main task, 16 KB stack) ──
 
     // ADC (pH electrode on GPIO34, ADC1_CH6)
     let mut adc =
@@ -68,6 +69,35 @@ fn main() {
 
     let mut _limit_empty = LimitSwitch::new(peripherals.pins.gpio35, Pull::Floating, &STOP_EMPTY)
         .expect("LimitSwitch EMPTY (GPIO35)");
+
+    // ── Resources shared with Owner Thread ──
+    #[allow(clippy::expect_used)]
+    let channels: &'static ecotiter_fw::domain::channels::SystemChannels = Box::leak(Box::new(
+        ecotiter_fw::domain::channels::SystemChannels::new(),
+    ));
+    #[allow(clippy::expect_used)]
+    let cal_config: &'static ecotiter_fw::domain::calibration::CalibrationConfig = Box::leak(
+        Box::new(ecotiter_fw::domain::calibration::CalibrationConfig::new()),
+    );
+
+    // Resources for Owner Thread
+    let modem = peripherals.modem;
+    let sys_loop = EspSystemEventLoop::take().expect("System event loop");
+    let nvs = EspDefaultNvsPartition::take().expect("NVS partition");
+    let ble_active = Arc::new(AtomicBool::new(false));
+    let ble_active_clone = Arc::clone(&ble_active);
+
+    // Channel: wifi_mgr from Owner Thread → main
+    let (wifi_tx, wifi_rx) = std::sync::mpsc::channel();
+
+    // BLE init (bounded sync_channel for command queue)
+    let (ble_cmd_tx, ble_cmd_rx) =
+        mpsc::sync_channel::<CommandEnvelope>(ecotiter_fw::domain::memory::BLE_CMD_QUEUE_SIZE);
+
+    let mut ble_mgr = ecotiter_fw::infrastructure::network::ble::BleManager::new(ble_cmd_tx);
+
+    // BLE init is gated — enable after NimBLE testing
+    // let _ = ble_mgr.init();
 
     // ── Temperature thread (DS18B20 on GPIO33) ───────────────────
     {
@@ -94,51 +124,50 @@ fn main() {
             });
     }
 
-    // ── Network subsystem initialisation ─────────────────────────
+    // ── Owner thread: WiFi + HTTP (32 KB stack) ────────────────
+    {
+        let wifi_tx = wifi_tx;
+        let _ = std::thread::Builder::new()
+            .stack_size(config::NET_OWNER_STACK)
+            .name("net_owner".into())
+            .spawn(move || {
+                info!("Network owner: WiFi + HTTP init on 32 KB stack");
 
-    // Box::leak to obtain &'static refs for EspHttpServer fn_handler 'static bound.
-    // This leaks ~few hundred bytes once at boot — acceptable for firmware that
-    // runs until power-off.
-    #[allow(clippy::expect_used)]
-    let channels: &'static ecotiter_fw::domain::channels::SystemChannels = Box::leak(Box::new(
-        ecotiter_fw::domain::channels::SystemChannels::new(),
-    ));
-    #[allow(clippy::expect_used)]
-    let cal_config: &'static ecotiter_fw::domain::calibration::CalibrationConfig = Box::leak(
-        Box::new(ecotiter_fw::domain::calibration::CalibrationConfig::new()),
-    );
+                let mut wifi_mgr = WifiManager::new(modem, sys_loop, Some(nvs), ble_active_clone)
+                    .expect("WifiManager::new()");
+                wifi_mgr.init();
 
-    // WiFi init
-    let sys_loop = EspSystemEventLoop::take().expect("System event loop");
-    let nvs = EspDefaultNvsPartition::take().expect("NVS partition");
-    let ble_active = Arc::new(AtomicBool::new(false));
+                let wifi_mgr = Arc::new(Mutex::new(wifi_mgr));
+                let wifi_mgr_for_http = Arc::clone(&wifi_mgr);
+                wifi_tx.send(wifi_mgr).expect("send wifi_mgr to main");
 
-    #[allow(clippy::expect_used)]
-    let mut wifi_mgr = WifiManager::new(peripherals.modem, sys_loop, Some(nvs), ble_active)
-        .expect("WifiManager::new()");
-    wifi_mgr.init(); // Try STA → fall back to AP
-    let wifi_mgr = Arc::new(Mutex::new(wifi_mgr));
+                let _http_server = HttpServer::new(wifi_mgr_for_http).expect("HttpServer::new()");
 
-    // BLE init (bounded sync_channel for command queue)
-    let (ble_cmd_tx, ble_cmd_rx) =
-        mpsc::sync_channel::<CommandEnvelope>(ecotiter_fw::domain::memory::BLE_CMD_QUEUE_SIZE);
+                let watermark = ecotiter_fw::esp_safe::stack_watermark();
+                log::info!(
+                    "Network owner: HttpServer started (stack watermark: {watermark} bytes)"
+                );
 
-    let mut ble_mgr = ecotiter_fw::infrastructure::network::ble::BleManager::new(ble_cmd_tx);
+                loop {
+                    std::thread::sleep(Duration::from_hours(1));
+                }
+            });
+    }
 
-    // BLE init is gated — enable after NimBLE testing
-    // BLE init is deferred because esp32-nimble needs a local patch for IDF v6
-    // (see AGENTS.md "Common Issues" — add all(esp_idf_version_major = "6") to
-    // two cfg_if! blocks in ble_characteristic.rs). Once patched, uncomment below:
-    // let _ = ble_mgr.init();
-
-    // SSE channel: main loop pushes events, HTTP handler blocks and sends via httpd_resp_send_chunk
-    let sse_tx = Arc::new(Mutex::new(
-        None::<mpsc::SyncSender<ecotiter_fw::infrastructure::network::http_server::SseMessage>>,
-    ));
-
-    // HTTP Server
-    #[allow(clippy::expect_used)]
-    let http_server = HttpServer::new(wifi_mgr.clone(), sse_tx.clone()).expect("HttpServer::new()");
+    // ── Получаем wifi_mgr из Owner Thread ──
+    // Non-blocking wait: try_recv + 10ms sleep. Init phase, before main loop — no semgrep violation.
+    let wifi_mgr = loop {
+        match wifi_rx.try_recv() {
+            Ok(mgr) => break mgr,
+            Err(TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("wifi_mgr channel disconnected");
+            }
+        }
+    };
+    log::info!("Main: received wifi_mgr, entering event loop");
 
     // ── Main loop ───────────────────────────────────────────────
     let mut tick_count: u64 = 0;
@@ -178,54 +207,41 @@ fn main() {
                 }
             }
 
-            // SSE push via channel
-            if let Ok(guard) = sse_tx.try_lock() {
-                if let Some(tx) = guard.as_ref() {
-                    use core::fmt::Write as CoreWrite;
-                    use ecotiter_fw::infrastructure::network::http_server::SseMessage;
-                    use heapless::String as HeaplessString;
+            // Push events via WebSocket (non-blocking broadcast)
+            {
+                let ts_ms = tick_count * config::MAIN_LOOP_TICK_MS;
+                let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
+                    heapless::String::new();
+                let _ = write!(
+                    d,
+                    r#"{{"ts":{ts_ms},"temp":null,"mv":{mv},"vlv":"in","brt":{{"sts":"idle","vl":0.0,"spd":0.0}}}}"#,
+                );
+                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                    "status", &d,
+                );
+            }
 
-                    let push_msg = |event_type: &'static str,
-                                    data: HeaplessString<
-                        { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
-                    >| {
-                        let _ = tx.try_send(SseMessage { event_type, data });
-                    };
+            // debug
+            {
+                let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
+                    heapless::String::new();
+                let _ = write!(
+                    d,
+                    r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":false,"bleConnected":false,"stepperDrv":{{"isConnected":false,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":false}}}},"buretteSteps":{{"taken":0}}}}"#,
+                );
+                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                    "debug", &d,
+                );
+            }
 
-                    // status — every tick
-                    {
-                        let mut d: HeaplessString<
-                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
-                        > = HeaplessString::new();
-                        let ts_ms = tick_count * config::MAIN_LOOP_TICK_MS;
-                        let _ = write!(
-                            d,
-                            r#"{{"ts":{ts_ms},"temp":null,"mv":{mv},"vlv":"in","brt":{{"sts":"idle","vl":0.0,"spd":0.0}}}}"#,
-                        );
-                        push_msg("status", d);
-                    }
-
-                    // debug — every tick
-                    {
-                        let mut d: HeaplessString<
-                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
-                        > = HeaplessString::new();
-                        let _ = write!(
-                            d,
-                            r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":false,"bleConnected":false,"stepperDrv":{{"isConnected":false,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":false}}}},"buretteSteps":{{"taken":0}}}}"#,
-                        );
-                        push_msg("debug", d);
-                    }
-
-                    // limitsw — periodic push
-                    if tick_count.is_multiple_of(config::SSE_LIMITSW_INTERVAL_TICKS) {
-                        let mut d: HeaplessString<
-                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
-                        > = HeaplessString::new();
-                        let _ = d.push_str(r#"{"full":false,"empty":false}"#);
-                        push_msg("limitsw", d);
-                    }
-                }
+            // limitsw — periodic push
+            if tick_count.is_multiple_of(config::SSE_LIMITSW_INTERVAL_TICKS) {
+                let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
+                    heapless::String::new();
+                let _ = d.push_str(r#"{"full":false,"empty":false}"#);
+                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                    "limitsw", &d,
+                );
             }
 
             // Transport state machine
@@ -234,8 +250,10 @@ fn main() {
             let mode = transport_sm(usb_alive, ble_connected);
             led.set_transport_mode(mode);
 
-            // Restart check
-            if http_server.restart_pending() {
+            // Restart check via global flag (set by captive portal handler in owner thread)
+            if ecotiter_fw::infrastructure::network::http_server::G_RESTART_PENDING
+                .load(Ordering::Acquire)
+            {
                 log::info!("WiFi configured, restarting...");
                 std::thread::sleep(Duration::from_millis(100));
                 ecotiter_fw::esp_safe::restart();
@@ -248,6 +266,17 @@ fn main() {
                     log::info!("Temperature: {temp:.1} °C");
                 } else {
                     log::info!("Temperature: null");
+                }
+            }
+
+            // Stack watermark monitoring every ~10 seconds (1000 ticks × 10 ms)
+            if tick_count.is_multiple_of(1000) {
+                let wm = ecotiter_fw::esp_safe::stack_watermark();
+                log::info!("Main loop stack watermark: {wm} bytes free");
+                if wm < 2048 {
+                    log::error!(
+                        "Main stack critically low ({wm} bytes) — increase CONFIG_ESP_MAIN_TASK_STACK_SIZE"
+                    );
                 }
             }
         }

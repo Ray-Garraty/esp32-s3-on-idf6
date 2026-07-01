@@ -13,8 +13,8 @@ pub const STYLE_CSS: &str = include_str!("../webui/style.css");
 
 /// JS: Application state and config constants.
 pub const STATE_JS: &str = include_str!("../webui/js/state.js");
-/// JS: SSE event source, 4 event types, SSE log table.
-pub const SSE_JS: &str = include_str!("../webui/js/sse.js");
+/// JS: WebSocket client (replaces SSE) for real-time events.
+pub const WS_JS: &str = include_str!("../webui/js/ws.js");
 /// JS: DOM updates for hardware status, debug, stepper.
 pub const UI_UPDATE_JS: &str = include_str!("../webui/js/ui-update.js");
 /// JS: Log filtering, download, render.
