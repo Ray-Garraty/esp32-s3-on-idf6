@@ -28,6 +28,8 @@ use embedded_svc::wifi::{
     AccessPointConfiguration, AuthMethod, ClientConfiguration, Configuration, Wifi,
 };
 
+use esp_idf_svc::mdns::EspMdns;
+
 use crate::config;
 use crate::errors::NetworkError;
 use crate::infrastructure::storage::nvs::NvsManager;
@@ -63,6 +65,8 @@ pub struct WifiManager<'d> {
     /// BLE active flag (shared with BLE manager).
     #[expect(dead_code)]
     ble_active: Arc<AtomicBool>,
+    /// mDNS responder (ecotiter.local).
+    mdns: Option<EspMdns>,
     /// Saved SSID from NVS (empty if none).
     saved_ssid: heapless::String<32>,
     /// Saved password from NVS (empty if none).
@@ -104,6 +108,7 @@ impl<'d> WifiManager<'d> {
                 config::AP_IP[3],
             ),
             dns_socket: None,
+            mdns: None,
             last_reconnect: Instant::now(),
             ble_active,
             saved_ssid: ssid,
@@ -120,6 +125,7 @@ impl<'d> WifiManager<'d> {
             log::info!("WiFi: trying STA connect to '{}'", self.saved_ssid.as_str());
             if self.try_sta_connect() {
                 log::info!("WiFi: STA connected to '{}'", self.saved_ssid.as_str());
+                self.start_mdns();
                 return;
             }
             // STA failed — clear saved credentials and fall back to AP
@@ -209,6 +215,7 @@ impl<'d> WifiManager<'d> {
         }
 
         self.start_dns();
+        self.start_mdns();
     }
 
     /// Start DNS responder on port 53 (AP IP address).
@@ -238,6 +245,30 @@ impl<'d> WifiManager<'d> {
                 }
             }
         }
+    }
+
+    /// Start mDNS responder for ecotiter.local.
+    ///
+    /// Registers hostname and HTTP service on both STA and AP interfaces.
+    /// ESP-IDF mDNS handles .local resolution automatically via mDNS multicast.
+    fn start_mdns(&mut self) {
+        let mut mdns = match EspMdns::take() {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("mDNS: init failed: {e}");
+                return;
+            }
+        };
+        if let Err(e) = mdns.set_hostname(config::MDNS_HOSTNAME) {
+            log::warn!("mDNS: set_hostname failed: {e}");
+            return;
+        }
+        if let Err(e) = mdns.add_service(None, "_http", "_tcp", 80, &[]) {
+            log::warn!("mDNS: add_service failed: {e}");
+            return;
+        }
+        log::info!("mDNS: hostname '{}' registered", config::MDNS_HOSTNAME);
+        self.mdns = Some(mdns);
     }
 
     /// Process a single DNS query from the UDP socket.

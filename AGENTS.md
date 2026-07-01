@@ -1,9 +1,10 @@
 # Build & Check Commands
 
-- `. /home/vlabe/export-esp.sh && cargo +esp build --target xtensa-esp32-espidf` — build firmware (source export-esp.sh first)
+- `. /home/vlabe/export-esp.sh && cargo +esp build --target xtensa-esp32-espidf` — build firmware (source export-esp.sh first). **Requires timeout ≥ 300s** (full rebuild takes ~4 min).
 - `cargo test --lib stepper::ramp::tests` — host-based ramp unit tests
 - `espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash only (adjust port as needed)
 - `timeout 30 python3 scripts/serial_monitor.py` — monitor with 30s timeout (auto-detects port)
+- **`git commit` runs pre-commit hook with xtensa build — requires timeout ≥ 600s.**
 - WDT must be disabled during debugging: `ecotiter_fw::esp_safe::disable_wdt()` (safe wrapper)
 
 # GOLDEN RULE: NEVER BLOCK THE MAIN LOOP
