@@ -6,7 +6,9 @@ description: >
   Implementer to fix. Ultimate proof: firmware on real ESP32 with
   user-confirmed physical events.
 mode: subagent
+hidden: true
 temperature: 0.1
+steps: 20
 ---
 
 # Validator Agent
@@ -45,14 +47,15 @@ For each file in `implementation_report.modified_files`:
 
 For EACH AC in `verified_plan.content.acceptance_criteria`, prefer the **strongest available verification method**. The hierarchy of proof:
 
-| Strength | Method | What it proves |
-|----------|--------|---------------|
-| 🔵 Strongest | **Manual** — flash to real ESP32, user confirms physical events | The code actually works on target hardware |
-| 🟡 Medium | **Automated** — `cargo test --lib` | Pure logic is correct (no hardware deps) |
-| 🔵 Medium | **Inspection** — code review | Structure is correct |
-| 🟡 Weakest | **Compilation** — `cargo +esp build` | No syntax/type errors on target |
+| Strength | Method | What it proves | Requires human? |
+|----------|--------|---------------|-----------------|
+| 🔵 Strongest | **Manual** — flash to real ESP32, user confirms physical events | The code actually works on target hardware + real-world behaviour | **Yes** |
+| 🟡 Strong | **Integration** — automated script runs on real ESP32 | The code works on target hardware (script checks output) | No |
+| 🟡 Medium | **Automated** — `cargo test --lib` | Pure logic is correct (no hardware deps) | No |
+| 🔵 Medium | **Inspection** — code review | Structure is correct | No |
+| 🟡 Weakest | **Compilation** — `cargo +esp build` | No syntax/type errors on target | No |
 
-**Push ACs toward stronger verification when possible.** If an AC was marked `automated` but affects hardware behaviour (e.g., "stepper moves at correct speed"), see if it can be escalated to `manual` by asking the user to flash and observe.
+**Push ACs toward stronger verification when possible.** If an AC was marked `automated` but affects hardware behaviour (e.g., "stepper moves at correct speed"), see if it can be escalated to `integration` (automated script on ESP32) or `manual` (human observer).
 
 #### If verification_method: automated
 - Run the test: `cargo test --lib <test_name>`
@@ -66,43 +69,37 @@ For EACH AC in `verified_plan.content.acceptance_criteria`, prefer the **stronge
 - Check for edge cases not covered
 - CONSIDER: can this be tested on host or hardware instead?
 
-#### If verification_method: manual
-This is the **strongest proof**. Perform it diligently:
-1. Build the firmware:
+#### If verification_method: integration
+AC can be verified by an automated script running on real ESP32 hardware. No human needed.
+1. Locate the test script (typically in `scripts/`, e.g., `ble_serial_test.py`, `wifi_test.py`)
+2. Build the firmware and run the script:
    ```bash
    . /home/vlabe/export-esp.sh && \
      cargo +esp build --target xtensa-esp32-espidf
+   python3 scripts/<test_script.py>
    ```
-2. Provide the user with exact flash + monitor command to run:
-   ```bash
-   espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter" && \
-   timeout 60 python3 scripts/serial_monitor.py
-   ```
-3. Use the `question` tool to ask the user:
-   - Exact step-by-step reproduction instructions (what physical setup is needed, what buttons to press, what to observe)
-   - What constitutes PASS vs FAIL in physical terms ("motor spins CW for 2 seconds", "LED blinks 3 times", "serial prints `[INFO] Valve opened`")
-   - Ask the user to describe what they actually see/hear/measure
-4. Wait for the user's response
-5. Record the result with the user's own words as evidence:
-   - PASS → include user's exact description as proof
-   - FAIL → log with user's description of what went wrong
-   - User declines → set `status: deferred` with reason
+3. Check the script's exit code and output
+4. Record PASS/FAIL with evidence (script output, logs)
+5. Set `requires_hardware: false` (orchestrator does NOT need to involve the user)
 
-**Good manual AC phrasing**: "Flash the firmware, connect to COM5, send `{"cmd":"doseVolume","ml":5.0}` via serial monitor. The syringe should dispense ~5 ml of water. PASS if the volume is within ±0.2 ml. FAIL if the motor doesn't move, stalls, or volume is outside range."
+#### If verification_method: manual
+This is the **strongest proof**, but requires a human observer. Do NOT attempt to flash, run scripts, or test yourself. Instead:
+1. Mark the AC as `requires_hardware: true`
+2. Prepare precise `user_instructions` with:
+   - Exact step-by-step reproduction (physical setup, what to press, what to observe)
+   - Pass/fail criteria in physical terms ("motor spins CW for 2 seconds", "LED blinks 3 times")
+3. The Orchestrator will present these instructions to the user in Step 4.5.
 
-**Bad manual AC phrasing**: "Test the dosing" (not specific, no pass/fail criteria)
+**Good `user_instructions`**: "Flash the firmware, connect to COM5, send `{"cmd":"doseVolume","ml":5.0}` via serial monitor. The syringe should dispense ~5 ml of water. PASS if within ±0.2 ml. FAIL if motor doesn't move, stalls, or volume is outside range."
 
-### Step 4: On-Device Validation Path
+**Bad `user_instructions`**: "Test the dosing" (not specific, no pass/fail criteria)
 
-Implementer may have marked some ACs as `automated` due to tool limitations. If the task involves hardware behaviour (stepper, valve, sensor, LED, BLE, WiFi), **proactively suggest a hardware validation** by asking the user:
+### Step 4: On-Device Validation Suggestion
 
-> "This AC was verified by host test, but the ultimate proof is on real hardware. Would you like to flash and confirm? Commands:
-> ```
-> espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter" && timeout 60 python3 scripts/serial_monitor.py
-> ```
-> Expected behaviour: <describe physical event>"
-
-Record user response even if they decline.
+If the task involves hardware behaviour (stepper, valve, sensor, LED, BLE, WiFi) and the AC was marked `automated`, consider whether it could benefit from hardware validation:
+- If an automated test script exists — suggest upgrading to `integration`
+- If human observation is required — mark as `requires_hardware: true` with `user_instructions`
+- The Orchestrator will handle execution (scripts or user interaction) in Step 4.5
 
 ### Step 5: Scope Verification
 Ensure implementation didn't drift from plan:
@@ -129,9 +126,11 @@ acceptance_criteria_results:
   - id: AC-001
     description: "<criterion from plan>"
     status: pass | fail | partial | deferred
-    evidence: "<test output or user's own words describing physical event>"
-    verification_method: automated | manual | inspection
+    evidence: "<test output or textual description>"
+    verification_method: automated | integration | manual | inspection
     verification_strength: host_test | hardware_confirmed | code_inspection
+    requires_hardware: true | false
+    user_instructions: "<step-by-step instructions for hardware test, only if requires_hardware>"
 issues:
   - severity: critical | major | minor
     category: ac_failure | check_failure | scope_violation | regression

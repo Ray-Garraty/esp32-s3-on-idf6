@@ -392,7 +392,7 @@ impl HttpServer {
                             );
                             let bytes = frame.as_bytes();
 
-                            // SAFETY(http_server:sse_send_chunk):
+                            // SAFETY:
                             //   Invariant: raw_req is a valid *mut httpd_req_t from
                             //   ESP-IDF HTTP server. Handler is still running (blocking
                             //   on rx.recv()), so httpd_req_t is alive.
@@ -420,7 +420,7 @@ impl HttpServer {
                     if let Ok(mut guard) = sse_tx_clone.lock() {
                         *guard = None;
                     }
-                    // SAFETY(http_server:sse_final_chunk):
+                    // SAFETY:
                     //   Invariant: zero-length chunk signals response completion.
                     //   raw_req still valid — handler has not returned.
                     //   Context: HTTP server task, cleanup before handler return.

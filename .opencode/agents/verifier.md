@@ -5,6 +5,7 @@ description: >
   dependencies, edge cases covered), risk coverage, and AC
   testability. Returns verified plan or rejection with issues.
 mode: subagent
+hidden: true
 temperature: 0.1
 ---
 
@@ -80,15 +81,18 @@ Add NEW risks if the Planner missed them:
 - GPIO ISR latency affecting timing-sensitive operations — ref: [GPIO ISR docs](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32/api-reference/peripherals/gpio.html#gpio-interrupts)
 
 ### Step 4: AC Testability Audit
-For each AC:
-- Can it be verified by `cargo test --lib`? → mark `automated`
-- Does it require real hardware (ESP32 on COM5)? → mark `manual`
-- Is it purely a code structure requirement? → mark `inspection`
+For each AC, classify **verification_method**:
+- **automated** — `cargo test --lib` (pure logic, no hardware)
+- **integration** — automated script on real ESP32 (e.g., `scripts/ble_serial_test.py`, `scripts/wifi_test.py`). No human needed during execution, but ESP32 hardware is required.
+- **manual** — requires a human to observe/interact with the physical world (press a limit switch, confirm LED blink, verify motor rotation direction, report what the device did).
+- **inspection** — code structure review (no runtime).
 
 Reject ACs that are:
 - Vague ("works properly", "fast enough")
 - Unreachable (requires hardware you can't simulate on host)
 - Redundant (covered by existing tests)
+
+**Critical reminder**: Do NOT settle for `automated` + `inspection` when the AC involves hardware behaviour. The **ultimate proof** is always on real ESP32 — push ACs toward `integration` or `manual` whenever feasible.
 
 ### Step 5: Verdict
 Return ONE of:
@@ -115,7 +119,7 @@ additions:
   refined_acs:
     - id: AC-001
       refined_description: "<more precise wording>"
-      refined_verification: automated | manual | inspection
+      refined_verification: automated | integration | manual | inspection
 unverified_dependencies:
   - name: "<crate>"
     type: crate

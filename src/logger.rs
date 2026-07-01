@@ -75,7 +75,7 @@ impl Log for Logger {
         // UART console output — only available on the ESP32 target
         println!("[{}] {}", level, record.args());
 
-        // SAFETY(logger:timestamp):
+        // SAFETY:
         //   Invariant: esp_timer_get_time is a read-only FFI call, safe after
         //   FreeRTOS scheduler init (which completed before main()).
         //   Return value is microseconds since boot, always non-negative.

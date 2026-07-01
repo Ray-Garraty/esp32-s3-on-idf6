@@ -5,7 +5,9 @@ description: >
   project checks (cargo test, cargo clippy, cargo build), and
   produces a detailed implementation inventory.
 mode: subagent
+hidden: true
 temperature: 0.0
+steps: 30
 ---
 
 # Implementer Agent
@@ -33,16 +35,10 @@ Before editing any file, understand the project conventions:
 - Do NOT touch files outside scope
 - Follow existing code conventions — mimic code style
 
-Project conventions to follow:
-- **Layered architecture**: `domain/` must NOT import `esp-idf-*` crates
-- **Error hierarchy**: `AppError → HardwareError → StepperError`, no `unwrap()`/`expect()` in library
-- **Memory**: `heapless` fixed-size buffers for hot paths, `Vec`/`String` only at init/config-change
-- **State machine**: explicit enum + exhaustive match, validation pipeline: Safety → Busy → State → Params → Execute
-- **Concurrency**: `Atomic*` for ISR→task, `mpsc` for task→task, `try_lock()` in main loop
-- **Types**: newtype wrappers for domain units (`Steps`, `Hz`, `Ml`), named constants, no magic numbers
-- **Unsafe**: every `unsafe` block must have a safety comment
-- **cfg gates**: `#[cfg(target_arch = "xtensa")]` for xtensa-only modules
-- **EN pin**: active LOW, call `set_low()` in constructor
+Refer to `docs/refs/coding_style.md` for project conventions:
+layered architecture (§1), error hierarchy (§2), state machine (§4),
+memory budget (§5), concurrency (§6), types & constants (§7),
+ESP32 special rules (§9), and anti-patterns (§12).
 
 ### Step 2: Add Tests
 For every AC marked `verification_method: automated`:
@@ -120,10 +116,11 @@ state_affected:
 
 ## Rework Handling
 When `mode: rework`:
-- Read `rework_context.issues` from Validator or Reviewer
-- Fix ONLY the listed issues
-- Re-run ALL checks
-- Generate new report with `iteration: N+1`
+1. Read `rework_context.issues` from Validator or Reviewer
+2. Fix ONLY the exact issues listed — do NOT refactor, optimize, or clean up surrounding code unless explicitly requested
+3. If you notice an unrelated bug, do NOT fix it. Add it to the `notes` section of your report for the Orchestrator to create a new task.
+4. Re-run ALL checks
+5. Generate new report with `iteration: N+1`
 
 ## Anti-Patterns
 - Reporting with broken checks ("this was already broken" — fix it)

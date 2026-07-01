@@ -5,6 +5,7 @@ description: >
   artifacts, writes report to docs/plans/completed/, updates
   docs/log.md. The final agent in the workflow.
 mode: subagent
+hidden: true
 temperature: 0.1
 ---
 

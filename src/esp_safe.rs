@@ -19,7 +19,7 @@ use esp_idf_sys;
 /// `esp_task_wdt_deinit()` is safe to call from the main task at boot
 /// (FreeRTOS scheduler is running). No dependencies on other tasks.
 pub fn disable_wdt() {
-    // SAFETY(esp_safe:disable_wdt):
+    // SAFETY:
     //   Invariant: esp_task_wdt_deinit requires FreeRTOS scheduler running.
     //   Context: called once at boot from main task.
     //   Risk: safe even if called multiple times (idempotent).
@@ -33,7 +33,7 @@ pub fn disable_wdt() {
 /// Sets the log level for `httpd_txrx` to `ERROR` to reduce serial noise.
 /// Safe to call at any point after `esp_idf_sys::link_patches()`.
 pub fn suppress_httpd_txrx_logs() {
-    // SAFETY(esp_safe:suppress_logs):
+    // SAFETY:
     //   Invariant: c"httpd_txrx" is a valid null-terminated C string literal.
     //   esp_log_level_set modifies a global int only, no memory safety effects.
     //   Risk: wrong log level string = log spam, no UB.
@@ -52,7 +52,7 @@ pub fn suppress_httpd_txrx_logs() {
 /// Both values come from read-only hardware registers via the ESP-IDF
 /// heap allocator. Safe to call after FreeRTOS scheduler init.
 pub fn heap_stats() -> (u32, u32) {
-    // SAFETY(esp_safe:heap_stats):
+    // SAFETY:
     //   Invariant: esp_get_free_heap_size and heap_caps_get_largest_free_block
     //   are read-only FFI calls that access hardware registers only.
     //   Context: safe after FreeRTOS scheduler init.
@@ -61,7 +61,7 @@ pub fn heap_stats() -> (u32, u32) {
         let free = esp_idf_sys::esp_get_free_heap_size();
         let largest =
             esp_idf_sys::heap_caps_get_largest_free_block(esp_idf_sys::MALLOC_CAP_DEFAULT);
-        (free, largest)
+        (free, u32::try_from(largest).unwrap_or(0))
     }
 }
 
@@ -69,7 +69,7 @@ pub fn heap_stats() -> (u32, u32) {
 ///
 /// Saves state to NVS before calling. This function does not return.
 pub fn restart() -> ! {
-    // SAFETY(esp_safe:restart):
+    // SAFETY:
     //   Invariant: esp_restart resets the CPU immediately. All state must be
     //   persisted before calling. Safe to call from any task context.
     //   Risk: function does not return. UB if called without saving state.
@@ -83,7 +83,7 @@ pub fn restart() -> ! {
 /// Safe to call once at init before any radio activity. Uses a simple
 /// register write — no side effects on memory safety.
 pub fn set_coex_ble_preferred() {
-    // SAFETY(esp_safe:coex):
+    // SAFETY:
     //   Invariant: esp_coex_preference_set is a register write, no memory effects.
     //   Context: called once at init before any radio activity.
     //   Risk: if called later, may cause brief radio renegotiation; no UB.

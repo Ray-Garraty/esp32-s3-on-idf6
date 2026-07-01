@@ -64,7 +64,7 @@ impl LimitSwitch {
                 reason: "LimitSwitch set_interrupt_type",
             })?;
 
-        // SAFETY(limitswitch:isr_subscribe):
+        // SAFETY:
         //   Invariant: ISR callback only does AtomicBool::store(_, Relaxed).
         //   No blocking, no heap, no I/O. Lock-free on ESP32.
         //   `'static` lifetime ensures flag reference valid for program lifetime.
