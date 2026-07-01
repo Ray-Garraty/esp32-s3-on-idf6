@@ -1,8 +1,11 @@
 # Build & Check Commands
 
 - `. /home/vlabe/export-esp.sh && cargo +esp build --target xtensa-esp32-espidf` — build firmware (source export-esp.sh first). **Requires timeout ≥ 300s** (full rebuild takes ~4 min).
+- After sourcing `export-esp.sh`, use `type <tool>` to verify the correct tool name and path (e.g. `type esptool`, `type cargo`). Do NOT guess command names.
+- Erase flash: `source /home/vlabe/export-esp.sh && /home/vlabe/.espressif/tools/python/v6.0.1/venv/bin/esptool --port /dev/ttyUSB0 erase-flash`. Verify via `type esptool` after sourcing.
 - `cargo test --lib stepper::ramp::tests` — host-based ramp unit tests
-- `espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash only (adjust port as needed)
+- `espflash flash --port /dev/ttyUSB0 "target/xtensa-esp32-espidf/debug/ecotiter"` — flash only (adjust port as needed).
+  **⚠️ CRITICAL: must use timeout ≥ 180s and MUST wait for "Flashing has completed!" in output before proceeding.** If the command times out without this message, the flash is incomplete and will cause boot loop (`invalid segment length 0xffffffff`). Re-run the entire `espflash flash` command with longer timeout — partial flash cannot be resumed.
 - `timeout 30 python3 scripts/serial_monitor.py` — monitor with 30s timeout (auto-detects port)
 - **`git commit` runs pre-commit hook with xtensa build — requires timeout ≥ 600s.**
 - WDT must be disabled during debugging: `ecotiter_fw::esp_safe::disable_wdt()` (safe wrapper)

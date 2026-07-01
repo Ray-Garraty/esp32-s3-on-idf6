@@ -105,7 +105,7 @@ pub fn init() {
 
 /// Return the most recent log entries as a JSON string (bounded to 512 bytes).
 ///
-/// Format: `{"total":<seq>,"entries":[{"ts":...,"l":"...","m":"..."},...]}`
+/// Format: `{"total":<seq>,"entries":[{"ts":...,"level":"...","msg":"..."},...]}`
 pub fn get_entries_json(limit: usize) -> heapless::String<MAX_RESPONSE_SIZE> {
     let Ok(buf) = LOGGER.inner.lock() else {
         let mut fallback: heapless::String<MAX_RESPONSE_SIZE> = heapless::String::new();
@@ -133,7 +133,7 @@ pub fn get_entries_json(limit: usize) -> heapless::String<MAX_RESPONSE_SIZE> {
         };
         write!(
             result,
-            r#"{{"ts":{},"l":"{}","m":""#,
+            r#"{{"ts":{},"level":"{}","msg":""#,
             entry.ts_ms, level_str,
         )
         .ok();
@@ -151,6 +151,134 @@ pub fn get_entries_json(limit: usize) -> heapless::String<MAX_RESPONSE_SIZE> {
 /// JSON-escape a string slice into a `heapless::String` output buffer.
 ///
 /// Escapes `"`, `\`, `\n`, `\r`, `\t`, and control characters (< 0x20).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::logging::LogEntry;
+    use log::Level;
+
+    fn push_entry(ts_ms: u64, level: Level, msg: &str) {
+        if let Ok(mut buf) = LOGGER.inner.lock() {
+            let mut hmsg: heapless::String<MAX_LOG_MSG_SIZE> = heapless::String::new();
+            let _ = write!(hmsg, "{msg}");
+            let mut module: heapless::String<MAX_LOG_MODULE_SIZE> = heapless::String::new();
+            let _ = write!(module, "test");
+            buf.push(LogEntry {
+                ts_ms,
+                level,
+                module,
+                msg: hmsg,
+            });
+        }
+    }
+
+    fn clear_entries() {
+        if let Ok(mut buf) = LOGGER.inner.lock() {
+            while buf.entries.pop_front().is_some() {}
+        }
+    }
+
+    #[test]
+    fn json_output_is_valid_empty() {
+        clear_entries();
+        let json = get_entries_json(10);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        assert_eq!(val["total"], 0);
+        assert!(val["entries"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn json_output_single_entry() {
+        clear_entries();
+        push_entry(1000, Level::Info, "hello world");
+        let json = get_entries_json(10);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        let entries = val["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["level"], "INFO");
+        assert_eq!(entries[0]["msg"], "hello world");
+        assert_eq!(entries[0]["ts"], 1000);
+    }
+
+    #[test]
+    fn json_output_multiple_entries() {
+        clear_entries();
+        push_entry(1, Level::Error, "err msg");
+        push_entry(2, Level::Warn, "warn msg");
+        push_entry(3, Level::Info, "info msg");
+        let json = get_entries_json(10);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        let entries = val["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["level"], "ERROR");
+        assert_eq!(entries[0]["msg"], "err msg");
+        assert_eq!(entries[1]["level"], "WARN");
+        assert_eq!(entries[1]["msg"], "warn msg");
+        assert_eq!(entries[2]["level"], "INFO");
+        assert_eq!(entries[2]["msg"], "info msg");
+    }
+
+    #[test]
+    fn json_output_limit() {
+        clear_entries();
+        push_entry(1, Level::Info, "first");
+        push_entry(2, Level::Info, "second");
+        push_entry(3, Level::Info, "third");
+        let json = get_entries_json(2);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        let entries = val["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["msg"], "second");
+        assert_eq!(entries[1]["msg"], "third");
+    }
+
+    #[test]
+    fn json_output_escapes_special_chars() {
+        clear_entries();
+        push_entry(1, Level::Info, r#"he said "hello" & 'world'"#);
+        let json = get_entries_json(10);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        assert_eq!(val["entries"][0]["msg"], r#"he said "hello" & 'world'"#);
+    }
+
+    #[test]
+    fn json_output_fits_buffer() {
+        clear_entries();
+        let long = "x".repeat(200);
+        push_entry(1, Level::Info, &long);
+        let json = get_entries_json(10);
+        assert!(json.len() <= MAX_RESPONSE_SIZE);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        assert!(val["entries"][0]["msg"].as_str().unwrap().len() <= 200);
+    }
+
+    #[test]
+    fn json_output_traces_through_all_levels() {
+        clear_entries();
+        push_entry(1, Level::Trace, "trace");
+        push_entry(2, Level::Debug, "debug");
+        push_entry(3, Level::Info, "info");
+        push_entry(4, Level::Warn, "warn");
+        push_entry(5, Level::Error, "error");
+        let json = get_entries_json(10);
+        let val: serde_json::Value =
+            serde_json::from_str(json.as_str()).expect("get_entries_json() must return valid JSON");
+        let levels: Vec<&str> = val["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["level"].as_str().unwrap())
+            .collect();
+        assert_eq!(levels, ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"]);
+    }
+}
+
 fn json_escape(s: &str, out: &mut heapless::String<MAX_RESPONSE_SIZE>) {
     for c in s.chars() {
         match c {

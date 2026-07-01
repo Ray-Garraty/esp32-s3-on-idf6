@@ -43,10 +43,14 @@ use crate::interface::webui;
 // `WifiManager` used with `'static` lifetime for `fn_handler` `Send` bound.
 type WifiMgr = Arc<Mutex<WifiManager<'static>>>;
 
-/// SSE event payload — fixed-size string matching `MAX_RESPONSE_SIZE`.
-pub type SseEvent = heapless::String<{ MAX_RESPONSE_SIZE }>;
+/// SSE message with event type and JSON payload.
+pub struct SseMessage {
+    pub event_type: &'static str,
+    pub data: heapless::String<{ MAX_RESPONSE_SIZE }>,
+}
+
 /// Shared sender for SSE events — main loop pushes, HTTP handler receives in blocking loop.
-pub type SseTx = Arc<Mutex<Option<mpsc::SyncSender<SseEvent>>>>;
+pub type SseTx = Arc<Mutex<Option<mpsc::SyncSender<SseMessage>>>>;
 
 /// HTTP server wrapper.
 pub struct HttpServer {
@@ -155,7 +159,7 @@ impl HttpServer {
                     }
 
                     let mut resp = request.into_ok_response()?;
-                    let json = r#"{"status":"ok","message":"Credentials saved. Restarting..."}"#;
+                    let json = r#"{"status":"ok","success":true,"message":"Credentials saved. Restarting..."}"#;
                     resp.write(json.as_bytes())?;
                     resp.flush()?;
                     Ok(())
@@ -369,7 +373,7 @@ impl HttpServer {
                     let _resp = ManuallyDrop::new(resp);
 
                     // 3. Create channel for SSE events
-                    let (tx, rx) = mpsc::sync_channel::<SseEvent>(8);
+                    let (tx, rx) = mpsc::sync_channel::<SseMessage>(config::SSE_CHANNEL_CAPACITY);
 
                     // 4. Store sender for main loop
                     if let Ok(mut guard) = sse_tx_clone.lock() {
@@ -382,13 +386,14 @@ impl HttpServer {
 
                     // 5. Blocking loop: push events via httpd_resp_send_chunk
                     loop {
-                        if let Ok(event_data) = rx.recv() {
-                            // Build SSE frame: "event: status\ndata: {json}\n\n"
-                            let mut frame: heapless::String<{ MAX_RESPONSE_SIZE + 64 }> =
-                                heapless::String::new();
+                        if let Ok(msg) = rx.recv() {
+                            // Build SSE frame: "event: {type}\ndata: {json}\n\n"
+                            let mut frame: heapless::String<
+                                { MAX_RESPONSE_SIZE + config::SSE_FRAME_OVERHEAD },
+                            > = heapless::String::new();
                             let _ = core::fmt::write(
                                 &mut frame,
-                                format_args!("event: status\ndata: {event_data}\n\n"),
+                                format_args!("event: {}\ndata: {}\n\n", msg.event_type, msg.data),
                             );
                             let bytes = frame.as_bytes();
 
@@ -434,16 +439,34 @@ impl HttpServer {
             )
             .map_err(|_| NetworkError::HttpServerInitFailed)?;
 
-        // GET /api/logs — drain log entries
+        // GET /api/logs — return log entries as JSON
         self.server
             .fn_handler(
                 "/api/logs",
                 Method::Get,
                 move |request| -> Result<(), esp_idf_svc::io::EspIOError> {
-                    // Phase 4: return empty array. Phase 5 will wire the log ring buffer.
-                    let json = r#"{"logs":[]}"#;
+                    let json = rest_api::handle_api_logs(config::LOG_DEFAULT_LIMIT);
                     let mut resp = request.into_ok_response()?;
                     resp.write(json.as_bytes())?;
+                    resp.flush()?;
+                    Ok(())
+                },
+            )
+            .map_err(|_| NetworkError::HttpServerInitFailed)?;
+
+        // GET /api/logs/download — plain-text log file
+        self.server
+            .fn_handler(
+                "/api/logs/download",
+                Method::Get,
+                move |request| -> Result<(), esp_idf_svc::io::EspIOError> {
+                    let text = rest_api::handle_api_logs_download();
+                    let mut resp = request.into_response(
+                        200,
+                        Some("OK"),
+                        &[("Content-Type", "text/plain")],
+                    )?;
+                    resp.write(text.as_bytes())?;
                     resp.flush()?;
                     Ok(())
                 },
@@ -471,47 +494,32 @@ impl HttpServer {
     // ── WebUI routes ────────────────────────────────────────────
 
     fn register_webui_routes(&mut self) -> Result<(), NetworkError> {
-        // GET / — main dashboard page
-        self.server
-            .fn_handler(
-                "/",
-                Method::Get,
-                |request| -> Result<(), esp_idf_svc::io::EspIOError> {
-                    let mut resp = request.into_ok_response()?;
-                    resp.write(webui::INDEX_HTML.as_bytes())?;
-                    resp.flush()?;
-                    Ok(())
-                },
-            )
-            .map_err(|_| NetworkError::HttpServerInitFailed)?;
+        macro_rules! static_route {
+            ($path:expr, $content:expr) => {
+                self.server
+                    .fn_handler(
+                        $path,
+                        Method::Get,
+                        |request| -> Result<(), esp_idf_svc::io::EspIOError> {
+                            let mut resp = request.into_ok_response()?;
+                            resp.write($content.as_bytes())?;
+                            resp.flush()?;
+                            Ok(())
+                        },
+                    )
+                    .map_err(|_| NetworkError::HttpServerInitFailed)?;
+            };
+        }
 
-        // GET /style.css
-        self.server
-            .fn_handler(
-                "/style.css",
-                Method::Get,
-                |request| -> Result<(), esp_idf_svc::io::EspIOError> {
-                    let mut resp = request.into_ok_response()?;
-                    resp.write(webui::STYLE_CSS.as_bytes())?;
-                    resp.flush()?;
-                    Ok(())
-                },
-            )
-            .map_err(|_| NetworkError::HttpServerInitFailed)?;
-
-        // GET /app.js
-        self.server
-            .fn_handler(
-                "/app.js",
-                Method::Get,
-                |request| -> Result<(), esp_idf_svc::io::EspIOError> {
-                    let mut resp = request.into_ok_response()?;
-                    resp.write(webui::APP_JS.as_bytes())?;
-                    resp.flush()?;
-                    Ok(())
-                },
-            )
-            .map_err(|_| NetworkError::HttpServerInitFailed)?;
+        static_route!("/", webui::INDEX_HTML);
+        static_route!("/style.css", webui::STYLE_CSS);
+        static_route!("/js/state.js", webui::STATE_JS);
+        static_route!("/js/sse.js", webui::SSE_JS);
+        static_route!("/js/ui-update.js", webui::UI_UPDATE_JS);
+        static_route!("/js/logs.js", webui::LOGS_JS);
+        static_route!("/js/stepper.js", webui::STEPPER_JS);
+        static_route!("/js/calibration.js", webui::CALIBRATION_JS);
+        static_route!("/js/init.js", webui::INIT_JS);
 
         Ok(())
     }

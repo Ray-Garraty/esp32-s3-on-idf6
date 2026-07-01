@@ -133,9 +133,7 @@ fn main() {
 
     // SSE channel: main loop pushes events, HTTP handler blocks and sends via httpd_resp_send_chunk
     let sse_tx = Arc::new(Mutex::new(
-        None::<
-            mpsc::SyncSender<heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }>>,
-        >,
+        None::<mpsc::SyncSender<ecotiter_fw::infrastructure::network::http_server::SseMessage>>,
     ));
 
     // HTTP Server
@@ -183,14 +181,40 @@ fn main() {
             // SSE push via channel
             if let Ok(guard) = sse_tx.try_lock() {
                 if let Some(tx) = guard.as_ref() {
-                    let mut event_data: heapless::String<
-                        { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
-                    > = heapless::String::new();
-                    let _ = event_data.push_str(
-                        r#"{"ts":0,"temp":null,"mv":0,"vlv":"in","brt":{"sts":"idle","vl":0.0,"spd":0.0}}"#,
-                    );
-                    if tx.try_send(event_data).is_err() {
-                        // Channel full or disconnected — non-critical, just drop
+                    use core::fmt::Write as CoreWrite;
+                    use ecotiter_fw::infrastructure::network::http_server::SseMessage;
+                    use heapless::String as HeaplessString;
+
+                    let push_msg = |event_type: &'static str, data: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }>| {
+                        let _ = tx.try_send(SseMessage { event_type, data });
+                    };
+
+                    // status — every tick
+                    {
+                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let ts_ms = tick_count * config::MAIN_LOOP_TICK_MS;
+                        let _ = write!(
+                            d,
+                            r#"{{"ts":{ts_ms},"temp":null,"mv":{mv},"vlv":"in","brt":{{"sts":"idle","vl":0.0,"spd":0.0}}}}"#,
+                        );
+                        push_msg("status", d);
+                    }
+
+                    // debug — every tick
+                    {
+                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let _ = write!(
+                            d,
+                            r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":false,"bleConnected":false,"stepperDrv":{{"isConnected":false,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":false}}}},"buretteSteps":{{"taken":0}}}}"#,
+                        );
+                        push_msg("debug", d);
+                    }
+
+                    // limitsw — periodic push
+                    if tick_count.is_multiple_of(config::SSE_LIMITSW_INTERVAL_TICKS) {
+                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let _ = d.push_str(r#"{"full":false,"empty":false}"#);
+                        push_msg("limitsw", d);
                     }
                 }
             }
@@ -209,8 +233,7 @@ fn main() {
             }
 
             // Log raw and calibrated every ~1 second (100 ticks × 10 ms)
-            #[allow(clippy::manual_is_multiple_of)]
-            if tick_count % 100 == 0 {
+            if tick_count.is_multiple_of(config::LOG_INTERVAL_TICKS) {
                 log::info!("ADC raw: {} mV, calibrated: {} mV", mv, adc.calibrated_mv());
                 if let Some(temp) = onewire::temp_celsius() {
                     log::info!("Temperature: {temp:.1} °C");

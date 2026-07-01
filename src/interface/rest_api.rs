@@ -133,6 +133,22 @@ pub fn handle_valve_set(body: &[u8]) -> String<MAX_RESPONSE_SIZE> {
     }
 }
 
+/// Handle GET /api/logs — return log entries as JSON.
+///
+/// # Arguments
+///
+/// * `limit` - Maximum number of entries to return.
+pub fn handle_api_logs(limit: usize) -> String<MAX_RESPONSE_SIZE> {
+    crate::logger::get_entries_json(limit)
+}
+
+/// Handle GET /api/logs/download — return plain-text log file.
+///
+/// Phase 4 stub: returns empty string. Phase 5 wires the log ring buffer.
+pub const fn handle_api_logs_download() -> String<MAX_RESPONSE_SIZE> {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
