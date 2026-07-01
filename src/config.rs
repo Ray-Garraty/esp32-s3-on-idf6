@@ -118,5 +118,3 @@ pub const SSE_LIMITSW_INTERVAL_TICKS: u64 = 100;
 
 /// Interval in ticks for periodic log output (100 ticks × 10 ms = 1 s).
 pub const LOG_INTERVAL_TICKS: u64 = 100;
-
-

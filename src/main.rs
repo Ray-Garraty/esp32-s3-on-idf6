@@ -185,13 +185,18 @@ fn main() {
                     use ecotiter_fw::infrastructure::network::http_server::SseMessage;
                     use heapless::String as HeaplessString;
 
-                    let push_msg = |event_type: &'static str, data: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }>| {
+                    let push_msg = |event_type: &'static str,
+                                    data: HeaplessString<
+                        { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
+                    >| {
                         let _ = tx.try_send(SseMessage { event_type, data });
                     };
 
                     // status — every tick
                     {
-                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let mut d: HeaplessString<
+                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
+                        > = HeaplessString::new();
                         let ts_ms = tick_count * config::MAIN_LOOP_TICK_MS;
                         let _ = write!(
                             d,
@@ -202,7 +207,9 @@ fn main() {
 
                     // debug — every tick
                     {
-                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let mut d: HeaplessString<
+                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
+                        > = HeaplessString::new();
                         let _ = write!(
                             d,
                             r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":false,"bleConnected":false,"stepperDrv":{{"isConnected":false,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":false}}}},"buretteSteps":{{"taken":0}}}}"#,
@@ -212,7 +219,9 @@ fn main() {
 
                     // limitsw — periodic push
                     if tick_count.is_multiple_of(config::SSE_LIMITSW_INTERVAL_TICKS) {
-                        let mut d: HeaplessString<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> = HeaplessString::new();
+                        let mut d: HeaplessString<
+                            { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
+                        > = HeaplessString::new();
                         let _ = d.push_str(r#"{"full":false,"empty":false}"#);
                         push_msg("limitsw", d);
                     }
