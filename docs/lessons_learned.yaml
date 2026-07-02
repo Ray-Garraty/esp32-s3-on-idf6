@@ -1,0 +1,39 @@
+lessons:
+  - id: LL-001
+    date: 2026-07-02
+    crash_signature: "PC=0x40359c07 A2=0xFFFFFFFC EXCVADDR=0x0"
+    category: stack_overflow
+    trigger_patterns:
+      - "A2:\\s*0x[fF]{8}"            # A2: 0xFFFFFFFF (really 0xFFFFFFFC)
+      - "A2=0xFFFFFFFC"               # also matches = format
+      - "EXCVADDR.*0x00000000"        # NULL pointer
+      - "tlsf_check"                  # allocator crash
+      - "heap_caps_.*free"            # heap allocator
+    lesson: >
+      On ESP32 with ESP-IDF v6, boot-time heap corruption crashes
+      (A2=0xFFFFFFFC, TLSF free-list corrupted) are usually caused by
+      main task stack overflow, not by actual heap corruption. Stack
+      overflow writes into adjacent TLSF metadata, producing misleading
+      heap allocator crash signatures. ALWAYS check
+      uxTaskGetStackHighWaterMark(NULL) FIRST before analyzing heap,
+      ELF sections, or pthread_mutex_t.
+    diagnostic: S1_stack_watermark
+    fix: CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768 (or larger)
+    refs:
+      - docs/plans/completed/26_07_02_phase5_postmortem.md
+      - protocols/stack_overflow.md
+
+  - id: LL-002
+    date: 2026-07-02
+    crash_signature: "RMT encoder panic: Unknown rmt_encode_state_t value: 3"
+    category: api_misuse
+    trigger_patterns:
+      - "Unknown rmt_encode_state_t"
+    lesson: >
+      RMT encoder panic in esp-idf-hal v0.46. The CopyEncoder has a
+      non-exhaustive match on rmt_encode_state_t and panics on value 3.
+      This is a known esp-idf-hal bug. Workaround: ensure the RMT signal
+      buffer does not exceed 1024 symbols, or use a custom encoder.
+    diagnostic: none (known dependency bug)
+    fix: "Use signal.len() <= 1024 or implement custom RMT encoder"
+    refs: []

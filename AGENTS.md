@@ -29,15 +29,50 @@ Violation of this rule — any blocking call added to main loop — invalidates 
 
 # ESP32 Crash Investigation
 
-Any ESP32 crash (Guru Meditation, StoreProhibited, LoadProhibited, stack overflow, abort) is a RED ALERT situation and requires **immediate investigation and fix** using tools described in [ESP-IDF Core Dump Guide](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32/api-guides/core_dump.html).
+Any ESP32 crash (Guru Meditation, StoreProhibited, LoadProhibited, stack overflow, abort) is a RED ALERT situation. **Invoke @debugger immediately** via:
 
-Mandatory steps:
-1. Record EXCCAUSE, EXCVADDR, registers A0–A15, PC.
-2. Decode backtrace via `xtensa-esp32-elf-addr2line` or `espcoredump.py`:
-` ~/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32-elf-addr2line -pfiaC -e target/xtensa-esp32-espidf/debug/ecotiter <insert backtrace code here>`
-3. If backtrace is corrupted — analyze registers: typical patterns are use-after-free (EXCVADDR = 0xFFFFFFA0, i.e. NULL + offset), stack overflow, buffer overflow.
-4. If crash is related to HTTP server — always check `stack_size` in `EspHttpServer::Configuration` first.
-5. Guru Meditation is never "one-time" or "pre-existing" — root cause must be found and fixed at once.
+```
+Task(@debugger, "Crash dump: <paste Guru Meditation text>
+known_good: <last working commit hash>")
+```
+
+Or run the crash analyzer directly:
+```bash
+cat crash_dump.txt | python3 scripts/crash_analyzer.py
+```
+
+## Debugger Agent (@debugger)
+
+Specialized agent for crash investigation. Uses systematic S1–S5
+(Occam's Razor Protocol) methodology to identify root cause quickly.
+
+**Protocols:**
+- `protocols/embedded_boot_crash.md` — mandatory S1–S5 protocol
+- `protocols/heap_corruption.md` — heap-specific triage
+- `protocols/stack_overflow.md` — stack-specific triage
+
+**Tools:**
+- `scripts/crash_analyzer.py` — Guru Meditation parser, backtrace decoder,
+  crash classification, lessons_learned.yaml lookup
+- `scripts/decode_backtrace.sh` — wrapper around `xtensa-esp32-elf-addr2line`
+
+**Knowledge Base:**
+- `docs/lessons_learned.yaml` — known crash patterns and their fixes
+
+**Invocation:**
+```
+Task(@debugger, "Crash dump:
+Guru Meditation Error: Core 0 panic'ed (LoadProhibited)
+EXCCAUSE: 0x0000001c
+EXCVADDR: 0x00000000
+A2: 0xfffffffc
+Backtrace: 0x40359c07:0x3ffd2d58 ...
+known_good: 23e90c3")
+```
+
+## Legacy Crash Investigation (manual, replaced by @debugger)
+
+Retained for reference only. Use @debugger instead.
 
 # RMT Stepper API (esp-idf-hal v0.46, IDF v6)
 
