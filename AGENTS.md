@@ -332,17 +332,51 @@ Default `ESP_COEX_PREFER_BALANCE`. Never prefer BT (GR-4).
 Any ESP32 crash (Guru Meditation, StoreProhibited, LoadProhibited, stack
 overflow, abort, WDT) is a **RED ALERT**.
 
-**Step 1:** Consult `docs/lessons_learned.yaml` FIRST (known patterns below).
+### Diagnostic System
+
+The firmware has a built-in diagnostic subsystem (`src/diag/`) that intercepts
+ALL crash types via `__wrap_esp_panic_handler` (linker `--wrap`). Crash output
+has a machine-parseable format:
+
+```
+=== CRASH ===
+exccause=0 name=IllegalInstruction pc=0x40091100 excvaddr=0x0 ps=0x60730 sp=0x3fffcee0
+=== REGISTERS ===
+a0=0x800910c8 a1=0x3fffcee0 a2=0x0 a3=0x0 ...
+=== BACKTRACE ===
+0x400910fd:0x3fffcee0
+0x400910c5:0x3fffcf00
+...
+=== BLACK BOX (64 events, newest first) ===
+[822us] t4 FfiExit { boundary: 20, result: 0 }
+[821us] t4 FfiEnter { boundary: 20 }
+...
+=== STACK ===
+t0 main watermark=0
+t1 motor watermark=0
+...
+!!! EXCEPTION END !!!
+```
+
+### Triage pipeline
+
+**Step 1:** Run the quickest available analysis:
+
+| Scenario | Command |
+|---|---|
+| Serial log exists | `./scripts/analyze_last_crash.sh` |
+| Live capture | `timeout 60 python3 scripts/serial_monitor.py` |
+| Raw crash text | `cat crash.txt \| python3 scripts/crash_analyzer.py` |
 
 **Step 2:** Invoke the debugger agent:
 ```
-Task(@debugger, "Crash dump: <paste Guru Meditation text>
-known_good: <last working commit hash>")
+Task(@debugger, "analyze crash log at logs/serial_2026-07-03_21-48-51.log")
 ```
 
-**Step 3:** Or run the crash analyzer:
-```bash
-cat crash_dump.txt | python3 scripts/crash_analyzer.py
+Or with a crash dump:
+```
+Task(@debugger, "Crash dump: <paste === CRASH === section>
+known_good: <last working commit hash>")
 ```
 
 ### Known Patterns (from `docs/lessons_learned.yaml`)
@@ -354,16 +388,22 @@ cat crash_dump.txt | python3 scripts/crash_analyzer.py
 | `ESP_ERR_HTTPD_TASK` (45064) | DRAM fragmentation | Init order GR-3; move BLE to net_owner |
 | `wifi:fail to alloc timer, type=9` | WiFi timer alloc after BLE+HTTP ate DRAM | Reduce WiFi buffer counts in `sdkconfig.defaults` |
 | StoreProhibited EXCVADDR=0x28 | Dangling `httpd_req_t` (GR-5) | WebSocket API; never store C pointers |
+| IllegalInstruction PC=0x40091100 + t4 heap snapshot 6KB largest | DRAM fragmentation → HTTP alloc failure → lwIP after event loop drop (**LL-004**) | Clone `EspSystemEventLoop` before `WifiManager::new()`; keep `_sysloop_keepalive` alive |
 
 ### Debugger Agent (@debugger)
 
-- **Methodology:** S1–S5 Occam's Razor Protocol
+- **Methodology:** S1–S5 Occam's Razor Protocol (see `.opencode/agents/debugger.md`)
 - **Protocols:**
   - `docs/protocols/embedded_boot_crash.md` — mandatory S1–S5
   - `docs/protocols/heap_corruption.md` — heap-specific triage
   - `docs/protocols/stack_overflow.md` — stack-specific triage
-- **Tools:** `scripts/crash_analyzer.py`, `scripts/decode_backtrace.sh`
+- **Tools:**
+  - `scripts/analyze_last_crash.sh` — one-shot analysis from serial log
+  - `scripts/crash_analyzer.py` — parse + classify + addr2line + lessons
+  - `scripts/serial_monitor.py` — live capture with auto-crash detection
+  - `scripts/decode_backtrace.sh` — standalone addr2line
 - **Knowledge base:** `docs/lessons_learned.yaml`
+- **Crash dump format:** `=== CRASH ===` (see `src/esp_safe.rs:423`)
 
 ---
 

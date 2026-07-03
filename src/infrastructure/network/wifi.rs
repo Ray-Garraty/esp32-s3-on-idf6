@@ -116,6 +116,29 @@ impl<'d> WifiManager<'d> {
         })
     }
 
+    /// Create a WiFi manager in offline mode — no WiFi at all.
+    ///
+    /// Use when EspWifi init fails. HTTP can still serve WebUI,
+    /// and process() will be a no-op (returns immediately).
+    pub fn offline(ble_active: Arc<AtomicBool>) -> Self {
+        Self {
+            wifi: None,
+            mode: WifiMode::Off,
+            ap_ip: Ipv4Addr::new(
+                config::AP_IP[0],
+                config::AP_IP[1],
+                config::AP_IP[2],
+                config::AP_IP[3],
+            ),
+            dns_socket: None,
+            mdns: None,
+            last_reconnect: Instant::now(),
+            ble_active,
+            saved_ssid: heapless::String::new(),
+            saved_password: heapless::String::new(),
+        }
+    }
+
     /// Initialise WiFi: try STA connect → if fail, clear creds → start AP.
     ///
     /// This is a blocking call (init only). Called once at boot.

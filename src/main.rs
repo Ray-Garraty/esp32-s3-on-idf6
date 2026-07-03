@@ -194,12 +194,12 @@ fn main() {
     {
         let gpio33 = peripherals.pins.gpio33;
         info!("DS18B20: software bitbang on GPIO33");
+        diag::stack_monitor::register_thread(diag::stack_monitor::TEMP, "temp");
         let _ = std::thread::Builder::new()
             .stack_size(config::TEMP_THREAD_STACK)
             .name("temp".into())
             .spawn(move || {
                 diag::black_box::set_thread_slot(diag::stack_monitor::TEMP);
-                diag::stack_monitor::register_thread(diag::stack_monitor::TEMP, "temp");
                 info!("Temperature thread started");
                 let mut bus = match onewire::OneWireBus::new(gpio33) {
                     Ok(b) => b,
@@ -208,7 +208,12 @@ fn main() {
                         return;
                     }
                 };
+                let mut temp_tick = 0u64;
                 loop {
+                    temp_tick += 1;
+                    if temp_tick.is_multiple_of(100) {
+                        diag::stack_monitor::check_watermark(diag::stack_monitor::TEMP);
+                    }
                     if let Some(temp) = onewire::read_sensor(&mut bus) {
                         log::info!("Temperature: {temp:.1}°C");
                     }
@@ -220,15 +225,20 @@ fn main() {
     // ── UART reader channel ─────────────────────────────────────
     // Thread reads stdin (blocking), sends bytes to main loop (non-blocking drain).
     let (uart_tx, uart_rx) = mpsc::channel::<heapless::Vec<u8, 64>>();
+    diag::stack_monitor::register_thread(diag::stack_monitor::UART, "uart");
     {
         let _ = std::thread::Builder::new()
-            .stack_size(4096)
+            .stack_size(config::UART_THREAD_STACK)
             .name("uart".into())
             .spawn(move || {
                 diag::black_box::set_thread_slot(diag::stack_monitor::UART);
-                diag::stack_monitor::register_thread(diag::stack_monitor::UART, "uart");
                 let mut buf = [0u8; 64];
+                let mut uart_tick = 0u64;
                 loop {
+                    uart_tick += 1;
+                    if uart_tick.is_multiple_of(100) {
+                        diag::stack_monitor::check_watermark(diag::stack_monitor::UART);
+                    }
                     match std::io::stdin().read(&mut buf) {
                         Ok(n) if n > 0 => {
                             let mut bytes = heapless::Vec::<u8, 64>::new();
@@ -250,6 +260,7 @@ fn main() {
     // Motor, temp, and UART threads allocate their stacks first.
     // WiFi static rx buffers (4×1600=6.4K contiguous DMA) fit in
     // the remaining heap without fragmentation.
+    diag::stack_monitor::register_thread(diag::stack_monitor::NET_OWNER, "net_owner");
     {
         let wifi_tx = wifi_tx;
         let ble_mgr_tx = ble_mgr_tx;
@@ -258,7 +269,6 @@ fn main() {
             .name("net_owner".into())
             .spawn(move || {
                 diag::black_box::set_thread_slot(diag::stack_monitor::NET_OWNER);
-                diag::stack_monitor::register_thread(diag::stack_monitor::NET_OWNER, "net_owner");
                 info!("Network owner: WiFi + HTTP + BLE init on 32 KB stack");
 
                 // Clone sys_loop before passing to WifiManager::new().
@@ -316,7 +326,8 @@ fn main() {
                 info!("Network owner: HttpServer started (stack watermark: {watermark} bytes)");
 
                 loop {
-                    std::thread::sleep(Duration::from_hours(1));
+                    std::thread::sleep(Duration::from_secs(10));
+                    diag::stack_monitor::check_watermark(diag::stack_monitor::NET_OWNER);
                 }
             });
     }

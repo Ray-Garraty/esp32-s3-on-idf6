@@ -39,11 +39,12 @@ you do NOT implement features, refactor code, or write tests outside of
 diagnostic instrumentation. You find root causes and recommend fixes.
 
 ## Input
-- `crash_dump`: Guru Meditation dump text or symptom description
+- `crash_dump`: Guru Meditation dump text, or raw serial log with `=== CRASH ===` section
 - `known_good` (optional): commit hash or tag of last known-good build
 - `task_id` (optional): orchestrator-assigned task ID
 
 ## Triggers (scenarios that invoke this agent)
+- `=== CRASH ===` capture from serial_monitor.py (new diag format, preferred)
 - Guru Meditation (LoadProhibited, StoreProhibited, InstrFetchProhibited, etc.)
 - WDT reset (`rst:0x8 TG1WDT_SYS_RESET`, `TWDT`)
 - Stack overflow (explicit FreeRTOS detection or inferred)
@@ -71,35 +72,75 @@ Before each investigation, read relevant resources:
 | `docs/lessons_learned.yaml` | **ALWAYS** — check for known patterns |
 | `AGENTS.md` | Build commands, golden rule, ESP32 specifics |
 | `scripts/crash_analyzer.py` | **ALWAYS** — run on crash dump first |
+| `scripts/serial_monitor.py` | Live serial capture with auto-crash detection |
+| `scripts/analyze_last_crash.sh` | Post-hoc analysis of latest serial log |
+| `scripts/decode_backtrace.sh` | Manual addr2line backtrace decode |
 | `src/config.rs` | Stack sizes, buffer constants |
 | `sdkconfig.defaults` | Stack configs, feature toggles |
+| `src/diag/stack_monitor.rs` | Thread watermark slot IDs (MAIN=0, MOTOR=1, ...) |
+| `src/diag/ffi_guard.rs` | FFI boundary IDs for black box events |
+| `src/esp_safe.rs` | `__wrap_esp_panic_handler` — crash dump format |
 
 ## Process (5 Phases)
 
-### Phase 1: Triage (5 min)
+### Phase 1: Triage (3 min)
 
-1. **Run crash_analyzer.py** on the crash dump:
-   ```
-   python3 scripts/crash_analyzer.py << 'DUMP'
-   <crash dump text>
-   DUMP
-   ```
-   If crash dump is in a file: `python3 scripts/crash_analyzer.py --dump crash.txt`
+#### 1a. If you have a serial log file (post-hoc)
 
-2. Extract from analyzer output:
-   - Crash type (LoadProhibited, StoreProhibited, WDT, stack overflow)
-   - EXCVADDR, EXCCAUSE, A2, PC
-   - Decoded backtrace (function names, file:line)
-   - Classification (stack_overflow, heap_corruption, null_deref, wdt_timeout)
-   - Known lessons matched
+The diagnostic system logs all serial output to `logs/serial_*.log`. Run:
 
-3. **Check lessons_learned.yaml** manually:
-   - If `known_lessons` is non-empty → read the lesson, follow its `diagnostic`.
-   - If LL-001 matches (A2=0xFFFFFFFC + heap allocator backtrace) → **jump to S1 immediately** — this is a stack overflow until proven otherwise.
+```
+./scripts/analyze_last_crash.sh                # latest log, with addr2line
+./scripts/analyze_last_crash.sh --no-decode    # skip addr2line (faster)
+./scripts/analyze_last_crash.sh --elf <path>   # specify ELF binary
+```
 
-4. **Determine determinism:**
-   - Same PC + EXCVADDR on every boot → **deterministic** (good — easy to bisect)
-   - Varying addresses → **intermittent** (harder — may need statistical approach)
+This produces a YAML report with:
+- Crash type + EXCCAUSE name (e.g. `type: IllegalInstruction`)
+- `excvaddr`, `pc`, `ps`, `sp`
+- Decoded backtrace (function names, file:line) — or `??` if `--no-decode`
+- Last 5 black box events (newest-first: FFI boundaries, heap snapshots, etc.)
+- Stack watermarks for all 6 threads
+- Classification (stack_overflow, heap_corruption, null_deref, wdt_timeout)
+- Known lessons matched from `docs/lessons_learned.yaml`
+
+#### 1b. If capturing a live crash
+
+Run `scripts/serial_monitor.py` — it auto-detects `=== CRASH ===` lines,
+buffers the crash section, and runs `crash_analyzer.py` inline:
+
+```
+timeout 60 python3 scripts/serial_monitor.py
+```
+
+#### 1c. If you have raw crash text (e.g. pasted Guru Meditation)
+
+```
+cat crash.txt | python3 scripts/crash_analyzer.py
+python3 scripts/crash_analyzer.py --dump crash.txt
+```
+
+The analyzer parses BOTH formats:
+- **New:** `=== CRASH ===` format (from `__wrap_esp_panic_handler`)
+- **Old:** `Guru Meditation Error: Core X panic'ed (Name)` format
+
+#### 2. Quickly assess crash sections
+
+From the YAML report or raw dump, check these in order:
+
+| Section | Key info | What to look for |
+|---------|----------|------------------|
+| `=== CRASH ===` | `exccause=N name=XXX` | Exception type + name |
+| | `excvaddr=0x...` | Fault address (0 = NULL deref, <0x1000 = struct offset) |
+| | `pc=0x...` | Crash site PC |
+| `=== BACKTRACE ===` | `0xPC:0xSP` lines | Call chain for addr2line |
+| `=== BLACK BOX (newest first) ===` | Last events | What happened right before the crash (FFI ops, heap snapshots) |
+| `=== STACK ===` | `watermark=N` | Stack pressure per thread |
+
+#### 3. Determine determinism
+
+- Same PC + EXCVADDR on every boot → **deterministic** (good — easy to bisect)
+- Varying addresses → **intermittent** (harder — may need statistical approach)
 
 ### Phase 2: Occam's Razor Protocol — S1–S5 (15 min)
 

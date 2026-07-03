@@ -55,32 +55,114 @@ RE_PANIC_MESSAGE = re.compile(
     r"panicked at\s+\S+:\d+:\d+:\s*\n\s*(.+?)\s*\n\s*note:", re.DOTALL
 )
 
+# ── New CRASH format patterns (diag subsystem) ──
+RE_CRASH_HEADER = re.compile(r"=== CRASH ===")
+RE_CRASH_FIELDS = re.compile(
+    r"exccause=(\d+)\s+name=(\S+)\s+pc=(0x[0-9a-fA-F]+)\s+"
+    r"excvaddr=(0x[0-9a-fA-F]+)\s+ps=(0x[0-9a-fA-F]+)\s+sp=(0x[0-9a-fA-F]+)"
+)
+RE_BT_HEADER = re.compile(r"=== BACKTRACE ===")
+RE_BT_LINE = re.compile(r"(0x[0-9a-fA-F]+):(0x[0-9a-fA-F]+)")
+RE_BB_HEADER = re.compile(r"=== BLACK BOX")
+RE_STACK_HEADER = re.compile(r"=== STACK ===")
+RE_STACK_LINE = re.compile(r"t(\d+)\s+(\S+)\s+watermark=(\d+)")
+
 EXCCAUSE_DESCRIPTIONS: dict[int, str] = {
-    0x00: "InstructionFetch",
-    0x01: "InstructionFetch (privilege violation)",
-    0x02: "InstructionFetch (illegal instruction)",
-    0x03: "InstructionFetch (syscall)",
-    0x04: "InstructionFetch (coprocessor)",
-    0x05: "InstructionFetch (coprocessor disabled)",
-    0x06: "InstructionFetch (floating point disabled)",
-    0x07: "InstructionFetch (window spill/overflow)",
-    0x08: "InstructionFetch (window underflow)",
-    0x09: "InstructionFetch (W exception level)",
-    0x0A: "InstructionFetch (K exception level)",
-    0x0B: "InstructionFetch (double exception)",
+    0x00: "IllegalInstruction — fetch of invalid instruction or misaligned PC",
+    0x01: "Syscall — LICT (user) syscall executed",
+    0x02: "InstructionFetchError — error during instruction fetch",
+    0x03: "LoadStoreError — load/store address error (unaligned or invalid)",
+    0x04: "Level1Interrupt — level-1 interrupt as exception",
+    0x05: "Alloca — MOVSP caused invalid stack pointer",
+    0x06: "IntegerDivideByZero — divide by zero in windowed ABI",
+    0x07: "PCValue — PSR has wrong value (PC<->PS mapping)",
+    0x08: "Privileged — privileged instruction in user mode",
+    0x09: "LoadStoreAlignment — unaligned load/store (no unaligned support)",
     0x1C: "LoadProhibited — load from unmapped address",
     0x1D: "StoreProhibited — store to unmapped address",
-    0x20: "IntegerDivideByZero",
-    0x21: "IntegerOverflow",
-    0x22: "IntegerInvalid",
-    0x28: "Privileged instruction violation",
-    0x29: "Unrecoverable instruction fetch",
-    0x2A: "Unrecoverable load",
-    0x2B: "Unrecoverable store",
+    0x20: "Cp0Dis",
+    0x21: "Cp1Dis",
+    0x22: "Cp2Dis",
+    0x23: "Cp3Dis",
+    0x24: "Cp4Dis",
+    0x25: "Cp5Dis",
+    0x26: "Cp6Dis",
+    0x27: "Cp7Dis",
 }
 
 
 def parse_crash_dump(text: str) -> dict[str, Any]:
+    # Detect which format: new === CRASH === format or old Guru Meditation
+    if RE_CRASH_HEADER.search(text):
+        return _parse_new_format(text)
+    else:
+        return _parse_old_format(text)
+
+
+def _parse_new_format(text: str) -> dict[str, Any]:
+    """Parse the new === CRASH === format."""
+    info: dict[str, Any] = {
+        "type": "unknown",
+        "excvaddr": None,
+        "excause": None,
+        "pc": None,
+        "epc1": None,
+        "backtrace_raw": [],
+        "registers": {},
+        "excause_description": None,
+        "wdt_reset": False,
+        "stack_overflow_task": None,
+        "stack_watermarks": [],
+        "bb_events": [],
+    }
+
+    # Parse CRASH fields: exccause=N name=XXX pc=0x... ...
+    m = RE_CRASH_FIELDS.search(text)
+    if m:
+        info["excause"] = int(m.group(1))
+        info["type"] = m.group(2)  # e.g. "IllegalInstruction"
+        info["pc"] = int(m.group(3), 16)
+        info["excvaddr"] = int(m.group(4), 16)
+        info["excause_description"] = EXCCAUSE_DESCRIPTIONS.get(
+            int(m.group(1)), f"Unknown EXCCAUSE (0x{int(m.group(1)):02X})"
+        )
+
+    # Parse backtrace — only PC:SP pairs within === BACKTRACE === section
+    bt_section = RE_BT_HEADER.split(text)
+    if len(bt_section) > 1:
+        bt_text = bt_section[1]
+        # Stop at the next === section header or !!! marker
+        end_section = re.search(r"\n===", bt_text)
+        if end_section:
+            bt_text = bt_text[:end_section.start()]
+        end_marker = bt_text.find("!!!")
+        if end_marker >= 0:
+            bt_text = bt_text[:end_marker]
+        for m in RE_BT_LINE.finditer(bt_text):
+            info["backtrace_raw"].append({
+                "pc": int(m.group(1), 16),
+                "sp": int(m.group(2), 16),
+            })
+
+    # Parse stack watermarks
+    st_section = RE_STACK_HEADER.split(text)
+    if len(st_section) > 1:
+        st_text = st_section[1]
+        for m in RE_STACK_LINE.finditer(st_text):
+            info["stack_watermarks"].append({
+                "task_id": int(m.group(1)),
+                "name": m.group(2),
+                "watermark": int(m.group(3)),
+            })
+
+    # Parse black box events
+    info["bb_events"] = parse_bb_events(text)
+
+    return info
+
+
+def _parse_old_format(text: str) -> dict[str, Any]:
+    """Parse the old Guru Meditation format (backward compatible)."""
     info: dict[str, Any] = {
         "type": "unknown",
         "excvaddr": None,
@@ -444,6 +526,7 @@ def generate_report(
     backtrace_decoded: list[dict[str, Any]],
     classification: dict[str, Any],
     known_lessons: list[dict[str, Any]],
+    raw_text: str = "",
 ) -> str:
     """Generate YAML report string."""
     report: dict[str, Any] = {
@@ -466,10 +549,54 @@ def generate_report(
         "classification": classification,
         "known_lessons": known_lessons if known_lessons else None,
     }
+
+    # Add stack watermarks if available (new format)
+    if info.get("stack_watermarks"):
+        report["stack_watermarks"] = info["stack_watermarks"]
+
+    # Add BB events summary (last 5)
+    if info.get("bb_events"):
+        report["crash"]["last_bb_events"] = info["bb_events"][:5]
+
     return yaml.dump(
         report, default_flow_style=False, allow_unicode=True,
         sort_keys=False,
     )
+
+
+def parse_bb_events(text: str) -> list[str]:
+    """Extract black box events from the crash dump text."""
+    events: list[str] = []
+    parts = RE_BB_HEADER.split(text)
+    if len(parts) < 2:
+        return events
+    bb_text = parts[1]
+    for line in bb_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("==="):
+            break  # Stop at next === section header
+        if "FfiEnter" in line or "FfiExit" in line or "HeapSnapshot" in line or "StackLow" in line:
+            events.append(line)
+    return events
+
+
+def extract_crash_section_from_log(text: str) -> str | None:
+    """Extract the crash dump section from a serial log.
+    Returns the crash section text (from === CRASH === / Guru Meditation to
+    !!! EXCEPTION END !!! / Reboot) or None."""
+    start = text.find("=== CRASH ===")
+    if start < 0:
+        start = text.find("Guru Meditation Error:")
+        if start < 0:
+            return None
+    # Find end: prefer !!! EXCEPTION END !!! then Rebooting... then EOF
+    end = text.find("!!! EXCEPTION END !!!", start)
+    if end >= 0:
+        return text[start:end + len("!!! EXCEPTION END !!!")]
+    end = text.find("Rebooting...", start)
+    if end >= 0:
+        return text[start:end + len("Rebooting...")]
+    return text[start:]
 
 
 def main() -> int:
@@ -488,10 +615,21 @@ def main() -> int:
         "--no-decode", action="store_true",
         help="Skip addr2line backtrace decoding",
     )
+    parser.add_argument(
+        "--log", "-l", type=str, default=None,
+        help="Serial log file path (extracts crash section automatically)",
+    )
     args = parser.parse_args()
 
     # Read crash dump
-    if args.dump:
+    if args.log:
+        with open(args.log) as f:
+            full_text = f.read()
+        text = extract_crash_section_from_log(full_text)
+        if text is None:
+            print("ERROR: No crash section found in log file", file=sys.stderr)
+            return 1
+    elif args.dump:
         with open(args.dump) as f:
             text = f.read()
     elif not sys.stdin.isatty():
@@ -533,7 +671,7 @@ def main() -> int:
     known_lessons = check_lessons_learned(info, classification, raw_text=text)
 
     # Generate output
-    report = generate_report(info, backtrace_decoded, classification, known_lessons)
+    report = generate_report(info, backtrace_decoded, classification, known_lessons, raw_text=text)
     print(report, end="")
 
     return 0

@@ -17,10 +17,14 @@ import sys
 import os
 import time
 import argparse
+import subprocess
+import threading
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent))
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.insert(0, str(SCRIPT_DIR))
 from find_port import find_esp32_port
 
 BAUDRATE = 115200
@@ -34,6 +38,39 @@ def timestamp():
 def make_log_filename(log_dir: str) -> Path:
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     return Path(log_dir) / f"serial_{ts}.log"
+
+
+def analyze_crash(crash_text: str, project_dir: Path, writeline):
+    """Run crash_analyzer.py on captured crash text and print results."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(crash_text)
+        tmp_path = f.name
+
+    try:
+        # Run crash_analyzer
+        analyzer = SCRIPT_DIR / "crash_analyzer.py"
+        elf = project_dir / "target" / "xtensa-esp32-espidf" / "debug" / "ecotiter"
+
+        result = subprocess.run(
+            [sys.executable, str(analyzer), "--dump", tmp_path, "--elf", str(elf)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            writeline("\n=== CRASH ANALYSIS ===")
+            for line in result.stdout.strip().split("\n"):
+                writeline(f"  {line}")
+            writeline("=== END ANALYSIS ===\n")
+        elif result.stderr:
+            writeline(f"\n=== CRASH ANALYSIS ERROR ===\n  {result.stderr.strip()}\n")
+    except Exception as e:
+        writeline(f"\n=== CRASH ANALYSIS FAILED: {e} ===\n")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def main():
@@ -50,6 +87,11 @@ def main():
         return 1
 
     log_file = None
+    # Crash detection state
+    CRASH_STATE_IDLE = 0
+    CRASH_STATE_COLLECTING = 1
+    crash_state = CRASH_STATE_IDLE
+    crash_buffer: list[str] = []
     if not args.no_log:
         log_dir = Path(args.log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +155,27 @@ def main():
                         line = line.strip("\r")
                         if line:
                             ts = timestamp()
-                            writeline(f"[{ts}] {line}")
+
+                            # Crash detection
+                            if "=== CRASH ===" in line:
+                                crash_state = CRASH_STATE_COLLECTING
+                                crash_buffer = [line]
+                                writeline(f"[{ts}] {line}")
+                            elif crash_state == CRASH_STATE_COLLECTING:
+                                crash_buffer.append(line)
+                                writeline(f"[{ts}] {line}")
+                                # Check for end markers
+                                if "Rebooting..." in line or "!!! EXCEPTION END !!!" in line:
+                                    crash_state = CRASH_STATE_IDLE
+                                    # Launch analysis in a thread to not block serial
+                                    crash_text = "\n".join(crash_buffer)
+                                    threading.Thread(
+                                        target=analyze_crash,
+                                        args=(crash_text, PROJECT_DIR, writeline),
+                                        daemon=True,
+                                    ).start()
+                            else:
+                                writeline(f"[{ts}] {line}")
                 else:
                     time.sleep(0.01)
             except serial.SerialException:

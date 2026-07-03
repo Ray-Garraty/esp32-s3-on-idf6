@@ -108,14 +108,14 @@ pub fn check_watermark(slot: u8) {
 
 /// Emergency dump of all thread watermarks. Called from panic handler.
 pub fn emergency_dump(writer: &mut dyn core::fmt::Write) {
-    let _ = writeln!(writer, "=== STACK WATERMARKS ===");
+    let _ = writeln!(writer, "=== STACK ===");
     for (slot, info) in THREADS.iter().enumerate() {
         if info.registered {
             let wm = info.min_watermark.load(Ordering::Acquire);
             let final_wm = if wm == u16::MAX { 0 } else { wm };
             let _ = writeln!(
                 writer,
-                "  t{slot} {name}: min_watermark={final_wm} bytes",
+                "t{slot} {name} watermark={final_wm}",
                 name = info.name,
             );
         }

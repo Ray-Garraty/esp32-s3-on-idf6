@@ -18,6 +18,8 @@ git-fetch-with-cli = true
 rustflags = [
     # NOTE: -W flags removed — they leak into dependency crates.
     # Use #![warn(..)] in src/lib.rs instead for crate-local linting.
+    # Linker wrap: intercept esp_panic_handler to dump diagnostics
+    "-C", "link-arg=-Wl,--wrap=esp_panic_handler",
 ]
 
 [env]

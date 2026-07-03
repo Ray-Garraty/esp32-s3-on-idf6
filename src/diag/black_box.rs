@@ -164,7 +164,7 @@ impl BlackBox {
         self.count.fetch_add(1, Ordering::Release);
     }
 
-    /// Write all events to `writer` (oldest first). Used from panic handler.
+    /// Write all events to `writer` (newest first). Used from panic handler.
     #[allow(clippy::cast_possible_truncation, clippy::volatile_composites)]
     pub fn dump(&self, writer: &mut dyn core::fmt::Write) {
         let count = self
@@ -172,17 +172,17 @@ impl BlackBox {
             .load(Ordering::Acquire)
             .min(u32::try_from(CAPACITY).unwrap_or(u32::MAX));
         let write_idx = self.write_idx.load(Ordering::Acquire) as usize;
-        let start = (write_idx + CAPACITY - count as usize) % CAPACITY;
 
-        let _ = writeln!(writer, "=== BLACK BOX ({count} events) ===");
+        let _ = writeln!(writer, "=== BLACK BOX ({count} events, newest first) ===");
+        // Iterate from newest (write_idx - 1) backwards to oldest.
         for i in 0..count as usize {
-            let idx = (start + i) % CAPACITY;
+            let idx = (write_idx + CAPACITY - 1 - i) % CAPACITY;
             // SAFETY: idx is always in [0, CAPACITY). read_volatile ensures
             // we read a consistent snapshot (no torn reads on aligned u32).
             let record = unsafe { core::ptr::read_volatile(self.buffer.as_ptr().add(idx)) };
             let _ = writeln!(
                 writer,
-                "[{ts:8}us] t{slot} {ev:?}",
+                "[{ts}us] t{slot} {ev:?}",
                 ts = record.timestamp_us,
                 slot = record.thread_slot,
                 ev = record.event,

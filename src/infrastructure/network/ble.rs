@@ -338,7 +338,12 @@ impl BleManager {
                 diag::register_thread(diag::stack_monitor::BLE_NOTIFY, "ble-notify");
                 log::info!("BLE: notify thread started");
 
+                let mut ble_tick = 0u64;
                 loop {
+                    ble_tick += 1;
+                    if ble_tick.is_multiple_of(100) {
+                        diag::check_watermark(diag::stack_monitor::BLE_NOTIFY);
+                    }
                     if let Ok(_status) = status_rx.recv() {
                         if G_BLE_CONNECTED.load(Ordering::Acquire) {
                             // TODO: serialize status and notify

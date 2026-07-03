@@ -158,3 +158,372 @@ pub fn set_coex_ble_preferred() {
     }
     diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_COEX, 0);
 }
+
+// ── Hardware exception panic handler (linker-wrapped) ────────────────
+//
+// These structures match ESP-IDF v6.0.1 C layout for the panic handler.
+// Used via linker `--wrap` to intercept ALL crash types (not just Rust panics).
+
+/// Matches `panic_info_t` from ESP-IDF
+/// `components/esp_system/include/esp_private/panic_internal.h`
+#[repr(C)]
+#[allow(dead_code)]
+struct PanicInfo {
+    core: i32,
+    exception: u32,
+    reason: *const u8,
+    description: *const u8,
+    details: Option<unsafe extern "C" fn(*const u8)>,
+    state: Option<unsafe extern "C" fn(*const u8)>,
+    addr: *const u8,
+    frame: *const u8,
+    pseudo_excause: bool,
+}
+
+/// Matches `XtExcFrame` from ESP-IDF
+/// `components/xtensa/include/xtensa_context.h`
+/// ESP32 windowed ABI with hardware loops (XCHAL_HAVE_LOOPS=1).
+#[repr(C)]
+#[allow(dead_code)]
+struct XtExcFrame {
+    exit: i32,     // offset 0
+    pc: i32,       // offset 4
+    ps: i32,       // offset 8
+    a0: i32,       // offset 12
+    a1: i32,       // offset 16
+    a2: i32,       // offset 20
+    a3: i32,       // offset 24
+    a4: i32,       // offset 28
+    a5: i32,       // offset 32
+    a6: i32,       // offset 36
+    a7: i32,       // offset 40
+    a8: i32,       // offset 44
+    a9: i32,       // offset 48
+    a10: i32,      // offset 52
+    a11: i32,      // offset 56
+    a12: i32,      // offset 60
+    a13: i32,      // offset 64
+    a14: i32,      // offset 68
+    a15: i32,      // offset 72
+    sar: i32,      // offset 76
+    exccause: i32, // offset 80
+    excvaddr: i32, // offset 84
+    lbeg: i32,     // offset 88
+    lend: i32,     // offset 92
+    lcount: i32,   // offset 96
+    tmp0: i32,     // offset 100
+    tmp1: i32,     // offset 104
+    tmp2: i32,     // offset 108
+}
+
+// ── EXCCAUSE name table ──────────────────────────────────────────
+
+/// Standard Xtensa exception cause names for EXCCAUSE values 0–39.
+/// Maps exception cause numbers to human-readable names.
+const EXCCAUSE_NAMES: [&str; 40] = [
+    "IllegalInstruction",    // 0
+    "Syscall",               // 1
+    "InstructionFetchError", // 2
+    "LoadStoreError",        // 3
+    "Level1Interrupt",       // 4
+    "Alloca",                // 5
+    "IntegerDivideByZero",   // 6
+    "PCValue",               // 7
+    "Privileged",            // 8
+    "LoadStoreAlignment",    // 9
+    "Reserved10",            // 10
+    "Reserved11",            // 11
+    "InstrPDAddrError",      // 12
+    "LoadStorePIFDataError", // 13
+    "InstrPIFAddrError",     // 14
+    "LoadStorePIFAddrError", // 15
+    "InstTLBMiss",           // 16
+    "InstTLBMultiHit",       // 17
+    "InstFetchPrivilege",    // 18
+    "Reserved19",            // 19
+    "InstFetchProhibited",   // 20
+    "Reserved21",            // 21
+    "Reserved22",            // 22
+    "Reserved23",            // 23
+    "LoadStoreTLBMiss",      // 24
+    "LoadStoreTLBMultihit",  // 25
+    "LoadStorePrivilege",    // 26
+    "Reserved27",            // 27
+    "LoadProhibited",        // 28
+    "StoreProhibited",       // 29
+    "Reserved30",            // 30
+    "Reserved31",            // 31
+    "Cp0Dis",                // 32
+    "Cp1Dis",                // 33
+    "Cp2Dis",                // 34
+    "Cp3Dis",                // 35
+    "Cp4Dis",                // 36
+    "Cp5Dis",                // 37
+    "Cp6Dis",                // 38
+    "Cp7Dis",                // 39
+];
+
+/// Returns the human-readable name for an Xtensa EXCCAUSE value (0–39).
+/// Returns "Unknown" for values outside the standard range.
+const fn exccause_name(exccause: u32) -> &'static str {
+    if (exccause as usize) < EXCCAUSE_NAMES.len() {
+        EXCCAUSE_NAMES[exccause as usize]
+    } else {
+        "Unknown"
+    }
+}
+
+// ── Backtrace helpers (Xtensa windowed ABI) ──────────────────────
+
+/// Adjust a return address to point at the call instruction that
+/// produced it.  Windowed calls store A0 with the high bit set;
+/// this normalises the address and subtracts 3 bytes (call
+/// instruction length in Xtensa).
+const fn process_pc(pc: u32) -> u32 {
+    let pc = if pc & 0x8000_0000 != 0 {
+        (pc & 0x3FFF_FFFF) | 0x4000_0000
+    } else {
+        pc
+    };
+    pc.wrapping_sub(3)
+}
+
+/// Check whether a stack-pointer value falls inside the ESP32 DRAM
+/// region where stack memory lives.
+fn is_sane_sp(sp: u32) -> bool {
+    (0x3FFB_0000..0x4000_0000).contains(&sp)
+}
+
+/// Check whether an address lies in executable memory (IRAM or flash
+/// cache).
+fn is_executable(pc: u32) -> bool {
+    // IRAM range
+    (0x4000_0000..0x400C_2000).contains(&pc)
+        // Flash cache range
+        || (0x400D_0000..0x4040_0000).contains(&pc)
+}
+
+/// Print a single backtrace entry in machine-parseable format:
+/// `0xPC:0xSP`
+fn print_bt_entry(w: &mut impl core::fmt::Write, pc: u32, sp: u32) {
+    let _ = writeln!(w, "0x{pc:08x}:0x{sp:08x}");
+}
+
+/// Walk the Xtensa windowed-ABI call stack starting from the
+/// exception frame and print each frame.
+///
+/// The algorithm reads the base-save area at [sp-16] (return
+/// address) and [sp-12] (previous frame sp), which the `entry`
+/// instruction / window-underflow handler has left behind.
+#[allow(clippy::cast_sign_loss)]
+fn do_backtrace(w: &mut impl core::fmt::Write, frame: *const XtExcFrame) {
+    if frame.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees frame points to a valid XtExcFrame
+    // pushed by CPU exception handling.
+    let f = unsafe { &*frame };
+    let mut pc = f.pc as u32;
+    let mut sp = f.a1 as u32;
+    let mut next_pc = f.a0 as u32;
+    let mut corrupted = false;
+
+    // First frame = the crash site
+    print_bt_entry(w, process_pc(pc), sp);
+
+    for _ in 0..100 {
+        if next_pc == 0 {
+            break;
+        }
+        if !is_sane_sp(sp) {
+            corrupted = true;
+            break;
+        }
+
+        // Read the base save area pushed by `entry` or the window
+        // underflow handler: [sp-16] = saved A0 (return address),
+        // [sp-12] = saved A1 (caller's stack pointer).
+        // SAFETY: sp has been checked against DRAM range via
+        // is_sane_sp() above.  In panic context exceptions are
+        // masked (PS.EXCM=1), so a bad read returns whatever is on
+        // the bus rather than triggering a double fault.
+        unsafe {
+            let base_save = sp;
+            pc = next_pc;
+            next_pc = core::ptr::read_volatile((base_save - 16) as *const u32);
+            sp = core::ptr::read_volatile((base_save - 12) as *const u32);
+        }
+
+        let adj_pc = process_pc(pc);
+
+        if !is_executable(adj_pc) {
+            corrupted = true;
+            break;
+        }
+        if !is_sane_sp(sp) {
+            corrupted = true;
+            break;
+        }
+
+        print_bt_entry(w, adj_pc, sp);
+    }
+
+    if corrupted {
+        let _ = writeln!(w, "|<-CORRUPTED");
+    }
+}
+
+extern "C" {
+    /// The real (original) `esp_panic_handler` function, made available
+    /// by the linker's `--wrap` flag. Called at the end of our wrapper
+    /// to perform the normal ESP-IDF panic processing (reset, coredump).
+    /// Takes `void*` which is compatible with `panic_info_t*` (repr(C)).
+    fn __real_esp_panic_handler(info: *const core::ffi::c_void);
+}
+
+/// ESP32 UART0 base address (AHB bus).
+const UART0_BASE: u32 = 0x3FF4_0000;
+/// UART FIFO AHB register — write a byte here to transmit on UART0.
+const UART_FIFO_AHB: *mut u8 = UART0_BASE as *mut u8;
+/// UART Status register — bits 16..23 hold `txfifo_cnt` (0–128).
+const UART_STATUS: *mut u32 = (UART0_BASE + 0x1C) as *mut u32;
+/// Maximum TX FIFO depth on ESP32 UART.
+const UART_TX_FIFO_SIZE: u32 = 128;
+
+/// Writer that outputs directly to UART0 via MMIO register writes.
+///
+/// Safe from any context including panic handler — no OS calls, no locks,
+/// no heap allocation. This is the same approach ESP-IDF's own panic
+/// handler uses for crash output.
+struct CrashWriter;
+
+impl core::fmt::Write for CrashWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &byte in s.as_bytes() {
+            // Wait for TX FIFO to have room (i.e., not completely full).
+            // SAFETY: UART register MMIO is safe from any context —
+            // no OS calls, no locks, no heap. In the worst case
+            // (corrupted registers or dead UART), we spin forever,
+            // which is acceptable best-effort diagnostic behaviour.
+            unsafe {
+                loop {
+                    let status = core::ptr::read_volatile(UART_STATUS);
+                    let txfifo_cnt = (status >> 16) & 0xFF;
+                    if txfifo_cnt < UART_TX_FIFO_SIZE {
+                        break;
+                    }
+                }
+                core::ptr::write_volatile(UART_FIFO_AHB, byte);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Wrapped `esp_panic_handler` — intercepts ALL crash types (hardware
+/// exceptions AND Rust panics) via linker `--wrap`, dumping a
+/// machine-parseable crash dump optimised for AI agent analysis.
+///
+/// Output format (each section is predictable):
+///
+/// ```text
+/// === CRASH ===
+/// exccause=0 name=IllegalInstruction pc=0x40091100 excvaddr=0x0 ps=0x60730 sp=0x3fffcee0
+/// === REGISTERS ===
+/// a0=0x800d539a a1=0x3fffcee0 a2=0x0 a3=0x0
+/// ...
+/// sar=0x0 exccause=0x0 excvaddr=0x0 lbeg=0x0 lend=0x0 lcount=0x0
+/// === BACKTRACE ===
+/// 0x40091100:0x3fffcee0
+/// 0x800d539a:0x3fffcec0 |<-CORRUPTED
+/// ```
+///
+/// # Safety
+///
+/// Called from ESP-IDF panic context — IRAM may be corrupted, heap may be
+/// inconsistent. This function uses only lock-free volatile reads and raw
+/// UART writes. It must NOT allocate, lock mutexes, or use `format!()`.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref, clippy::cast_sign_loss)]
+pub unsafe extern "C" fn __wrap_esp_panic_handler(info: *const core::ffi::c_void) {
+    use core::fmt::Write;
+
+    let mut w = CrashWriter;
+
+    if !info.is_null() {
+        // SAFETY: checked above that info is non-null. The panic_info_t
+        // pointer is guaranteed valid by ESP-IDF's panic dispatch.
+        let pi = unsafe { &*(info.cast::<PanicInfo>()) };
+
+        if !pi.frame.is_null() {
+            // SAFETY: The frame pointer points to a valid XtExcFrame
+            // pushed by the CPU exception handling.
+            let frame: *const XtExcFrame = pi.frame.cast();
+            // SAFETY: frame is non-null (checked) and points to a
+            // valid XtExcFrame. All field reads are aligned u32 values.
+            let f = unsafe { &*frame };
+
+            let exccause = f.exccause as u32;
+            let pc = f.pc as u32;
+            let excvaddr = f.excvaddr as u32;
+            let ps = f.ps as u32;
+            let sp = f.a1 as u32;
+            let name = exccause_name(exccause);
+
+            let _ = writeln!(&mut w, "=== CRASH ===");
+            let _ = writeln!(
+                &mut w,
+                "exccause={exccause} name={name} pc={pc:#010x} excvaddr={excvaddr:#010x} ps={ps:#010x} sp={sp:#010x}",
+            );
+
+            let _ = writeln!(&mut w, "=== REGISTERS ===");
+            let _ = writeln!(
+                &mut w,
+                "a0={:#010x} a1={:#010x} a2={:#010x} a3={:#010x}",
+                f.a0 as u32, f.a1 as u32, f.a2 as u32, f.a3 as u32,
+            );
+            let _ = writeln!(
+                &mut w,
+                "a4={:#010x} a5={:#010x} a6={:#010x} a7={:#010x}",
+                f.a4 as u32, f.a5 as u32, f.a6 as u32, f.a7 as u32,
+            );
+            let _ = writeln!(
+                &mut w,
+                "a8={:#010x} a9={:#010x} a10={:#010x} a11={:#010x}",
+                f.a8 as u32, f.a9 as u32, f.a10 as u32, f.a11 as u32,
+            );
+            let _ = writeln!(
+                &mut w,
+                "a12={:#010x} a13={:#010x} a14={:#010x} a15={:#010x}",
+                f.a12 as u32, f.a13 as u32, f.a14 as u32, f.a15 as u32,
+            );
+            let _ = writeln!(
+                &mut w,
+                "sar={:#010x} exccause={:#010x} excvaddr={:#010x} lbeg={:#010x} lend={:#010x} lcount={:#010x}",
+                f.sar as u32, f.exccause as u32, f.excvaddr as u32,
+                f.lbeg as u32, f.lend as u32, f.lcount as u32,
+            );
+
+            // Backtrace
+            let _ = writeln!(&mut w, "=== BACKTRACE ===");
+            do_backtrace(&mut w, frame);
+        }
+    }
+
+    // Dump diagnostic black box events
+    diag::black_box::dump(&mut w);
+    // Dump all registered thread stack watermarks
+    diag::stack_monitor::emergency_dump(&mut w);
+
+    // End-of-dump marker — used by extract_crash_section_from_log() to
+    // locate the boundary between our diagnostic output and any secondary
+    // crash (e.g. lwIP assert from __real_esp_panic_handler).
+    let _ = writeln!(&mut w, "!!! EXCEPTION END !!!");
+
+    // Call the real ESP-IDF panic handler (performs reset, coredump, etc.)
+    // SAFETY: __real_esp_panic_handler is the original C panic handler.
+    // It is safe to call from panic context as it only saves state and resets.
+    unsafe {
+        __real_esp_panic_handler(info);
+    }
+}
