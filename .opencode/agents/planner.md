@@ -101,19 +101,44 @@ Identify exact files to modify or create:
 - Check `src/` module layout: `domain/`, `application/`, `infrastructure/`, `interface/`
 - Identify which layer(s) are affected (domain = pure logic, infrastructure = hardware)
 - List Rust modules, types, and functions affected
-
 ### Step 4: Acceptance Criteria
+
 Write testable, verifiable criteria. Each AC must have:
 - Unique ID (`AC-001`, `AC-002`, ...)
 - Clear description (what behavior is expected)
-- Verification method: `automated` (cargo test), `manual` (user confirms on hardware), or `inspection` (code review)
-- Always add smoke test on real ESP32 with flashing and monitoring for at least 30 s for crashes and core panics
-- Whenever possible add human check of real physical world events, involving asking the user: does onboard LED really blinks? Does the stepper motor really rotates etc?
+- Verification method: from this set (visit orchestrator/Validator for execution):
+  - `automated` — host unit test via `scripts/build.sh test`
+  - `integration` — automated Python script on real ESP32 (e.g., `scripts/ble_serial_test.py`)
+  - `manual` — human confirms physical-world event via user polling
+  - `inspection` — code review only
+- Always add smoke test on real ESP32 with flashing and monitoring for at least 30 s
+- Whenever possible add human check of real physical world events
 
-The **ultimate proof** of correctness is the firmware running on a real ESP32, with physical-world events confirmed by the user. Host tests and code inspection are useful shortcuts, but hardware validation is the gold standard. Whenever feasible, move validation toward real hardware.
+The **ultimate proof** of correctness is the firmware running on a real
+ESP32, with physical-world events confirmed by the user. Host tests and
+code inspection are useful shortcuts, but hardware validation is the
+gold standard. Whenever feasible, move validation toward real hardware.
 
-**Good AC**: "When `compute_ramp(100, &config)` is called, the returned vector has exactly 100 elements and all intervals are between `min_interval_us` and `max_interval_us`"
-**Bad AC**: "Ramp works properly" (not testable)
+**Prefer stronger methods for hardware-touching behavior:**
+- Stepper movement → `manual` (human confirms rotation direction)
+- BLE connection → `integration` (`scripts/ble_serial_test.py`)
+- LED blinking → `manual` (human confirms pattern)
+- Pure computation → `automated` (host test)
+
+Example AC:
+```yaml
+- id: AC-001
+  description: "When `compute_ramp(100, &config)` is called, the returned
+    vector has exactly 100 elements and all intervals are between
+    `min_interval_us` and `max_interval_us`"
+  verification_method: automated
+```
+
+Bad AC:
+```yaml
+- id: AC-002
+  description: "Ramp works properly"  # not testable
+```
 
 ### Step 5: Dependencies & Risks
 - **Modules**: Rust modules to add, modify, or delete

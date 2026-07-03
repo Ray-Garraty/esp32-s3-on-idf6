@@ -65,9 +65,9 @@ Before each investigation, read relevant resources:
 
 | Resource | When |
 |----------|------|
-| `protocols/embedded_boot_crash.md` | **ALWAYS** — mandatory S1–S5 protocol |
-| `protocols/heap_corruption.md` | When heap corruption suspected |
-| `protocols/stack_overflow.md` | When stack overflow suspected |
+| `docs/protocols/embedded_boot_crash.md` | **ALWAYS** — mandatory S1–S5 protocol |
+| `docs/protocols/heap_corruption.md` | When heap corruption suspected |
+| `docs/protocols/stack_overflow.md` | When stack overflow suspected |
 | `docs/lessons_learned.yaml` | **ALWAYS** — check for known patterns |
 | `AGENTS.md` | Build commands, golden rule, ESP32 specifics |
 | `scripts/crash_analyzer.py` | **ALWAYS** — run on crash dump first |

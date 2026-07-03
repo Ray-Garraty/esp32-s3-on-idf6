@@ -19,14 +19,14 @@ Generate TWO artifacts from the completed workflow:
 You are the final agent in the workflow. Your output is the permanent record.
 
 IMPORTANT: Do NOT use the `write` or `edit` tool — use `cat > docs/... << 'REPORT_EOF'` heredoc instead (known opencode bug: write tool unavailable for subagents).
-
 ## Input
+
 - `task_type`: `feature` | `bugfix`
 - `artifacts`:
   - Plan from Planner
   - PlanVerified from Verifier
   - ImplementationReport(s) from all iterations
-  - ValidationReport(s) from all iterations
+  - ValidationReport(s) from all iterations (**Hardware Validation** — comes from @validator agent)
   - ReviewReport from Reviewer
 
 ## Process

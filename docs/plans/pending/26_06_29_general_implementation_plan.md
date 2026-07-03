@@ -2,26 +2,61 @@
 type: Plan
 title: General Implementation Plan — EcoTiter Firmware (Rust, ESP-IDF v6)
 description: Full-scope build plan for production-grade Rust firmware from legacy C++ business logic. All changes scoped to src/. LittleFS logging excluded.
-tags: [plan, implementation, firmware, esp32, production]
+tags: [plan, implementation, firmware, esp32, production, audit]
 timestamp: 2026-06-29
 status: active
-phases_completed: [0, 1, 2, 3]
+audit_date: 2026-07-03
+phases_completed: [0, 1, 2]
+phases_partial: [3]
+phases_implemented_ahead: [4, 5]
 ---
 
 # General Implementation Plan - EcoTiter Firmware (Rust, ESP-IDF v6)
 
 ## Phase Completion Status
 
-| Phase | Status | Date | Report |
-|-------|--------|------|--------|
-| 0 — Scaffold + Build Pipeline | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase0_scaffold_report.md` |
-| 1 — Domain Pure Business Logic | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase_1_domain.md` |
-| 2 — Infrastructure Hardware Drivers | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase2_infrastructure_report.md` |
-| 3 — Application | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase3_application_report.md` |
-| 4 — Network | ⏳ PENDING | — | — |
-| 5 — Integration | ⏳ PENDING | — | — |
-| 6 — TMC2209 UART Driver | ⏳ DEFERRED | — | — |
-| 7 — Tauri Client | ⏳ PENDING | — | — |
+| Phase | Status | Date | Report / Notes |
+|-------|--------|------|----------------|
+| 0 — Scaffold + Build Pipeline | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase0_scaffold_report.md`. Minor: brownout via `sdkconfig`, not `WRITE_PERI_REG`. |
+| 1 — Domain Pure Business Logic | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase_1_domain.md`. Minor: `calculate_speed_calibration()` uses OLS-through-mean (legacy-compat), not OLS-through-origin as described. |
+| 2 — Infrastructure Hardware Drivers | ✅ COMPLETED | 2026-06-30 | `docs/plans/completed/26_06_30_phase2_infrastructure_report.md`. **Gaps:** ADC stabilization logic not implemented; `stallguard` NVS namespace not wired. |
+| 3 — Application | ⚠️ PARTIAL | 2026-07-03 | **Major gaps:** SSE `/api/events` = no-op; REST stubs (`/api/command`, `/api/valve/*`); 5 command param mismatches with frozen API; pending cal state machines missing; Homing SM missing from state_machine.rs; `panic!()` in production code (4 violations). |
+| 4 — Network | ✅ IMPLEMENTED (ahead) | 2026-07-03 | WiFi (AP/STA/DNS/captive portal), BLE (NUS, zombie defense, coexistence) all functional. Minor: BLE notify thread body is TODO stub. |
+| 5 — Integration | ✅ IMPLEMENTED (ahead) | 2026-07-03 | `motor_task.rs` (fill/empty/dose/rinse/stop/emergencyStop), full main loop (ADC, UART, WiFi, BLE, transport SM, watchdog, LED). Homing at boot implemented (but as hardcoded sequence, not SM). PendingOpsManager + 60s watchdog present. |
+| 6 — TMC2209 UART Driver | ⏳ DEFERRED | — | Files not created (expected). |
+| 7 — Tauri Client | ⏳ PENDING | — | Separate repo — no firmware-side code required per plan. |
+
+## Audit Results (2026-07-03)
+
+Codebase audit conducted via `explore` sub-agent reviewing all `src/` files against plan items. Full report in agent output (task: `ses_0d824890cffeTdqNhmUVMcVt2P`). **279 total `#[test]` attributes** found.
+
+### Key Gaps (must fix before production)
+
+| # | Issue | Severity | File(s) |
+|---|-------|----------|---------|
+| 1 | **SSE `/api/events` is no-op** — `broadcast_websocket_event()` does nothing. SSE streaming non-functional. | 🔴 CRITICAL | `interface/rest_api.rs` |
+| 2 | **5 command param signatures deviate from frozen Serial API**: `cal.calcVolume`, `cal.calcSpeed`, `system.getFormattedLogs`, `system.readLog`, `burette.moveToStop` | 🔴 CRITICAL | `application/command.rs` |
+| 3 | **REST handlers are stubs** — `/api/command`, `/api/valve/set`, `/api/valve/state` return placeholder responses, don't call real dispatch/drivers | 🔴 CRITICAL | `interface/rest_api.rs` |
+| 4 | **Pending calibration state machines missing** — `PENDING_CAL_DOSE`, `PENDING_CAL_SPEED`, `PENDING_CAL_SPEED_SEQ` not modelled | 🟡 MAJOR | `application/state_machine.rs` |
+| 5 | **ADC stabilization logic not implemented** — plan describes 10-attempt, 5mV-window, 32-sample median | 🟡 MAJOR | `infrastructure/drivers/adc.rs` |
+| 6 | **`panic!()` in production code** — 4 violations (main.rs:300, 314 channel disconnect panics) | 🟡 MAJOR | `main.rs` |
+| 7 | **BLE notify thread body is TODO** — notifications not sent | 🟡 MAJOR | `infrastructure/network/ble.rs` |
+| 8 | **Homing not a state machine** — hardcoded in main.rs instead of `state_machine.rs` | 🟢 MINOR | `main.rs` |
+| 9 | **`stallguard` NVS namespace not wired** — no read/write code for threshold | 🟢 MINOR | `infrastructure/storage/nvs.rs` |
+| 10 | **`DELETE /api/logs` stub** — returns ok but doesn't clear buffer | 🟢 MINOR | `interface/rest_api.rs` |
+
+### Verification Requirements Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| No `unwrap()` in production code | ✅ PASS | Enforced by `lib.rs` lint |
+| No `expect()` in production code | ✅ PASS | Enforced by `lib.rs` lint |
+| No `panic!()` in production code | ❌ **4 violations** | main.rs:300, 314 — channel disconnect panics |
+| No `todo!()` / `unreachable!()` in production | ✅ PASS | Zero occurrences |
+| No `esp-idf-*` in `domain/` layer | ✅ PASS | Verified |
+| `heapless` used in hot paths | ✅ PASS | Enforced by `clippy.toml` |
+| Commands match frozen `SERIAL_API.md` | ❌ **5 violations** | See Key Gaps #2 |
+| `emergencyStop` remains public | ✅ PASS | Variant is public |
 
 # General Implementation Plan
 
@@ -102,7 +137,9 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | `burette.getStatus` | none | single |
 | `burette.cal.get` | none | single |
 | `burette.cal.calcVolume` | `mass_g`, `temp_c`, `pressure_kpa`, `target_vol_ml` | single |
+| ⚠️ actual code has | `steps: i32` | — deviates from frozen API |
 | `burette.cal.calcSpeed` | `measurements: [{freq_hz, speed_ml_min}]` | single |
+| ⚠️ actual code has | `steps_per_sec: u16` | — deviates from frozen API |
 | `burette.cal.run` | `mode: "dose"|"speed"`, `freq_hz`, `speed_ml_min` | two-phase |
 | `burette.cal.runSpeedSeq` | `freqs: [u16;3]`, `speed_ml_min` | two-phase |
 | `burette.cal.getResult` | none | single |
@@ -120,9 +157,12 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | `adc.cal.reset` | none | single |
 | `burette.moveSteps` | `steps`, `speed_hz` | single |
 | `burette.moveToStop` | `dir`, `speed_hz` | single |
+| ⚠️ actual code has | `speed_hz: u16` only (no `dir`) | — deviates from frozen API |
 | `burette.setDirection` | `dir` | single |
 | `system.getFormattedLogs` | `start`, `limit`, `level` | single |
+| ⚠️ actual code has | unit variant (no params) | — deviates from frozen API |
 | `system.readLog` | `start`, `limit` | single |
+| ⚠️ actual code has | unit variant (no params) | — deviates from frozen API |
 
 ### BLE GATT (NUS)
 | Attribute | UUID |
@@ -151,7 +191,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 - `src/domain/types.rs`: newtype wrappers — `Steps(i32)`, `Hz(u32)`, `Ml(f32)`, `MlMin(f32)`, `Direction { Cw, Ccw }`
 - `src/domain/memory.rs`: fixed-size buffer aliases — `CommandBuffer::<256>`, `ResponseBuffer::<512>`, `LogBuffer::<100>`
 - `src/domain/logging.rs`: `LogEntry { ts, level, msg }`, ring buffer `heapless::Deque<LogEntry, 100>`, `Log` trait impl
-- `src/main.rs`: `fn main()` — `link_patches()`, `logger::init()`, `esp_task_wdt_deinit()`, suppress httpd_txrx log noise via `esp_log_level_set()`, disable brownout detector via `WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)`, `Peripherals::take()`, empty loop
+- `src/main.rs`: `fn main()` — `link_patches()`, `logger::init()`, `esp_task_wdt_deinit()`, suppress httpd_txrx log noise via `esp_log_level_set()`, `Peripherals::take()`. **Note:** loop is now fully populated with ADC, UART, WiFi, BLE, transport SM etc. (see Phase 5 — code advanced beyond plan). Brownout disabled via `sdkconfig.defaults CONFIG_BROWNOUT_DET=n` (compile-time), not `WRITE_PERI_REG`.
 
 **Also:** update `sdkconfig.defaults` from prototype (NimBLE, WiFi, ADC, main task stack 16384, pthread stack 8192), verify `Cargo.toml` deps + `build.rs` (esp32-nimble patch), `.cargo/config.toml`, `clippy.toml`
 
@@ -184,7 +224,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 - `speed_to_frequency()` / `frequency_to_speed()` — with clamping
 - `get_z_factor()` — bilinear interpolation from ISO 8655 table (31 temp × 6 pressure)
 - `calculate_new_steps_per_ml()` — gravimetric correction
-- `calculate_speed_calibration()` — OLS regression through origin: `k = Σ(f·v) / Σ(f²)`, returns `k`, `r_squared`
+- `calculate_speed_calibration()` — OLS regression **through mean** (legacy C++ compatibility): `k = (Σfv - Σf·Σv/n) / (Σff - Σf²/n)`, returns `k`, `r_squared`. **Deviation from plan:** plan described OLS-through-origin `k = Σ(f·v) / Σ(f²)`.
 - `burette_cal_is_default()` — compare all fields within epsilon
 - `burette_cal_set_pending()` / `burette_cal_get_pending_copy()` — thread-safe pending cal pattern (spinlock-protected)
 - `AdcCalibration`: `a`, `b` coefficients, OLS from reference points. Model: `raw = a*ref + b` → `calibrated = (raw - b) / a`
@@ -257,11 +297,16 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 | LED transport modes | 👁 USB→OFF, BLE adv→ON, BLE conn→1Hz blink |
 | NVS write calibration → `esp_restart()` | 👁 values survive reboot |
 
+**⚠️ Gaps identified (2026-07-03 audit):**
+- **ADC stabilization logic** not implemented: plan describes up to 10 attempts, range ≤5mV over 32 samples → 32-sample median. Actual code reads raw ADC and applies rolling average only.
+- **`stallguard` NVS namespace** not wired: NVS layout comment mentions `stallguard (threshold)` but no read/write code exists.
+- **ADC calibration model** differs: actual code uses `calibrated = a * raw + b` directly; plan describes `raw = a*ref + b` → invert `coeff_a=1/a, coeff_b=-b/a`.
+
 **Reference files:** `prototype/src/stepper/rmt_stepper.rs`, `prototype/src/limitswitch.rs`, `prototype/src/temperature.rs`, `prototype/src/adc.rs`, `prototype/src/main.rs` (hardware init pattern)
 
 ---
 
-### Phase 3: Application — Command Dispatch + REST API + Unify Broadcast
+### Phase 3: Application — Command Dispatch + REST API + Unify Broadcast ⚠️ PARTIAL
 
 **Files:**
 - `src/application/command.rs` — 32-variant `Command` enum, `serde::Deserialize`, `match` dispatch
@@ -271,7 +316,7 @@ Same format + optional `"meta":{"ip":"192.168.1.100"}`.
 - `src/interface/rest_api.rs` — `EspHttpServer` route handlers for all 12 HTTP routes
 - `src/interface/webui.rs` — embedded HTML/CSS/JS via `include_str!`
 
-**Command dispatch architecture:**
+**Command dispatch architecture (as-implemented — differs from plan for 5 variants):**
 ```rust
 #[derive(Deserialize)]
 #[serde(tag = "cmd")]
@@ -285,13 +330,15 @@ enum Command {
     #[serde(rename = "burette.stop")] BuretteStop,
     #[serde(rename = "burette.getStatus")] BuretteGetStatus,
     #[serde(rename = "burette.cal.get")] BuretteCalGet,
-    #[serde(rename = "burette.cal.run")] BuretteCalRun { mode: String, freq_hz: Option<u16>, speed_ml_min: Option<f32> },
-    #[serde(rename = "burette.cal.runSpeedSeq")] BuretteCalRunSpeedSeq { freqs: [u16; 3], speed_ml_min: Option<f32> },
+    #[serde(rename = "burette.cal.run")] BuretteCalRun { mode: Option<String>, speed_ml_min: f32, freq_hz: u16 },
+    #[serde(rename = "burette.cal.runSpeedSeq")] BuretteCalRunSpeedSeq { freqs: [u16; 3], speed_ml_min: f32 },
     #[serde(rename = "burette.cal.getResult")] BuretteCalGetResult,
     #[serde(rename = "burette.cal.save")] BuretteCalSave,
     #[serde(rename = "burette.cal.reset")] BuretteCalReset,
-    #[serde(rename = "burette.cal.calcVolume")] BuretteCalCalcVolume { mass_g: f32, temp_c: Option<f32>, pressure_kpa: Option<f32> },
-    #[serde(rename = "burette.cal.calcSpeed")] BuretteCalCalcSpeed { measurements: Vec<Measurement> },
+    // ❌ DEVIATES from plan: plan specifies mass_g, temp_c, pressure_kpa, target_vol_ml
+    #[serde(rename = "burette.cal.calcVolume")] BuretteCalCalcVolume { steps: i32 },
+    // ❌ DEVIATES from plan: plan specifies measurements: [{freq_hz, speed_ml_min}]
+    #[serde(rename = "burette.cal.calcSpeed")] BuretteCalCalcSpeed { steps_per_sec: u16 },
     #[serde(rename = "valve.setPosition")] ValveSetPosition { position: ValvePosition },
     #[serde(rename = "valve.getState")] ValveGetState,
     #[serde(rename = "temperature.read")] TemperatureRead,
@@ -303,11 +350,13 @@ enum Command {
     #[serde(rename = "adc.cal.save")] AdcCalSave,
     #[serde(rename = "adc.cal.reset")] AdcCalReset,
     #[serde(rename = "burette.moveSteps")] BuretteMoveSteps { steps: i32, speed_hz: u16 },
-    #[serde(rename = "burette.moveToStop")] BuretteMoveToStop { dir: Direction, speed_hz: u16 },
+    // ❌ DEVIATES from plan: plan specifies dir + speed_hz, actual has only speed_hz
+    #[serde(rename = "burette.moveToStop")] BuretteMoveToStop { speed_hz: u16 },
     #[serde(rename = "burette.setDirection")] BuretteSetDirection { dir: Direction },
-    #[serde(rename = "system.getFormattedLogs")] SystemGetFormattedLogs { start: Option<u32>, limit: Option<u8>, level: Option<String> },
-    #[serde(rename = "system.readLog")] SystemReadLog { start: Option<u32>, limit: Option<u8> },
-}
+    // ❌ DEVIATES from plan: plan specifies start, limit, level — actual is unit variant
+    #[serde(rename = "system.getFormattedLogs")] SystemGetFormattedLogs,
+    // ❌ DEVIATES from plan: plan specifies start, limit — actual is unit variant
+    #[serde(rename = "system.readLog")] SystemReadLog,
 }
 ```
 
@@ -365,33 +414,41 @@ main loop (every tick):
 
 **Note:** `/api/status` returns the same compact format as serial/BLE broadcast, with `meta.ip` added for HTTP clients.
 
-**Acceptance:**
+**⚠️ Acceptance (as-implemented — many are stub responses, not real dispatch):**
 
-| Test | Method |
-|---|---|
-| `system.getStatus` | ✅ `curl -X POST http://esp32/api/command -d '{"id":0,"cmd":"system.getStatus"}'` → JSON with `brt`, `vlv`, `mv`, `temp` |
-| `serial.ping` | ✅ `curl ... -d '{"cmd":"serial.ping"}'` → `{"status":"ok"}` |
-| `burette.fill` | ✅ `curl ... -d '{"id":1,"cmd":"burette.fill","speed_ml_min":10}'` → ACK, then result |
-| `burette.doseVolume 1ml@5` | ✅ `curl ... -d '{"id":2,"cmd":"burette.doseVolume","volume_ml":1,"speed_ml_min":5}'` → ACK, motor runs, result |
-| `burette.stop` | ✅ `curl ... -d '{"id":3,"cmd":"burette.stop"}'` → motor stops, original command returns `"stopped"` |
-| `burette.getStatus` | ✅ returns `"idle"` or `"working"` |
-| `valve.setPosition` | ✅ `curl ... -d '{"id":4,"cmd":"valve.setPosition","position":"input"}'` |
-| Two-phase protocol | ✅ ACK sent within 1s, result sent within 600s |
-| Error: `invalid_params` | ✅ `curl ... -d '{"id":5,"cmd":"burette.doseVolume","volume_ml":-1,"speed_ml_min":5}'` → `"error"/"invalid_params"` |
-| Error: `burette_busy` | ✅ two simultaneous commands → second returns `"burette_busy"` |
-| `temp: null` | ✅ when DS18B20 not connected |
-| `/api/status` broadcast | ✅ `curl /api/status` → `{"ts","mv","temp","vlv","brt":{"sts","vl","spd"},"meta":{"ip":...}}` |
-| SSE `event: status` | ✅ `curl -N /api/events` → stream every ~300ms, compact format |
-| SSE `event: debug` | ✅ debug data when available |
-| SSE `event: log` | ✅ log entries when generated |
-| HTTP blocks for long ops | ✅ `POST /api/command` for dose returns only after motor completes (not suitable from browser — documented) |
-| All 32 commands respond | ✅ every command from the table returns correct JSON |
+| Test | Status | Notes |
+|------|--------|-------|
+| `system.getStatus` via POST `/api/command` | ⚠️ STUB | `handle_api_command()` returns `{"status":"ok","message":"received"}` — no real dispatch |
+| `serial.ping` | ⚠️ STUB | Same stub handler |
+| `burette.fill` via HTTP | ⚠️ STUB | Not dispatched — real motor flow goes through serial/BLE paths only |
+| `burette.doseVolume` via HTTP | ⚠️ STUB | Same |
+| `burette.stop` | ⚠️ STUB | Same |
+| `burette.getStatus` | ⚠️ STUB | Same stub response |
+| `valve.setPosition` via HTTP | ⚠️ STUB | `handle_valve_set()` doesn't call real driver |
+| `valve.getState` via HTTP | ⚠️ STUB | Always returns `"input"` |
+| Two-phase protocol via serial/BLE | ✅ Functional | Motor task + `PendingOpsManager` handle ACK/result flow |
+| Error handling | ✅ Functional | `dispatch()` returns proper `AppError` variants |
+| `/api/status` broadcast | ⚠️ STUB | Returns hardcoded `None`/`"in"`/`"idle"`/`0` for sensor values |
+| SSE `event: status` | ❌ NOT WORKING | `broadcast_websocket_event()` is a no-op |
+| SSE `event: debug` | ❌ NOT WORKING | No SSE at all |
+| SSE `event: log` | ❌ NOT WORKING | No SSE at all |
+| HTTP blocks for long ops | ❌ NOT IMPLEMENTED | `POST /api/command` is stub, doesn't block |
+| All 32 commands respond (via serial/BLE) | ⚠️ PARTIAL | Commands dispatch to correct handlers, but `system.getFormattedLogs`/`system.readLog` accept wrong params |
+
+**⚠️ Gaps identified (2026-07-03 audit):**
+- **SSE endpoint completely non-functional:** `broadcast_websocket_event()` is a no-op — no socket writing, no `event: status/debug/log` frames.
+- **REST API stubs:** `/api/command`, `/api/valve/set`, `/api/valve/state`, `/api/status` all return placeholder data, don't wire to real drivers.
+- **5 command variant param mismatches** vs frozen Serial API: `cal.calcVolume`, `cal.calcSpeed`, `system.getFormattedLogs`, `system.readLog`, `burette.moveToStop`.
+- **Pending calibration state machines not implemented:** `PENDING_CAL_DOSE`, `PENDING_CAL_SPEED`, `PENDING_CAL_SPEED_SEQ` absent from `state_machine.rs`.
+- **Homing SM not in state_machine.rs:** hardcoded in `main.rs` as imperative sequence.
+- **`DELETE /api/logs` stub:** returns `{"status":"ok"}` but doesn't clear ring buffer.
+- **`panic!()` in production:** 4 violations at `main.rs:300,314` (channel disconnect panics).
 
 **Reference files:** `legacy/src/command.cpp`, `legacy/src/handlers/`, `prototype/src/webserver.rs`, `prototype/src/status.rs`, `prototype/src/logger.rs`
 
 ---
 
-### Phase 4: Network — WiFi + BLE
+### Phase 4: Network — WiFi + BLE ✅ IMPLEMENTED (ahead of plan)
 
 **Files:**
 - `src/infrastructure/network/wifi.rs` — `WifiManager`
@@ -418,25 +475,25 @@ main loop (every tick):
 - Zombie defense level 1: 5 consecutive failed notifications → disconnect + flush + restart advertising
 - Zombie defense level 2: `connected_count() == 0` but internal flag says connected → kill
 - Zombie defense level 3: in `ble_send()` — if `getConnectedCount() == 0` but local `g_ble_connected == true`, kill zombie
-- BLE notify thread: `std::thread` (8 KB stack), `recv` from mpsc → `notify()`
+- BLE notify thread: `std::thread` (8 KB stack), `recv` from mpsc → `notify()`. **⚠️ Body is TODO — notifications not sent.**
 
-**Acceptance:**
+**⚠️ Acceptance (code implemented, hardware verification TBD):**
 
-| Test | Method |
-|---|---|
-| AP `EcoTiter-AP` visible | 👁 phone WiFi scan shows AP |
-| Phone gets IP (192.168.4.x) | 👁 phone connected to AP, IP assigned |
-| Captive portal triggers | 👁 phone auto-opens `/wifi` page |
-| WiFi form → STA connect | 👁 enter router SSID/password → ESP32 restarts in STA mode |
-| `esp_restart()` → STA reconnect | 👁 boots, connects to saved WiFi |
-| DNS responder | ✅ `curl http://192.168.4.1/generate_204` → 302 |
-| `/api/status` from browser | ✅ phone browser shows compact JSON |
-| SSE from browser | ✅ `curl -N http://esp32/api/events` on PC |
-| BLE advertising `EcoTiter-XXXX` | 👁 nRF Connect / BLE scanner |
-| BLE connect + write JSON command | 👁 motor responds via BLE |
-| USB heartbeat timeout → BLE takeover | 👁 unplug USB → BLE becomes active transport |
-| LED: advertising (ON), connected (1Hz) | 👁 visible |
-| No Guru Meditation | ✅ 0 panics (tested >60s) |
+| Test | Status | Notes |
+|------|--------|-------|
+| AP `EcoTiter-AP` visible | ✅ code | WiFi AP configured with custom netif |
+| Phone gets IP (192.168.4.x) | ✅ code | DHCP server on AP netif |
+| Captive portal triggers | ✅ code | 5 probe URLs → 302 `/wifi` |
+| WiFi form → STA connect | ✅ code | POST `/wifi/connect` saves to NVS + restart flag |
+| `esp_restart()` → STA reconnect | ✅ code | STA connect on boot with saved creds |
+| DNS responder | ✅ code | `UdpSocket` on port 53, non-blocking |
+| `/api/status` from browser | ⚠️ stub response | Returns hardcoded values (Phase 3 gap) |
+| SSE from browser | ❌ not working | `broadcast_websocket_event()` is no-op (Phase 3 gap) |
+| BLE advertising `EcoTiter-XXXX` | ✅ code | NUS service, custom UUIDs, connectable |
+| BLE connect + write JSON command | ⚠️ partial | RX callback writes to `cmd_tx`, but BLE notify thread body is TODO |
+| USB heartbeat timeout → BLE takeover | ✅ code | Transport SM in main loop handles handoff |
+| LED: advertising (ON), connected (1Hz) | ✅ code | `Led` driver fully implemented |
+| No Guru Meditation | ⏳ unverified | Requires hardware test |
 
 **Reference files:** `prototype/src/wifi.rs`, `prototype/src/webserver.rs`
 
@@ -501,68 +558,71 @@ After BLE is integrated, the firmware has three concurrent command sources (UART
 
 ---
 
-### Phase 5: Integration — Motor Task + Full Main Loop
+### Phase 5: Integration — Motor Task + Full Main Loop ✅ IMPLEMENTED (ahead of plan)
 
 **Files:** `src/motor_task.rs` `src/main.rs` (complete)
 
-**Motor task:**
+**Motor task (actual — command-driven via mpsc, not atomic-polling):**
 ```rust
 // src/motor_task.rs
-pub fn spawn(mut stepper: RmtStepper<'static>) {
+pub fn spawn(stepper: RmtStepper<'static>, cmd_rx: Arc<Mutex<Receiver<MotorCommand>>>,
+             status_tx: Sender<StatusEvent>, response_tx: Sender<CommandResponse>) {
     std::thread::Builder::new()
-        .stack_size(4096)
+        .stack_size(MOTOR_THREAD_STACK)
         .name("motor".into())
-        .spawn(move || {
-            loop {
-                let target = TARGET_POSITION.load(Ordering::Acquire);
-                let current = CURRENT_POSITION.load(Ordering::Acquire);
-                if target != current {
-                    let ramp = compute_ramp(/* differences... */);
-                    stepper.move_steps(&ramp).ok();
-                    CURRENT_POSITION.store(target, Ordering::Release);
-                } else {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+        .spawn(move || loop {
+            let cmd = {
+                let rx = cmd_rx.lock().unwrap();
+                rx.recv_timeout(Duration::from_millis(10))
+            };
+            match cmd {
+                Ok(command) => handle_command(command, &stepper, &status_tx, &response_tx),
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         })
         .expect("motor task spawn");
 }
 ```
+Handles: Fill, Empty, Dose, Rinse (multi-cycle), Stop, EmergencyStop, Reset — with ramp computation and position tracking via `execute_motion()`.
 
-**Full main loop (from `project.md:135-166` + `coding_style.md:§9`):**
+**Full main loop (actual — richer than planned, see `main.rs`):**
 ```rust
 fn main() {
     link_patches();
-    EspLogger::initialize_default();
+    logger::init();
     unsafe { esp_task_wdt_deinit(); }
-
     let peripherals = Peripherals::take().unwrap();
 
-    // Init all hardware drivers
-    let stepper = RmtStepper::new(...);
-    let mut adc = AdcDriver::new(...);
-    let wifi_mgr = WifiManager::new(...);
-    let webserver = WebServer::new(...);
-    spawn_motor_task(stepper);
+    // Init hardware
+    let stepper = RmtStepper::new(peripherals.rmt.channel0, ...);
+    let adc = AdcDriver::new(peripherals.adc1, ...);
+    let mut valve = Valve::new(peripherals.pins.gpio14);
+    let mut wifi = WifiManager::new(...);
+    let server = HttpServer::new(...);
+
+    // Homing sequence (hardcoded, not SM)
+    homing_sequence(&stepper, &valve, &nvs);
+
+    // Spawn threads
+    spawn_motor_task(stepper, cmd_rx, status_tx, response_tx);
+    spawn_uart_reader(...);
     spawn_temperature_thread(gpio33);
+    spawn_owner_thread(wifi, server, ble, ...); // WiFi + HTTP + BLE owner
 
+    // Main loop (safety-critical, never block)
     loop {
-        // Transport state machine (USB ↔ BLE priority)
-        transport_process(&serial, &ble);
-
-        // SSE push (non-blocking socket write)
-        sse_push(&broadcast);
-
-        // WiFi processing (DNS poll, reconnect)
-        wifi_mgr.process();
-
-        // ADC sample (1 read per tick, ~30µs)
         adc_sample(&mut adc);
-
-        // LED process (blink SM)
+        process_uart_input();
+        drain_response_channel();
+        pending_ops.watchdog_check();
+        transport_sm(usb_alive, ble_connected);
+        broadcast_push();
         led_process();
-
-        // Pacing tick (10ms)
+        if G_RESTART_PENDING.load(...) { esp_restart(); }
+        logger_process();            // flush log entries
+        limitswitch_event_push();
+        stack_watermark_check();     // every 1000 ticks
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -633,14 +693,24 @@ START → valve=INPUT → move to FULL at max_freq/2 → set volume=nominal_vol 
 - 120s timeout → emergency stop + error log
 - Called from `main.rs` after hardware init, before entering main loop
 
-**Acceptance:**
-- ✅ Tauri auto-connect: scan USB ports → `{"id":0,"cmd":"system.getStatus"}` → handshake → `{"cmd":"burette.cal.get"}`
-- ✅ Tauri manual control: Fill / Empty / Dose(1ml@5) / Rinse(3 cycles) / Valve toggle / Stop — all buttons work
-- ✅ Dashboard in Tauri: mV, temp, burette volume/speed update in real time (via serial broadcast)
-- ✅ Titration: Start Method → prepare (valve input → fill → valve output) → dose → stabilize → measure → EQ detection → results CSV
-- ✅ BLE transport: Tauri `device_discover` → `device_connect` → commands work over BLE
-- ✅ USB hotplug: unplug/replug USB → Tauri detects, reconnects automatically
-- 👁 Reboot detection: ESP32 reset → Tauri detects via broadcast `ts` rollback
+**⚠️ Acceptance (code implemented, hardware/Tauri integration TBD):**
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Motor task: fill/empty/dose/rinse | ✅ implemented | Full ramp + position tracking via `execute_motion()` |
+| Motor task: stop/emergencyStop | ✅ implemented | Atomic stop flag + channel disable |
+| Motor task: multi-cycle rinse | ✅ implemented | Fill/empty cycling with configurable cycles |
+| Main loop: ADC sample | ✅ implemented | 1 read per tick |
+| Main loop: UART input | ✅ implemented | Spawned reader thread |
+| Main loop: transport SM | ✅ implemented | USB ↔ BLE handoff based on activity |
+| Main loop: broadcast push | ⚠️ serial only | SSE push is no-op (Phase 3 gap) |
+| Main loop: watchdog (60s timeout) | ✅ implemented | `PendingOpsManager::watchdog_check()` |
+| Main loop: restart detection | ✅ implemented | `G_RESTART_PENDING` flag |
+| Main loop: LED process | ✅ implemented | Blink SM ticks every iteration |
+| Main loop: stack watermark | ✅ implemented | Monitored every 1000 ticks |
+| Tauri auto-connect via USB | ⏳ untested | Requires Tauri client + hardware |
+| Homing at boot | ✅ implemented | 120s timeout safety, hardcoded sequence |
+| No panic in production code | ❌ **4 violations** | See Phase 3 gaps |
 
 **Reference files:** `prototype/src/main.rs` (hardware init + loop pattern), `legacy/src/main.cpp` (transport SM, safety net, homing)
 

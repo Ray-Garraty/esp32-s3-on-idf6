@@ -20,11 +20,20 @@ Evaluate code quality, architecture, and conventions. Validator checked correctn
 - `extra_checks` (optional): additional review requirements
 
 ## Process
-
 ### Step 1: Read All Modified Files
+
 Read every file in `implementation_report.modified_files`:
 - Read the full file content
 - Also read related files: state machines affected, error types, test files
+
+**PREREQUISITE**: This step must be after hardware validation. ValidationReport.overall_status must be "pass" or "conditional_pass". Do NOT proceed with review if:
+- Any AC failed (status == "fail")
+- Hardware validation crashed (escalation_target: debugger)
+
+The @validator agent already proved:
+- Host logic works (cargo_test: pass)
+- Hardware validation completed (smoke test passed, integration scripts succeeded)
+- Only remaining step is code quality and architecture review.
 
 ### Step 2: Architecture Review
 Check against project architecture from `docs/refs/project.md`:

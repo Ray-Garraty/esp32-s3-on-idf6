@@ -21,7 +21,7 @@ lessons:
     fix: CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768 (or larger)
     refs:
       - docs/plans/completed/26_07_02_phase5_postmortem.md
-      - protocols/stack_overflow.md
+      - docs/protocols/stack_overflow.md
 
   - id: LL-002
     date: 2026-07-02

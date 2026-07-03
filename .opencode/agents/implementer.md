@@ -52,27 +52,34 @@ Run these commands to verify your changes:
 
 ```bash
 # Host unit tests (all pure logic tests)
-cargo test --lib
+scripts/build.sh test
 
 # Format check
-cargo fmt --all -- --check
+scripts/build.sh fmt
 
 # Clippy (host target) — zero warnings
-cargo clippy -- -D warnings
-```
+scripts/build.sh clippy-host
 
-If the code has xtensa-specific modules:
-```bash
-# Xtensa build
-. /home/vlabe/export-esp.sh && \
-  cargo +esp build --target xtensa-esp32-espidf
+# Xtensa clippy — zero warnings
+scripts/build.sh clippy
 
-# Xtensa clippy
-. /home/vlabe/export-esp.sh && \
-  cargo +esp clippy --target xtensa-esp32-espidf -- -D warnings
+# Xtensa build — verify compilation for target
+scripts/build.sh
 ```
 
 Fix any failures BEFORE reporting.
+
+You are responsible for:
+- Host unit tests, fmt, clippy
+- Xtensa clippy and build verification
+
+You are NOT responsible for:
+- Flashing the device (Validator does this via `scripts/build.sh flash`)
+- Running integration scripts on hardware (Validator does this)
+- Manual hardware testing (Validator polls the user)
+
+If all checks pass, report `cargo_test: pass` and `cargo_xtensa_build: pass`.
+Validator will take it from there with real hardware.
 
 ### Step 4: Generate Implementation Report
 

@@ -135,43 +135,43 @@ Task(@implementer, "Implement this plan:\n<PlanVerified YAML from step 2>")
 
 **If task_type: bugfix** — Append instruction: "MANDATORY: Add a regression test that reproduces the original bug."
 
-### Step 4: Validation
+### Step 4: Hardware Validation
 
-Invoke `validator` with plan and implementation report:
+Invoke `validator` — the ONLY agent that touches hardware:
 
 ```
-Task(@validator, "Validate this implementation:\nPlan: <Plan YAML>\nImplementation: <ImplementationReport YAML>")
+Task(@validator, "Validate on real ESP32:\nPlan: <Plan YAML>\nImplementation: <ImplementationReport YAML>")
 ```
 
-**If fail**: pass issues to implementer for rework (max 3 times).
+The `@validator` agent will:
+- Build & flash firmware (via `scripts/build.sh`)
+- Run 30s smoke test (watch for crashes)
+- Execute integration scripts on the device
+- Poll the user via `question` tool for manual ACs
+- Return `ValidationReport` with physical evidence
 
-### Step 4.5: Hardware Validation
+**Do NOT duplicate hardware validation yourself.** If you catch yourself
+about to run `scripts/build.sh flash` or ask user about physical events — STOP.
+That's `@validator`'s job.
 
-For each AC in the ValidationReport, branch by `verification_method`:
+### Step 4a: Handle Validation Verdict
 
-#### If `integration` (automated script on real ESP32)
-Run the test script specified in `user_instructions`:
-1. Build firmware: `. /home/vlabe/export-esp.sh && cargo +esp build --target xtensa-esp32-espidf`
-2. Execute: `python3 scripts/<test_script.py>`
-3. Capture exit code and output as evidence
-4. Record PASS/FAIL
+| `overall_status` | Action |
+|---|---|
+| `pass` | Proceed to Step 5 (Code Review) |
+| `conditional_pass` | Present deferred ACs to user via `question`: "Commit with deferred ACs, or hold for hardware test?" |
+| `fail` | Pass `issues` to `@implementer` for rework (max 3 iterations) |
+| `escalation_needed: true`, `escalation_target: debugger` | Proceed to Step 4b |
 
-#### If `manual` (human observer required)
-The AC will have `requires_hardware: true` with `user_instructions`:
-1. Present the instructions to the user via the question tool with exact step-by-step reproduction and pass/fail criteria
-2. Await user confirmation and description of observed behaviour ("motor spun CW for 2 seconds", "LED blinked 3 times")
-3. Record user's own words as evidence
-4. If user declines → mark as `deferred` with reason
+### Step 4b: Crash Investigation
 
-### Step 4.6: Crash Investigation
-
-If hardware validation reveals a crash (Guru Meditation, WDT reset, Rust panic,
-stack overflow, boot failure), invoke @debugger for systematic root cause analysis:
+If Validator's smoke test crashed (ValidationReport has `escalation_target: debugger`),
+invoke @debugger for systematic root cause analysis:
 
 ```
 Task(@debugger, "ROOT CAUSE ANALYSIS — edits allowed for diagnostics
 Crash dump:
-<paste Guru Meditation or Rust panic dump>
+<crash_dump from ValidationReport>
 known_good: <commit hash of last known-good build>")
 ```
 
@@ -181,7 +181,7 @@ modify sdkconfig, create smoke test binaries, etc.
 
 The @debugger agent will:
 1. Run `scripts/crash_analyzer.py` on the crash dump
-2. Execute S1–S5 Occam's Razor Protocol (see `protocols/embedded_boot_crash.md`)
+2. Execute S1–S5 Occam's Razor Protocol (see `docs/protocols/embedded_boot_crash.md`)
 3. Isolate root cause via systematic elimination
 4. If trivial fix (<10 lines) — apply it directly with `[INVESTIGATION]` markers
 5. If complex fix — produce a CrashReport with spec for @implementer
@@ -191,6 +191,9 @@ The @debugger agent will:
 **Do NOT** attempt to diagnose the crash yourself — delegate entirely to @debugger.
 
 ### Step 5: Code Review
+
+**PREREQUISITE**: ValidationReport.overall_status must be "pass" or "conditional_pass".
+Do NOT invoke @reviewer if validation failed — fix code first.
 
 Invoke `reviewer` with implementation and validation reports:
 
@@ -240,9 +243,9 @@ Present the commit message and completion summary. Ask if the user wants to proc
 | @planner   | User's task description |
 | @verifier  | Plan YAML from @planner |
 | @implementer | PlanVerified YAML + User approval |
-| @validator | ImplementationReport from @implementer |
-| @reviewer  | ValidationReport from @validator |
+| @validator | ImplementationReport (cargo_test: pass, cargo_xtensa_build: pass) + PlanVerified |
+| @reviewer  | ValidationReport (overall_status: pass or conditional_pass) + ImplementationReport |
 | @reporter  | ALL previous artifacts |
-| @debugger  | Crash dump or symptom description (see Step 4.6 for calling convention) |
+| @debugger  | ValidationReport (escalation_target: debugger) OR crash dump |
 
 ❌ If prerequisite is missing → DO NOT CALL the agent.
