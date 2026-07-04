@@ -53,6 +53,7 @@ fn main() {
     use ecotiter_fw::domain::types::{Direction, TransportMode, ValvePosition};
     use ecotiter_fw::infrastructure::drivers::stepper::RmtStepper;
     use ecotiter_fw::infrastructure::drivers::valve::Valve;
+    use ecotiter_fw::infrastructure::network::http_server;
     use ecotiter_fw::infrastructure::network::http_server::HttpServer;
     use ecotiter_fw::infrastructure::network::wifi::WifiManager;
     use ecotiter_fw::infrastructure::storage::nvs;
@@ -312,11 +313,20 @@ fn main() {
                 }
                 drop(wifi_mgr_for_init);
 
-                match HttpServer::new(wifi_mgr_for_http) {
-                    Ok(_) => info!("HTTP: server started"),
-                    Err(e) => log::error!("HTTP: server init failed: {e:?}"),
-                }
+                let http_ok = match HttpServer::new(wifi_mgr_for_http) {
+                    Ok(_) => {
+                        let watermark = ecotiter_fw::esp_safe::stack_watermark();
+                        info!("HTTP: server started (stack watermark: {watermark} bytes)");
+                        true
+                    }
+                    Err(e) => {
+                        log::error!("HTTP: server init failed: {e:?}");
+                        false
+                    }
+                };
                 diag::heap_snapshot::snapshot("http_started");
+                ecotiter_fw::infrastructure::network::http_server::G_HTTP_SERVER_ALIVE
+                    .store(http_ok, core::sync::atomic::Ordering::Release);
 
                 // Init BLE after HTTP (DRAM still mostly pristine)
                 match ble_mgr.init() {
@@ -325,9 +335,6 @@ fn main() {
                 }
                 diag::heap_snapshot::snapshot("ble_init");
                 let _ = ble_mgr_tx.send(ble_mgr);
-
-                let watermark = ecotiter_fw::esp_safe::stack_watermark();
-                info!("Network owner: HttpServer started (stack watermark: {watermark} bytes)");
 
                 loop {
                     std::thread::sleep(Duration::from_secs(10));
@@ -386,8 +393,12 @@ fn main() {
 
     loop {
         diag::tick_watchdog::tick_begin();
+        #[cfg(not(test))]
+        let _loop_start = ecotiter_fw::esp_safe::micros();
         // Read ADC (non-blocking, ~30 µs)
         if let Ok(mv) = adc.read_raw_mv() {
+            // Advance scheduler tick counter (used by should_broadcast())
+            ecotiter_fw::application::scheduler::tick(config::MAIN_LOOP_TICK_MS);
             tick_count += 1;
             let ts_ms = tick_count * config::MAIN_LOOP_TICK_MS;
 
@@ -546,9 +557,11 @@ fn main() {
                     },
                 };
                 let d = ecotiter_fw::interface::broadcast::serialize_broadcast(&event);
-                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
-                    "status", &d,
-                );
+                if http_server::G_HTTP_SERVER_ALIVE.load(Ordering::Acquire) {
+                    ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                        "status", &d,
+                    );
+                }
             }
 
             // debug broadcast
@@ -569,9 +582,11 @@ fn main() {
                     r#""buretteSteps":{{"taken":{}}}}}"#,
                     motor_state::CURRENT_POSITION.load(Ordering::Acquire),
                 );
-                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
-                    "debug", &d,
-                );
+                if http_server::G_HTTP_SERVER_ALIVE.load(Ordering::Acquire) {
+                    ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                        "debug", &d,
+                    );
+                }
             }
 
             // limitsw — periodic push (~1s)
@@ -581,9 +596,11 @@ fn main() {
                 let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
                     heapless::String::new();
                 let _ = write!(d, r#"{{"full":{full},"empty":{empty}}}"#);
-                ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
-                    "limitsw", &d,
-                );
+                if http_server::G_HTTP_SERVER_ALIVE.load(Ordering::Acquire) {
+                    ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                        "limitsw", &d,
+                    );
+                }
                 // Clear flags after reading
                 STOP_FULL.store(false, Ordering::Release);
                 STOP_EMPTY.store(false, Ordering::Release);
@@ -640,6 +657,17 @@ fn main() {
                     );
                 }
                 diag::stack_monitor::check_watermark(diag::stack_monitor::MAIN);
+            }
+
+            #[cfg(not(test))]
+            {
+                let elapsed = ecotiter_fw::esp_safe::micros().wrapping_sub(_loop_start);
+                if elapsed > config::MAIN_LOOP_TICK_MS * 1000 * 2 {
+                    log::warn!(
+                        "Main loop body: {elapsed}µs (limit: {}ms)",
+                        config::MAIN_LOOP_TICK_MS * 2
+                    );
+                }
             }
         }
 

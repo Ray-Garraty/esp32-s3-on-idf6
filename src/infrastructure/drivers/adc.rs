@@ -75,7 +75,7 @@ impl AdcDriver {
         let adc_driver = Box::new(EspDriver::new(adc)?);
         let adc_ref: &'static EspDriver = Box::leak(adc_driver);
 
-        let channel = EspChannel::new(
+        let mut channel = EspChannel::new(
             adc_ref,
             pin,
             &AdcChannelConfig {
@@ -83,6 +83,22 @@ impl AdcDriver {
                 ..Default::default()
             },
         )?;
+
+        // Diagnostic: read first value to verify ADC is working
+        let first_read = match channel.read() {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("ADC: first read failed: {e:?}");
+                0
+            }
+        };
+        log::info!(
+            "ADC: initialized on GPIO34 (ADC1_CH6, DB_12 atten), first raw read = {first_read}"
+        );
+        if first_read == 0 {
+            log::warn!("ADC: first read is 0 — possible causes: GPIO34 floating, wrong channel, ADC not calibrated");
+            log::warn!("ADC: check CONFIG_ADC_CAL_EFUSE_VREF_ENABLE and hardware connection");
+        }
 
         Ok(Self {
             channel,

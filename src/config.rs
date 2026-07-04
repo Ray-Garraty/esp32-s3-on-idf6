@@ -70,8 +70,8 @@ pub const MAIN_TASK_STACK: usize = 16384;
 pub const MOTOR_THREAD_STACK: usize = 16384;
 /// DS18B20 bitbang temperature thread.
 pub const TEMP_THREAD_STACK: usize = 16384;
-/// UART reader thread (stdin polling, 8 KB).
-pub const UART_THREAD_STACK: usize = 8192;
+/// UART reader thread (stdin polling, 4 KB — sufficient for read+send).
+pub const UART_THREAD_STACK: usize = 4096;
 /// BLE GATT notify thread (recv + conditionally notify — simple loop).
 pub const BLE_NOTIFY_THREAD_STACK: usize = 6144;
 /// HTTP server task.

@@ -260,3 +260,105 @@ lessons:
          DRAM fragmentation.
     refs:
       - docs/crash_reports/ble_host_task_null_deref.md
+
+  - id: LL-008
+    date: 2026-07-04
+    crash_signature: "IllegalInstruction + stack overflow in task pthread — net_owner watermark=0 — preceded by wifi:malloc buffer fail"
+    category: stack_overflow
+    trigger_patterns:
+      - "stack overflow in task pthread"
+      - "net_owner watermark=0"
+      - "IllegalInstruction.*pthread"
+      - "A stack overflow in task pthread has been detected"
+    lesson: >
+      Error paths consume MORE stack than happy paths. Adding FFI retry loops
+      (wifi_deinit_retry), log::error! with format_args! (5+ temporaries), and
+      nested FFI calls to a thread's error branch pushes the 32 KB net_owner
+      stack over budget. The happy path leaves ~20 KB watermark, but the error
+      path exhausts the entire stack.
+
+      When adding error recovery code to a thread with a budgeted stack:
+      - Measure BOTH happy and error path watermarks (not just happy path)
+      - format! / log::error! with many {} placeholders allocates temporaries
+        on the stack (each temporary ~32-64 bytes, 5+ = 160-320+ bytes)
+      - FFI calls (esp_wifi_deinit, esp_rom_delay_us) consume additional
+        C-side stack (~1-2 KB each)
+      - Retry loops multiply per-iteration stack usage by iteration count
+      - Prefer heapless::String + write! over format! in constrained contexts
+
+      The total stack budget for the error path must include ALL nested calls
+      in the match arm, not just the happy-path frame.
+    diagnostic: >
+      1. Check if crash is preceded by an error log in the net_owner thread.
+      2. Check net_owner stack watermark — if 0, stack overflow confirmed.
+      3. Compare happy path watermark (measured before crash) vs error path
+         (often 0 because crash happens before measurement).
+      4. Look for wifi_deinit_retry, log::error! with many params, or other
+         stack-heavy code in the error branch.
+      5. Use uxTaskGetStackHighWaterMark() inside the error branch itself.
+    fix: >
+      Remove or reduce stack-heavy code from error paths in budgeted threads:
+      - Move retry loops to a separate thread or reduce retry count
+      - Split long log messages into multiple shorter ones
+      - Move complex error recovery to a dedicated worker thread with its own
+        stack, not the primary net_owner thread
+      - Increase thread stack if budget allows (NET_OWNER_STACK: 32K → 48K)
+    refs:
+      - docs/crash_reports/phase6_postmortem.md
+
+  - id: LL-009
+    date: 2026-07-04
+    crash_signature: "wifi:malloc buffer fail — Expected to init (3|8) rx buffer, actual is 0 — preceded by free=108K largest=108K"
+    category: dma_heap_fragmentation
+    trigger_patterns:
+      - "wifi:malloc buffer fail"
+      - "Expected to init.*rx buffer, actual is 0"
+      - "ESP_ERR_HTTPD_TASK"
+      - "error code 45064"
+    lesson: >
+      Reducing WiFi dynamic buffer counts (32→16→8) does NOT fix WiFi init
+      failure when the static RX buffer allocation itself fails. The static
+      RX buffers use CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3 (minimum viable)
+      and require MALLOC_CAP_INTERNAL contiguous memory. After thread stack
+      allocations (Motor 16K + Temp 16K + UART 4K + net_owner 32K = 68K),
+      the available MALLOC_CAP_INTERNAL contiguous block is insufficient for
+      the WiFi driver's internal allocation pattern.
+
+      The heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) reports 108K
+      but this includes MALLOC_CAP_8BIT memory that is NOT usable for WiFi's
+      MALLOC_CAP_INTERNAL allocations. The two pools overlap in physical DRAM
+      but have different alignment/capability requirements that TLSF cannot
+      satisfy simultaneously after fragmentation.
+
+      The ESP-IDF v6.0.1 WiFi init sequence:
+      1. Allocate WiFi driver task stack (3.5 KB, MALLOC_CAP_INTERNAL)
+      2. Allocate static RX buffers (3×1600 = 4.8K, MALLOC_CAP_INTERNAL)
+      3. Allocate dynamic buffer pools (8×1600 each ×4 = 51.2K, MALLOC_CAP_INTERNAL)
+      4. Register Rx callbacks
+
+      Step 1 or 2 fails → deinit also fails (0x3001) → memory leaked → HTTP
+      cannot allocate 12K for server task → BLE cannot allocate 20K for HCI.
+
+      The CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3 is ALREADY the minimum.
+      Further reduction is not possible without patching ESP-IDF source.
+    diagnostic: >
+      1. Check heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) before
+         WiFi init — this is the critical metric, NOT MALLOC_CAP_DEFAULT.
+      2. Check CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM — if already 3, the
+         issue is not buffer count but MALLOC_CAP_INTERNAL fragmentation.
+      3. After WiFi failure, check if ESP_ERR_NO_MEM (0x3001) on deinit
+         confirms the memory leak.
+      4. If pre-WiFi largest INTERNAL block < 12K+overhead, WiFi will fail.
+    fix: >
+      Proper fix requires one of:
+      a) Allocate thread stacks from MALLOC_CAP_INTERNAL-excluded memory
+         (needs esp-idf-hal patch)
+      b) Move WiFi init to a dedicated memory partition (ESP32 memory
+         layout change)
+      c) Allocate stacks via a custom allocator that doesn't fragment
+         INTERNAL memory
+      d) Upgrade to ESP-IDF v6.1+ which may have fixed the WiFi driver
+         allocation sequence
+      e) Accept AP-only mode (no STA) — current fallback works
+    refs:
+      - docs/crash_reports/phase6_postmortem.md

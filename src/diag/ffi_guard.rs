@@ -36,6 +36,7 @@ pub const FFI_ESP_RESTART: u8 = 18;
 pub const FFI_ESP_COEX: u8 = 19;
 pub const FFI_WATERMARK: u8 = 20;
 pub const FFI_NETIF_INIT: u8 = 21;
+pub const FFI_ESP_WIFI_DEINIT: u8 = 22;
 
 /// Record an FFI entry event.
 #[inline]

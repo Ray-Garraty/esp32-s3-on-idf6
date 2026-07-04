@@ -15,6 +15,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Global flag set when HTTP server is alive.
+/// Main loop reads this to skip WS broadcasts when HTTP is dead.
+pub static G_HTTP_SERVER_ALIVE: AtomicBool = AtomicBool::new(false);
+
 /// Global restart flag set by captive portal when WiFi credentials are saved.
 ///
 /// Main loop reads this instead of http_server.restart_pending().
@@ -181,6 +185,7 @@ impl HttpServer {
         http.register_webui_routes()?;
 
         log::info!("HTTP: server started on port {}", config::HTTP_PORT);
+        G_HTTP_SERVER_ALIVE.store(true, Ordering::Release);
 
         Ok(http)
     }
@@ -583,5 +588,11 @@ impl HttpServer {
         static_route!("/js/init.js", webui::INIT_JS);
 
         Ok(())
+    }
+}
+
+impl Drop for HttpServer {
+    fn drop(&mut self) {
+        G_HTTP_SERVER_ALIVE.store(false, Ordering::Release);
     }
 }

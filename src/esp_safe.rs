@@ -183,6 +183,46 @@ pub fn set_coex_ble_preferred() {
     diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_COEX, 0);
 }
 
+/// Retry esp_wifi_deinit() up to `max_attempts` times with delay.
+///
+/// ESP-IDF v6.0.1 has a race where esp_wifi_init() partially fails (task
+/// creation fails) and then esp_wifi_deinit() also fails with 0x3001
+/// because the internal WiFi task handle is NULL, leaving buffers leaked.
+/// Retrying with delay allows deferred cleanup to complete.
+///
+/// Returns true if deinit succeeded within attempts.
+pub fn wifi_deinit_retry(max_attempts: u32) -> bool {
+    for attempt in 1..=max_attempts {
+        diag::ffi_guard::record_enter(diag::ffi_guard::FFI_ESP_WIFI_DEINIT);
+        // SAFETY: esp_wifi_deinit is safe if called after esp_wifi_init
+        // (even failed init). It may return error code but no UB.
+        let ret = unsafe { esp_idf_sys::esp_wifi_deinit() };
+        diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_WIFI_DEINIT, if ret == 0 { 0 } else { -1 });
+        if ret == 0 {
+            return true;
+        }
+        log::warn!("WiFi: esp_wifi_deinit attempt {attempt}/{max_attempts} failed ({ret:#x})");
+        // SAFETY: esp_rom_delay_us is a busy-wait microsecond delay safe
+        // from any context. No heap or OS calls.
+        unsafe { esp_idf_sys::esp_rom_delay_us(10_000) }; // 10ms
+    }
+    false
+}
+
+/// Read the ESP32 hardware microsecond timer.
+///
+/// Returns a 64-bit microsecond timestamp from the hardware timer.
+/// Safe to call from any context (read-only HW register).
+/// Used for diagnostic main loop timing.
+pub fn micros() -> u64 {
+    // SAFETY: esp_timer_get_time() is a read-only hardware register read.
+    // Safe from any context — no heap, no locks, no OS calls.
+    #[allow(clippy::cast_sign_loss)]
+    unsafe {
+        esp_idf_sys::esp_timer_get_time() as u64
+    }
+}
+
 // ── Hardware exception panic handler (linker-wrapped) ────────────────
 //
 // These structures match ESP-IDF v6.0.1 C layout for the panic handler.
