@@ -233,6 +233,7 @@ pub fn uart_init_stdin() {
 /// - `Err(EspError)` — UART driver not installed or parameter error.
 pub fn uart_read_stdin_blocking(buf: &mut [u8]) -> Result<usize, EspError> {
     diag::ffi_guard::record_enter(diag::ffi_guard::FFI_UART_READ);
+    let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     // SAFETY:
     //   Invariant: uart_read_bytes writes to a caller-owned buffer, UART
     //   driver must be installed. This is guaranteed by uart_init_stdin()
@@ -240,12 +241,11 @@ pub fn uart_read_stdin_blocking(buf: &mut [u8]) -> Result<usize, EspError> {
     //   Context: called from UART reader thread after uart_init_stdin().
     //   Risk: safe — buf is owned stack memory, UART_NUM_0 is valid,
     //         portMAX_DELAY = u32::MAX blocks until data arrives (no busy-wait).
-    #[allow(clippy::cast_sign_loss)]
     let ret = unsafe {
         esp_idf_sys::uart_read_bytes(
             esp_idf_sys::uart_port_t_UART_NUM_0,
             buf.as_mut_ptr().cast::<core::ffi::c_void>(),
-            buf.len() as u32,
+            len,
             u32::MAX, // portMAX_DELAY — block until ≥1 byte received
         )
     };
@@ -255,7 +255,7 @@ pub fn uart_read_stdin_blocking(buf: &mut [u8]) -> Result<usize, EspError> {
         // is valid because 0 is the only value that fails the contract.
         Err(unsafe { EspError::from_non_zero(NonZeroI32::new_unchecked(ret)) })
     } else {
-        Ok(ret as usize)
+        Ok(ret.try_into().unwrap_or(0))
     }
 }
 

@@ -239,7 +239,7 @@ fn main() {
                 }
                 drop(wifi_mgr_for_init);
 
-                let _http_server = match HttpServer::new(wifi_mgr_for_http) {
+                let http_server = match HttpServer::new(wifi_mgr_for_http) {
                     Ok(server) => {
                         let watermark = ecotiter_fw::esp_safe::stack_watermark();
                         info!("HTTP: server started (stack watermark: {watermark} bytes)");
@@ -251,7 +251,7 @@ fn main() {
                     }
                 };
                 diag::heap_snapshot::snapshot("http_started");
-                let http_ok = _http_server.is_some();
+                let http_ok = http_server.is_some();
                 ecotiter_fw::infrastructure::network::http_server::G_HTTP_SERVER_ALIVE
                     .store(http_ok, core::sync::atomic::Ordering::Release);
 
@@ -411,7 +411,7 @@ fn main() {
     loop {
         diag::tick_watchdog::tick_begin();
         #[cfg(not(test))]
-        let _loop_start = ecotiter_fw::esp_safe::micros();
+        let loop_start = ecotiter_fw::esp_safe::micros();
         // Read ADC (non-blocking, ~30 µs)
         if let Ok(mv) = adc.read_raw_mv() {
             // Advance scheduler tick counter (used by should_broadcast())
@@ -678,7 +678,7 @@ fn main() {
 
             #[cfg(not(test))]
             {
-                let elapsed = ecotiter_fw::esp_safe::micros().wrapping_sub(_loop_start);
+                let elapsed = ecotiter_fw::esp_safe::micros().wrapping_sub(loop_start);
                 if elapsed > config::MAIN_LOOP_TICK_MS * 1000 * 2 {
                     log::warn!(
                         "Main loop body: {elapsed}µs (limit: {}ms)",
