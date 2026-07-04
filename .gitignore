@@ -11,3 +11,6 @@ __pycache__/
 *.swo
 .env
 components_esp32.lock
+.opencode/tmp/
+/logs/
+/legacy/

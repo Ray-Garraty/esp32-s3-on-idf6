@@ -4,6 +4,23 @@
   "compaction": {
     "auto": false
   },
+  "references": {
+    "cargo": {
+      "path": "/home/vlabe/.cargo",
+      "description": "Cargo registry and cached crate sources — inspect dependency APIs",
+      "hidden": true
+    },
+    "espressif": {
+      "path": "/home/vlabe/.espressif",
+      "description": "ESP-IDF toolchain, tools, and Python venv — verify tool paths and versions",
+      "hidden": true
+    },
+    "rustup": {
+      "path": "/home/vlabe/.rustup",
+      "description": "Rust toolchains — check installed targets and toolchain versions",
+      "hidden": true
+    }
+  },
   "permission": {
     "bash": {
       "git status*": "allow",
@@ -38,6 +55,7 @@
       "cargo clippy*": "allow",
       "cargo fmt*": "allow",
       "cargo doc*": "allow",
+      "cargo build*": "allow",
       "espflash*": "allow",
       "python -c*": "deny",
       "python3 -c*": "deny",
@@ -52,6 +70,11 @@
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
+      "enabled": true
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],
       "enabled": true
     }
   }

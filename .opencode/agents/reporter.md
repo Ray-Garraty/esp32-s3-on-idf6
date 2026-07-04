@@ -5,6 +5,7 @@ description: >
   artifacts, writes report to docs/plans/completed/, updates
   docs/log.md. The final agent in the workflow.
 mode: subagent
+hidden: true
 temperature: 0.1
 ---
 
@@ -18,14 +19,14 @@ Generate TWO artifacts from the completed workflow:
 You are the final agent in the workflow. Your output is the permanent record.
 
 IMPORTANT: Do NOT use the `write` or `edit` tool — use `cat > docs/... << 'REPORT_EOF'` heredoc instead (known opencode bug: write tool unavailable for subagents).
-
 ## Input
+
 - `task_type`: `feature` | `bugfix`
 - `artifacts`:
   - Plan from Planner
   - PlanVerified from Verifier
   - ImplementationReport(s) from all iterations
-  - ValidationReport(s) from all iterations
+  - ValidationReport(s) from all iterations (**Hardware Validation** — comes from @validator agent)
   - ReviewReport from Reviewer
 
 ## Process
@@ -45,7 +46,7 @@ For each rework cycle, extract:
 - Resolution
 
 ### Step 3: Generate Completion Report
-Write OKF v0.1 Markdown file at `docs/plans/completed/<filename>.md`.
+Write OKF v0.1 Markdown file in English at `docs/plans/completed/<filename>.md`.
 
 Sections:
 1. YAML frontmatter (OKF compliant: type `Plan`, title, description, tags, timestamp, status)

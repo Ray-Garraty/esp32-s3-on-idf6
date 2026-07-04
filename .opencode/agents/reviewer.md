@@ -4,6 +4,7 @@ description: >
   architecture, style, safety, and adherence to project conventions.
   Read-only — returns structured review with issues and verdict.
 mode: subagent
+hidden: true
 temperature: 0.1
 ---
 
@@ -19,11 +20,20 @@ Evaluate code quality, architecture, and conventions. Validator checked correctn
 - `extra_checks` (optional): additional review requirements
 
 ## Process
-
 ### Step 1: Read All Modified Files
+
 Read every file in `implementation_report.modified_files`:
 - Read the full file content
 - Also read related files: state machines affected, error types, test files
+
+**PREREQUISITE**: This step must be after hardware validation. ValidationReport.overall_status must be "pass" or "conditional_pass". Do NOT proceed with review if:
+- Any AC failed (status == "fail")
+- Hardware validation crashed (escalation_target: debugger)
+
+The @validator agent already proved:
+- Host logic works (cargo_test: pass)
+- Hardware validation completed (smoke test passed, integration scripts succeeded)
+- Only remaining step is code quality and architecture review.
 
 ### Step 2: Architecture Review
 Check against project architecture from `docs/refs/project.md`:
@@ -33,22 +43,43 @@ Check against project architecture from `docs/refs/project.md`:
 - **Dependency rule**: infrastructure implements domain traits, domain defines them
 
 ### Step 3: Convention Compliance
-Check against `docs/refs/coding_style.md`:
-- **Error handling**: 3-level hierarchy, `From` impls, no `unwrap()`/`expect()` in library
-- **Memory**: `heapless` fixed buffers, no `Vec`/`String` in main loop or motor thread
+
+Cross-reference implementation against `docs/refs/coding_style.md` — specifically §§2, 5, 6, 7, 9. Verify:
+- **Error handling**: no `unwrap()`/`expect()` in library code, proper `From` impls
+- **Memory**: `heapless` fixed buffers on hot paths, no `Vec`/`String` in main loop or motor thread
 - **Concurrency**: `try_lock()` in main loop, correct `Release`/`Acquire` ordering
 - **Types**: newtype wrappers (`Steps`, `Hz`, `Ml`), named constants, no magic numbers
-- **Unsafe**: every `unsafe` block has a safety comment explaining why it's safe
+- **Unsafe**: every `unsafe` block has a `// SAFETY:` comment (see Step 4 below)
 - **Thread stacks**: motor 4KB, main 16KB, temp 16KB, BLE 8KB, HTTP 12KB
-- **Testing**: `#[cfg(test)]` inline, proptest for invariants, proper test naming
+- **Linter and Compiler Warnings Suppressions** - suppression should be avoided. If not possible, they must be provided with clear justification comment. No uncommented suppressions are allowed!
 
 ### Step 4: Safety & Correctness
-- **Main loop**: no blocking operations (`send_and_wait`, `lock()`, `recv()`)
-- **RMT**: `send_and_wait()` only in motor thread, never main loop
-- **WDT**: `esp_task_wdt_deinit()` at boot
-- **GPIO**: `degrade_output()` for pin construction, EN active LOW
-- **cfg gates**: `#[cfg(target_arch = "xtensa")]` correct
-- **PinDriver**: 1 generic arg (MODE), not 2
+
+#### ⚠️ UNSAFE CODE — PRIORITY #1
+Unsafe blocks are the single highest-risk item in this firmware. Review them with extreme scrutiny:
+
+1. **Every `unsafe { }` block MUST have** a `// SAFETY(id):` comment documenting:
+   - `Invariant:` what must be true for this to be safe
+   - `Context:` which task/thread it runs in
+   - `Risk:` what happens if the invariant is violated
+2. **Pointer lifetime analysis is MANDATORY** — confirm that raw pointers NEVER:
+   - Cross task/thread boundaries (the classic dangling `httpd_req_t` bug)
+   - Outlive the objects they point to
+   - Escape their valid scope
+3. **Require implementer to rewrite** any unsafe block whose safety cannot be
+   rigorously proven. "It works in testing" is NOT sufficient — demand a
+   formal argument for correctness.
+4. **FFI pointer parameters** must be validated (non-null, aligned, correct type).
+
+**If you find an undocumented or suspicious unsafe block → BLOCKING issue.**
+
+Cross-reference with `docs/refs/coding_style.md` §9 for:
+- Main loop blocking rules (§9.1 WDT, §9.2 RMT)
+- GPIO pin construction (§9.3)
+- Unsafe safety comments (§9.4)
+- Thread stacks (§9.5)
+- PinDriver generics (§9.6)
+- cfg gates (`#[cfg(target_arch = "xtensa")]`)
 
 ### Step 5: Test Quality
 Review tests added:

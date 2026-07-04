@@ -1,0 +1,62 @@
+/**
+ * @file style.css
+ * @brief Minimal custom styles
+ */
+.theme-toggle-btn {
+  position: fixed; top: 12px; right: 12px; z-index: 1050;
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 2px solid #dee2e6; background: white; font-size: 20px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: all 0.3s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+[data-bs-theme="dark"] .theme-toggle-btn {
+  background: var(--bg-dark-secondary); border-color: var(--bg-dark-accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.theme-toggle-btn:hover { transform: scale(1.1); }
+
+.accordion-button { font-size: 1.5rem; font-weight: 700; }
+.accordion-button:focus { box-shadow: none; border-color: transparent; }
+
+textarea#log-messages { font-size: 0.75rem; resize: none; }
+#ws-log-entries pre, #ws-log-entries code { font-size: 0.7rem; }
+#ws-log-entries { min-height: 50px; border: 1px dashed var(--border-dark); padding: 4px; }
+
+#stepperDrv-sg-threshold { font-size: 0.85rem; padding: 0.2rem 0.4rem; height: auto; }
+#stepperDrv-sg-threshold[readonly] { background: transparent; border: none; color: inherit; }
+#stepperDrv-sg-threshold:not([readonly]) { background: #fff; border-color: var(--focus-border); color: #212529; }
+
+.table td, .table th { vertical-align: middle; }
+/**
+ * @file theme.css
+ * @brief Bootstrap 5.3 dark theme overrides using CSS variables
+ */
+:root {
+  --bg-dark-primary: #1a1a2e;
+  --bg-dark-secondary: #16213e;
+  --bg-dark-accent: #0f3460;
+  --bg-input-dark: #0d1117;
+  --border-dark: #30363d;
+  --text-dark: #e0e0e0;
+  --text-input: #c9d1d9;
+  --focus-border: #86b7fe;
+}
+
+[data-bs-theme="dark"] body { background-color: var(--bg-dark-primary); }
+[data-bs-theme="dark"] .accordion-item { background-color: var(--bg-dark-secondary); border-color: var(--bg-dark-accent); }
+[data-bs-theme="dark"] .accordion-button { background-color: var(--bg-dark-secondary); color: var(--text-dark); }
+[data-bs-theme="dark"] .accordion-button:not(.collapsed) { background-color: var(--bg-dark-accent); color: #fff; }
+
+[data-bs-theme="dark"] .table-bordered,
+[data-bs-theme="dark"] .table-bordered th,
+[data-bs-theme="dark"] .table-bordered td,
+[data-bs-theme="dark"] .table thead th,
+[data-bs-theme="dark"] .border-bottom { border-color: var(--border-dark); }
+
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .input-group-text { background-color: var(--bg-dark-primary); border-color: var(--bg-dark-accent); color: var(--text-dark); }
+
+[data-bs-theme="dark"] textarea#log-messages { background-color: var(--bg-input-dark); color: var(--text-input); border-color: var(--border-dark); }
+[data-bs-theme="dark"] #stepperDrv-sg-threshold { background-color: var(--bg-input-dark); border-color: var(--border-dark); color: var(--text-input); }
+[data-bs-theme="dark"] #stepperDrv-sg-threshold[readonly] { background-color: transparent; border-color: transparent; }
+[data-bs-theme="dark"] #stepperDrv-sg-threshold:not([readonly]) { background-color: var(--bg-input-dark); border-color: var(--focus-border); }

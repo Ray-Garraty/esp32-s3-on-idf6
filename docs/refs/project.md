@@ -34,9 +34,8 @@ timestamp: 2026-06-29
 | Property | Value |
 |---|---|
 | Type | 2-way solenoid valve (input/output) |
-| OPEN pin | GPIO12 (PinDriver::output) |
-| CLOSE pin | GPIO13 (PinDriver::output) |
-| Positions | `input` (draw from titrant bottle), `output` (dispense into vessel) |
+| VALVE pin | GPIO14 (PinDriver::output) |
+| Positions | `input` (LOW, draw from titrant bottle), `output` (HIGH, dispense into vessel) |
 
 ### Sensors
 
@@ -49,7 +48,7 @@ timestamp: 2026-06-29
 
 | Signal | Pin | Behaviour |
 |---|---|---|
-| Status LED | GPIO2 | OFF (USB active), breathing (BLE connected), fast blink (advertising) |
+| Status LED | GPIO2 | OFF (USB active), breathing (BLE connected), steady light (advertising) |
 
 ### Communication
 
@@ -66,8 +65,7 @@ timestamp: 2026-06-29
 | TMC2209 STEP | 25 | TxChannelDriver (RMT) | Pulse train, 1 us HIGH |
 | TMC2209 DIR | 26 | PinDriver::output | HIGH = CW (fill) |
 | TMC2209 EN | 27 | PinDriver::output | Active LOW |
-| Valve OPEN | 12 | PinDriver::output | Energise to open |
-| Valve CLOSE | 13 | PinDriver::output | Energise to close |
+| Valve | 14 | PinDriver::output | LOW=input, HIGH=output |
 | Limit FULL | 32 | PinDriver::input + ISR | Syringe bottom |
 | Limit EMPTY | 35 | PinDriver::input + ISR | Syringe top |
 | pH electrode | 34 | ADC1_CH6 | DB_12 atten, 12-bit |
@@ -212,8 +210,8 @@ Custom service UUID: based on NUS (Nordic UART Service) pattern.
 | `fill` | -- | Fill burette from bottle |
 | `empty` | -- | Empty burette to vessel |
 | `rinse` | `cycles` | Rinse burette |
-| `stop` | -- | Emergency stop |
-| `emergencyStop` | -- | Immediate motor disable |
+| `stop` | -- | Soft stop with stepper position tracking|
+| `emergencyStop` | -- | Immediate motor disable with stepper position reset |
 | `stepper.getCalibration` | -- | Get steps/ml + Z-factor |
 | `stepper.calcVolume` | `steps` | Convert steps to ml |
 | `stepper.calcSpeed` | `steps_per_sec` | Convert steps/s to ml/min |
@@ -226,7 +224,7 @@ Custom service UUID: based on NUS (Nordic UART Service) pattern.
 | `valve.getState` | -- | Current valve state |
 | `system.getStatus` | -- | Full device status |
 | `system.readLog` | -- | Ring-buffer log |
-| `adc.getCalibration` | -- | Get pH calibration coeffs |
+| `adc.getCalibration` | -- | Get ADC calibration coeffs |
 | `adc.measure` | -- | Live mV reading |
 | `adc.saveCalibration` | `a`, `b` | Save to NVS |
 | `ping` | -- | Health check |

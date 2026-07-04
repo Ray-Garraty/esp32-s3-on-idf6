@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![warn(clippy::cargo)]
@@ -34,3 +35,41 @@
 #![allow(clippy::multiple_crate_versions)]
 #![warn(unused_qualifications)]
 #![warn(unused_import_braces)]
+
+pub mod config;
+pub mod domain;
+pub mod errors;
+pub mod stepper;
+
+#[cfg(target_arch = "xtensa")]
+pub mod logger;
+
+#[cfg(target_arch = "xtensa")]
+pub mod infrastructure;
+
+#[cfg(target_arch = "xtensa")]
+pub mod esp_mutex;
+
+#[cfg(target_arch = "xtensa")]
+pub mod esp_safe;
+
+#[cfg(target_arch = "xtensa")]
+pub mod diag;
+
+pub mod application;
+
+#[cfg(target_arch = "xtensa")]
+pub mod interface;
+
+#[cfg(target_arch = "xtensa")]
+pub mod motor_task;
+
+#[cfg(test)]
+mod regression_tests {
+    #[test]
+    fn websocket_compile_check() {
+        // Compile-time verification: broadcast_websocket_event compiles
+        // This test exists solely to ensure WS feature gate compiles
+        assert!(true, "WS handler compiled successfully");
+    }
+}

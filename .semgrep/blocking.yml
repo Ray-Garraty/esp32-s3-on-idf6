@@ -1,0 +1,21 @@
+rules:
+  - id: blocking-call-outside-thread
+    patterns:
+      - pattern-either:
+          - pattern: $X.send_and_wait(...)
+          - pattern: $X.recv()
+      - pattern-not-inside: |
+          std::thread::spawn(...)
+      - pattern-not-inside: |
+          $X.spawn(...)
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $TEST { ... }
+    message: "Blocking call detected outside dedicated thread context. Use std::thread::spawn or xTaskCreate."
+    severity: ERROR
+    languages: [rust]
+    paths:
+      include:
+        - /src/main.rs
+        - /src/logger.rs
+        - /src/lib.rs
