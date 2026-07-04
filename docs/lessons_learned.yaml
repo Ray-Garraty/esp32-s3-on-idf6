@@ -103,12 +103,12 @@ lessons:
     fix: >
       Add uart_init_stdin() in esp_safe.rs that calls the three FFI functions
       above. Call it once from main() before spawning any thread that reads
-      from stdin. See docs/crash_reports/uart_stdin_panic.md for the complete
+      from stdin. See docs/crash_reports/2026-07-04_uart_stdin_panic.md for the complete
       implementation.
     refs:
       - src/esp_safe.rs (uart_init_stdin)
       - src/main.rs (call site before UART thread)
-      - docs/crash_reports/uart_stdin_panic.md
+      - docs/crash_reports/2026-07-04_uart_stdin_panic.md
       - ~/.cargo/git/checkouts/esp-idf-sys-*/src/start.rs (commented-out init code)
 
   - id: LL-013
@@ -367,7 +367,7 @@ lessons:
       in git checkout at
       ~/.cargo/git/checkouts/esp-idf-hal-*/24e99b8/src/rmt/encoder.rs.
     refs:
-      - docs/crash_reports/rmt_encode_state_panic.md
+      - docs/crash_reports/2026-07-02_rmt_encode_state_panic.md
 
   - id: LL-003
     date: 2026-07-03
@@ -486,7 +486,7 @@ lessons:
       create one if esp_netif_init() was never called.
     refs:
       - docs/plans/pending/26_06_30_phase4_network_report.md
-      - docs/crash_reports/boot_invalid_mbox.md
+      - docs/crash_reports/2026-07-04_boot_invalid_mbox.md
     note: >
       The LL-004 fix prevents the 'System event loop dropped' sub-case but
       does NOT address the case where esp_netif_init() was never called.
@@ -537,7 +537,7 @@ lessons:
       so calling it before WifiManager::new() has no effect if WiFi init
       succeeds, and ensures the lwIP thread exists if WiFi init fails.
     refs:
-      - docs/crash_reports/boot_invalid_mbox.md
+      - docs/crash_reports/2026-07-04_boot_invalid_mbox.md
 
   - id: LL-007
     date: 2026-07-04
@@ -576,7 +576,7 @@ lessons:
          CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16) to minimize
          DRAM fragmentation.
     refs:
-      - docs/crash_reports/ble_host_task_null_deref.md
+      - docs/crash_reports/2026-07-04_ble_host_task_null_deref.md
 
   - id: LL-008
     date: 2026-07-04
@@ -621,7 +621,7 @@ lessons:
         stack, not the primary net_owner thread
       - Increase thread stack if budget allows (NET_OWNER_STACK: 32K → 48K)
     refs:
-      - docs/crash_reports/phase6_postmortem.md
+      - docs/crash_reports/2026-07-04_phase6_postmortem.md
 
   - id: LL-009
     date: 2026-07-04
@@ -678,4 +678,4 @@ lessons:
          allocation sequence
       e) Accept AP-only mode (no STA) — current fallback works
     refs:
-      - docs/crash_reports/phase6_postmortem.md
+      - docs/crash_reports/2026-07-04_phase6_postmortem.md

@@ -4,6 +4,9 @@ version: "1.0"
 task_id: "uart-stdin-panic-2026-07-04"
 timestamp: "2026-07-04"
 crash_signature: "UART reader thread panic on std::io::stdin().read() — first call panics in spawned std::thread with 8KB stack"
+title: "UART stdin panic on ESP32"
+description: "std::io::stdin().read() panics on ESP32 because ESP-IDF boot console does not install UART driver for interrupt-driven input; only polled output is configured"
+tags: [uart, stdin, panic, esp-idf, vfs, driver]
 ---
 
 # Crash Report

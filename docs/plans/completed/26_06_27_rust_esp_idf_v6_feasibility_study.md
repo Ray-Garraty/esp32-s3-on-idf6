@@ -1,3 +1,13 @@
+---
+type: Architecture Decision
+version: "1.0"
+task_id: feasibility-2026-06-27
+timestamp: "2026-06-27"
+title: "Feasibility Study: Rust + ESP-IDF v6 Migration"
+description: "Analysis and decision to migrate EcoTiter firmware from Arduino/C++ (ESP-IDF 4.4) to Rust + ESP-IDF v6.0.1. Covers RAM budget, module map, risk assessment, thread architecture, and Phase 0 validation results."
+tags: [feasibility, migration, esp-idf, rust, architecture, ram-budget]
+---
+
 # Feasibility Study: Rust + ESP-IDF v6 Migration
 
 Date: 2026-06-27

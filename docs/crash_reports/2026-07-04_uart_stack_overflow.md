@@ -2,8 +2,11 @@
 type: CrashReport
 version: "1.0"
 task_id: manual-debug-2026-07-04
-timestamp: "2026-07-04T09:30:00Z"
+timestamp: "2026-07-04"
 crash_signature: "PC=0x40091100 EXCVADDR=0x00000000 — IllegalInstruction — stack overflow in task pthread"
+title: "UART Thread Stack Overflow"
+description: "UART thread with 4KB stack overflows on std::io::stdin().read() FFI call chain; check_watermark() diagnostic triggers the final stack exhaustion"
+tags: [uart, stack-overflow, pthread, ffi, diagnostic]
 ---
 
 # Crash Report — UART Thread Stack Overflow

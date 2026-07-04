@@ -3,6 +3,9 @@ type: CrashReport
 version: "1.0"
 task_id: manual
 timestamp: "2026-07-04"
+title: "HTTP Server Dropped + Motor OOM"
+description: "HTTP server immediately stops after startup (Ok(_) discard); motor OOM on compute_ramp Vec<u32> allocation (40KB fails after BLE)"
+tags: [http, motor, oom, heap, ramp]
 ---
 
 # Crash Report: HTTP Server Dropped + Motor OOM
