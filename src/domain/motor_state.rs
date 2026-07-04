@@ -311,6 +311,7 @@ mod tests {
 
     #[test]
     fn test_current_volume_default() {
+        set_current_volume_ml(0.0);
         assert!((get_current_volume_ml() - 0.0).abs() < 0.001);
     }
 

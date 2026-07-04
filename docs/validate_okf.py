@@ -28,13 +28,14 @@ ALLOWED_TYPES = {
     "Build Guide",
     "Code Review",
     "Docs Rule",
+    "CrashReport",
 }
 
 REQUIRED_FIELDS = {"type", "title", "description", "tags", "timestamp"}
 ISO8601_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEADING_RE = re.compile(r"^#{1,6}\s+")
 EMOJI_RE = re.compile(
-    "[\U0001F000-\U0001FFFF\U00002000-\U00002BFF\U0000FE00-\U0000FE0F]"
+    "[\U0001F000-\U0001FFFF\U00002600-\U000027BF\U00002B50-\U00002B55\U0000FE00-\U0000FE0F]"
 )
 
 

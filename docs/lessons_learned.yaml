@@ -164,5 +164,99 @@ lessons:
         let wifi_mgr = WifiManager::new(modem, sys_loop, ...);
         // _sysloop_keepalive lives here → lwIP stays alive
         // even if WifiManager::new() returns Err
+      NOTE: This fix is NECESSARY but NOT SUFFICIENT (see LL-006).
+      It only prevents killing an existing TCP/IP thread; it does NOT
+      create one if esp_netif_init() was never called.
     refs:
       - docs/plans/pending/26_06_30_phase4_network_report.md
+      - docs/crash_reports/boot_invalid_mbox.md
+    note: >
+      The LL-004 fix prevents the 'System event loop dropped' sub-case but
+      does NOT address the case where esp_netif_init() was never called.
+      For the complete fix, see LL-006 (call esp_netif_init() unconditionally
+      at boot before any network operations).
+
+  - id: LL-006
+    date: 2026-07-04
+    crash_signature: "assert failed: tcpip_send_msg_wait_sem /IDF/components/lwip/lwip/src/api/tcpip.c:454 (Invalid mbox) — NO 'System event loop dropped' message — preceded by WiFi init failure (create wifi task: failed to create task)"
+    category: init_order_error
+    trigger_patterns:
+      - "Invalid mbox"
+      - "tcpip_send_msg_wait_sem"
+      - "create wifi task: failed to create task"
+      - "assert failed: tcpip_send_msg_wait_sem"
+    lesson: >
+      esp_netif_init() (which creates the lwIP TCP/IP thread and its mbox)
+      is ONLY called inside EspWifi::wrap() → EspNetif::new() →
+      initialize_netif_stack(). When EspWifi::new() fails (e.g. from DRAM
+      exhaustion in esp_wifi_init), the wrap() is never reached, so the
+      TCP/IP thread is never created.
+
+      The LL-004 _sysloop_keepalive clone prevents killing an existing
+      TCP/IP thread (by keeping the event loop alive). But if the TCP/IP
+      thread was NEVER created (because EspWifi::wrap() never ran), the
+      clone is pointless — the mbox is still uninitialized.
+
+      The crash signature is identical to LL-004 (assert: Invalid mbox)
+      but WITHOUT the 'System event loop dropped' message, and WITH a
+      preceding 'wifi:create wifi task: failed to create task' (0x3001)
+      indicating EspWifi::new() failed before creating netifs.
+    diagnostic: >
+      1. Check for ABSENCE of 'System event loop dropped' log message.
+      2. Check for 'wifi:create wifi task: failed to create task' (0x3001).
+      3. Verify that esp_netif_init() was called before WifiManager::new().
+         If the only call site is inside EspWifi::wrap(), and wrap() was
+         skipped, then esp_netif_init() was never called.
+      4. Heap trajectory: Pre-WiFi ~136K → Post-WiFi failure ~18K (largest 6K).
+    fix: >
+      Call esp_netif_init() UNCONDITIONALLY at boot, after
+      EspSystemEventLoop::take() and before WifiManager::new(). Add a safe
+      wrapper in esp_safe.rs:
+        pub fn netif_init() {
+            // SAFETY: esp_netif_init() is idempotent.
+            unsafe { esp_idf_sys::esp_netif_init(); }
+        }
+      esp_netif_init() is internally idempotent (guarded by a static flag),
+      so calling it before WifiManager::new() has no effect if WiFi init
+      succeeds, and ensures the lwIP thread exists if WiFi init fails.
+    refs:
+      - docs/crash_reports/boot_invalid_mbox.md
+
+  - id: LL-007
+    date: 2026-07-04
+    crash_signature: "PC=0x402cf9d7 EXCVADDR=0x00000000 A2=0x00000000 — npl_freertos_eventq_get(NULL) called from blecent_host_task"
+    category: ignored_return_value
+    trigger_patterns:
+      - "hci inits failed"
+      - "nimble host init failed"
+      - "BLE Host Task Started"
+      - "pc=0x402cf9d7"
+      - "npl_freertos_eventq_get"
+    lesson: >
+      The esp32-nimble crate's BLEDevice::init() ignores the return value of
+      nimble_port_init(). When this function fails (e.g. from DRAM exhaustion
+      causing esp_nimble_hci_init() to fail), the BLE host FreeRTOS task is
+      still spawned via nimble_port_freertos_init(). The task immediately
+      crashes with a NULL dereference because the default event queue
+      (g_eventq_dflt) was never initialized (ble_npl_eventq_init() happens
+      after the early return in esp_nimble_init()).
+    diagnostic: >
+      1. Look for "BLE_INIT: hci inits failed" followed by
+         "BLE_INIT: nimble host init failed" in the boot log.
+      2. Confirm crash backtrace includes npl_freertos_eventq_get called
+         from blecent_host_task at ble_device.rs:365.
+      3. Crash immediately follows "BLE Host Task Started" log line.
+      4. Check heap trajectory: largest contiguous block < 12K before BLE init.
+      5. The calling thread (net_owner) is stuck spinning forever in
+         BLEDevice::init() waiting for SYNCED flag that will never be set.
+    fix: >
+      1. PATCH esp32-nimble: return early from BLEDevice::init() if
+         nimble_port_init() returns error — do NOT spawn the host task.
+      2. Add heap pre-condition check (largest >= 20K) before calling
+         ble_mgr.init() in the project main.rs.
+      3. Reduce WiFi dynamic buffer counts
+         (CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16,
+         CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16) to minimize
+         DRAM fragmentation.
+    refs:
+      - docs/crash_reports/ble_host_task_null_deref.md

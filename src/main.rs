@@ -276,6 +276,10 @@ fn main() {
                 // which kills lwIP's tcpip thread. The clone keeps lwIP alive
                 // for HTTP server and BLE even without WiFi.
                 let _sysloop_keepalive = sys_loop.clone();
+                // Ensure lwIP TCP/IP thread exists before any network operation.
+                // If WifiManager::new() fails due to DRAM exhaustion, esp_netif_init()
+                // has already created the tcpip mbox, so HTTP and BLE can still work.
+                ecotiter_fw::esp_safe::netif_init();
                 let wifi_mgr = match WifiManager::new(modem, sys_loop, Some(nvs.clone()), Arc::clone(&ble_active_clone)) {
                     Ok(w) => w,
                     Err(e) => {

@@ -143,6 +143,30 @@ pub fn panic_write_str(s: &str) {
     }
 }
 
+/// Initialize the lwIP TCP/IP network interface stack.
+///
+/// Must be called once at boot, before any network operations (WiFi, HTTP,
+/// BLE). `esp_netif_init()` is internally idempotent (guarded by a static
+/// flag), so calling it before `WifiManager::new()` has no effect if WiFi init
+/// succeeds, and ensures the lwIP thread exists if WiFi init fails.
+///
+/// # Safety (encapsulated)
+///
+/// `esp_netif_init()` creates the lwIP tcpip thread and its mbox. Safe to
+/// call from any context after FreeRTOS scheduler init. Idempotent —
+/// subsequent calls are no-ops.
+pub fn netif_init() {
+    diag::ffi_guard::record_enter(diag::ffi_guard::FFI_NETIF_INIT);
+    // SAFETY:
+    //   Invariant: esp_netif_init creates lwIP tcpip thread + mbox.
+    //   Context: called once at boot from net_owner thread after scheduler init.
+    //   Risk: safe — idempotent (ESP-IDF internal guard).
+    unsafe {
+        esp_idf_sys::esp_netif_init();
+    }
+    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_NETIF_INIT, 0);
+}
+
 /// Set BT/WiFi coexistence priority to prefer BLE.
 ///
 /// Safe to call once at init before any radio activity. Uses a simple

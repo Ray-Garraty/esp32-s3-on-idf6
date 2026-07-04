@@ -1,6 +1,6 @@
 ---
 type: Plan
-title: Diagnostic subsystem (diag) — implementation, crash test results, and improvements
+title: "Diagnostic subsystem (diag) — implementation, crash test results, and improvements"
 description: >
   Phase 1-3 implemented and verified on hardware. Lock-free black box,
   __wrap_esp_panic_handler for hardware exceptions, periodic stack monitoring,

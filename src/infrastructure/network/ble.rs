@@ -97,6 +97,16 @@ impl BleManager {
     ///
     /// Returns `NetworkError::BleInitFailed` on any init error.
     pub fn init(&mut self) -> Result<(), NetworkError> {
+        // Heap precondition: need at least 20K free for BLE stack init
+        let (_free, largest, _dma) = crate::esp_safe::heap_stats();
+        if largest < 20_000 {
+            log::error!(
+                "BLE init skipped: heap too fragmented (largest={}K, need >=20K)",
+                largest / 1024,
+            );
+            return Err(NetworkError::BleInitFailed);
+        }
+
         BLEDevice::init();
 
         // Set device name (static method)
