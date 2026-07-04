@@ -293,7 +293,57 @@ fn main() {
     ecotiter_fw::motor_task::spawn(stepper, channels, cal_config, response_tx);
     info!("Motor task: spawned (homing runs inside)");
 
+    // ── UART reader channel ─────────────────────────────────────
+    // Spawn BEFORE receiving wifi_mgr from net_owner, while DRAM is still
+    // mostly unfragmented. The UART thread needs 8 KB contiguous DRAM for its
+    // stack — if spawned after the HTTP server's internal tasks consume DRAM,
+    // pthread_create/xTaskCreate fails with "Failed to create task!"
+    //
+    // Thread reads stdin (blocking) via direct uart_read_bytes FFI call,
+    // sends bytes to main loop (non-blocking drain).
+    //
+    // NOTE: The UART thread uses `uart_read_stdin_blocking()` which directly
+    // calls `esp_idf_sys::uart_read_bytes()` with `portMAX_DELAY` instead of
+    // `std::io::stdin().read()`, which panics on ESP-IDF v6 because Rust's
+    // std TLS initialization fails with insufficient stack.
+    ecotiter_fw::esp_safe::uart_init_stdin();
+    let (uart_tx, uart_rx) = mpsc::channel::<heapless::Vec<u8, 64>>();
+    diag::stack_monitor::register_thread(diag::stack_monitor::UART, "uart");
+    {
+        let _ = std::thread::Builder::new()
+            .stack_size(config::UART_THREAD_STACK)
+            .name("uart".into())
+            .spawn(move || {
+                diag::black_box::set_thread_slot(diag::stack_monitor::UART);
+                let mut buf = [0u8; 64];
+                let mut uart_tick = 0u64;
+                loop {
+                    uart_tick += 1;
+                    if uart_tick.is_multiple_of(100) {
+                        diag::stack_monitor::check_watermark(diag::stack_monitor::UART);
+                    }
+                    match ecotiter_fw::esp_safe::uart_read_stdin_blocking(&mut buf) {
+                        Ok(n) if n > 0 => {
+                            let mut bytes = heapless::Vec::<u8, 64>::new();
+                            let _ = bytes.extend_from_slice(&buf[..n]); // safe: n ≤ 64
+                            if uart_tx.send(bytes).is_err() {
+                                break; // channel closed
+                            }
+                        }
+                        _ => {
+                            // uart_read_stdin_blocking returned 0 (no data) or
+                            // Err (driver not installed) — sleep briefly before retry.
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    }
+                }
+            });
+    }
+
     // ── Temperature thread (DS18B20 on GPIO33) ───────────────────
+    // Spawn BEFORE receiving wifi_mgr, so that std::thread stack allocation
+    // succeeds. Both UART (8 KB) and Temp (16 KB) threads are spawned now
+    // while DRAM still has 40+ KB contiguous free.
     {
         let gpio33 = peripherals.pins.gpio33;
         info!("DS18B20: software bitbang on GPIO33");
@@ -323,63 +373,6 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(config::TEMP_READ_INTERVAL_MS));
                 }
             });
-    }
-
-    // ── UART reader channel ─────────────────────────────────────
-    // Thread reads stdin (blocking), sends bytes to main loop (non-blocking drain).
-    //
-    // Initialize UART0 VFS driver + install driver for blocking stdin reads.
-    // Without this, `std::io::stdin().read()` panics because the VFS layer has
-    // no driver backing fd 0 — ESP-IDF's boot console only sets up polled-mode
-    // output (printf/println), not interrupt-driven input.
-    ecotiter_fw::esp_safe::uart_init_stdin();
-    let (uart_tx, uart_rx) = mpsc::channel::<heapless::Vec<u8, 64>>();
-    diag::stack_monitor::register_thread(diag::stack_monitor::UART, "uart");
-    {
-        #[allow(clippy::expect_used)]
-        match std::thread::Builder::new()
-            .stack_size(config::UART_THREAD_STACK)
-            .name("uart".into())
-            .spawn(move || {
-                // [INVESTIGATION] raw UART write at thread entry
-                ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: entered closure\n");
-                diag::black_box::set_thread_slot(diag::stack_monitor::UART);
-                ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: after set_thread_slot\n");
-                let mut buf = [0u8; 64];
-                let mut uart_tick = 0u64;
-                ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: before loop\n");
-                loop {
-                    uart_tick += 1;
-                    if uart_tick.is_multiple_of(100) {
-                        diag::stack_monitor::check_watermark(diag::stack_monitor::UART);
-                    }
-                    ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: calling uart_read_stdin_blocking\n");
-                    match ecotiter_fw::esp_safe::uart_read_stdin_blocking(&mut buf) {
-                        Ok(n) if n > 0 => {
-                            let mut bytes = heapless::Vec::<u8, 64>::new();
-                            let _ = bytes.extend_from_slice(&buf[..n]); // safe: n ≤ 64
-                            if uart_tx.send(bytes).is_err() {
-                                break; // channel closed
-                            }
-                        }
-                        _ => {
-                            // uart_read_stdin_blocking returned 0 (no data) or
-                            // Err (driver not installed) — sleep briefly before retry.
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
-                    }
-                }
-            }) {
-            Ok(_handle) => {
-                // [INVESTIGATION] UART thread spawned successfully
-                ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: spawn OK\n");
-            }
-            Err(e) => {
-                // [INVESTIGATION] UART thread spawn FAILED
-                ecotiter_fw::esp_safe::panic_write_str("[INVESTIGATION] UART thread: spawn FAILED\n");
-                log::error!("UART thread spawn failed: {e:?}");
-            }
-        }
     }
 
     // ── Receive ble_mgr from Owner Thread ──

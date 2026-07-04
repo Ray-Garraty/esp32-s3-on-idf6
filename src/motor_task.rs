@@ -37,7 +37,7 @@ use crate::domain::motor_state;
 use crate::domain::types::{Direction, Hz, Ml, Steps};
 use crate::errors::StepperError;
 use crate::infrastructure::drivers::stepper::RmtStepper;
-use crate::stepper::ramp::{compute_ramp, RampConfig};
+use crate::stepper::ramp::{RampConfig, RampIter};
 
 /// Spawn the motor task thread.
 ///
@@ -105,12 +105,11 @@ fn run(
             config::HOMING_SPEED_HZ,
             config::STEPPER_MIN_HZ,
         );
-        let intervals = compute_ramp(nominal_steps, &ramp_cfg);
 
         let homing_start = Instant::now();
         let timeout = Duration::from_millis(config::HOMING_TIMEOUT_MS);
 
-        let result = stepper.move_steps_intervals(&ctx, &intervals);
+        let result = stepper.move_steps_intervals(&ctx, RampIter::new(nominal_steps, &ramp_cfg));
         let elapsed = homing_start.elapsed();
 
         match (&result, elapsed < timeout) {

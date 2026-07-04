@@ -6,7 +6,10 @@
 //! This module is only available on xtensa (ESP32) targets because it
 //! depends on `esp_idf_sys`.
 
+use core::num::NonZeroI32;
+
 use esp_idf_sys;
+use esp_idf_sys::EspError;
 
 use crate::diag;
 
@@ -140,6 +143,119 @@ pub fn panic_write_str(s: &str) {
     //   Risk: partial write (returns < len) is silently ignored — OK for diagnostics.
     unsafe {
         esp_idf_sys::write(1, s.as_ptr().cast::<core::ffi::c_void>(), s.len());
+    }
+}
+
+/// Install UART0 driver and connect VFS stdin to it.
+///
+/// Required for `std::io::stdin().read()` and `libc::read(0, ...)` to work.
+/// Call once at boot before spawning any thread that reads from stdin.
+///
+/// ESP-IDF's boot console sets up stdout for polled register-based writes
+/// (which is why `println!` works), but does NOT install the UART driver
+/// required for blocking interrupt-driven reads. Without this call,
+/// `read(0, ...)` fails because the VFS layer has no driver backing stdin.
+///
+/// This function:
+///   1. Registers the UART VFS device (idempotent — safe to call multiple times)
+///   2. Installs the UART0 driver with a 256-byte RX buffer
+///   3. Switches the VFS to driver mode for blocking interrupt-driven I/O
+///
+/// # Safety (encapsulated)
+///
+/// `uart_vfs_dev_register()` is idempotent and safe after FreeRTOS scheduler
+/// init. `uart_driver_install()` allocates DRAM for the RX buffer; the
+/// amount (256 bytes) is negligible. `uart_vfs_dev_use_driver()` switches
+/// the internal VFS dispatch table for UART0 — safe after driver install.
+pub fn uart_init_stdin() {
+    diag::ffi_guard::record_enter(diag::ffi_guard::FFI_UART_INIT);
+    // SAFETY:
+    //   Invariant: All three FFI calls are safe after FreeRTOS scheduler init.
+    //   uart_vfs_dev_register: idempotent, creates VFS entries for /dev/uart/0.
+    //   uart_driver_install: allocates RX buffer from DRAM, configures UART HW.
+    //   uart_vfs_dev_use_driver: switches VFS from polled to driver mode.
+    //   Context: called once at boot from main task, before any stdin reads.
+    //   Risk: double-init handled by uart_is_driver_installed check.
+    //         Allocation failure (256 bytes) is rare and logged, not fatal.
+    unsafe {
+        // Step 1: Register UART VFS driver (idempotent)
+        esp_idf_sys::uart_vfs_dev_register();
+
+        // Step 2: Install UART0 driver if not already installed
+        if !esp_idf_sys::uart_is_driver_installed(esp_idf_sys::uart_port_t_UART_NUM_0) {
+            let ret = esp_idf_sys::uart_driver_install(
+                esp_idf_sys::uart_port_t_UART_NUM_0, // uart_num: UART0
+                256,                                   // rx_buffer_size
+                0,                                     // tx_buffer_size (0 = no TX buffering)
+                10,                                    // queue_size (RX event queue depth)
+                core::ptr::null_mut(),                 // uart_queue (NULL = don't need handle)
+                0,                                     // intr_alloc_flags (default)
+            );
+            if ret != 0 {
+                // Non-fatal: stdin simply won't work, but we log it
+                log::error!("UART: uart_driver_install failed: {ret:#x}");
+            }
+        }
+
+        // Step 3: Switch VFS to driver mode for blocking interrupt-driven I/O
+        // Note: uart_vfs_dev_use_driver takes c_int (i32), not uart_port_t (c_uint).
+        // UART_NUM_0 = 0, fits safely in i32.
+        #[allow(clippy::cast_possible_wrap)]
+        esp_idf_sys::uart_vfs_dev_use_driver(esp_idf_sys::uart_port_t_UART_NUM_0 as i32);
+    }
+    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_UART_INIT, 0);
+}
+
+/// Read bytes from UART0 stdin with blocking semantics.
+///
+/// Wraps `esp_idf_sys::uart_read_bytes()` with `portMAX_DELAY`, so this call
+/// blocks until at least one byte is received on UART0. Returns the number of
+/// bytes read (always > 0 for a successful call).
+///
+/// This is a direct FFI call that bypasses the VFS/std layer entirely,
+/// avoiding the pthread/Rust std issues that caused `std::io::stdin().read()`
+/// to panic on ESP-IDF v6 (LL-008 pattern: UART reader thread crash).
+///
+/// # Precondition
+///
+/// `uart_init_stdin()` MUST have been called once at boot to install the UART
+/// driver. Otherwise `uart_read_bytes` will return -1 (error).
+///
+/// # Safety (encapsulated)
+///
+/// `uart_read_bytes` writes into a caller-owned buffer. The UART driver must
+/// be installed (guaranteed by `uart_init_stdin()`). Safe from any task
+/// context after driver install.
+///
+/// # Returns
+///
+/// - `Ok(n)` — `n` bytes were read into `buf` (1 ≤ n ≤ buf.len()).
+/// - `Err(EspError)` — UART driver not installed or parameter error.
+pub fn uart_read_stdin_blocking(buf: &mut [u8]) -> Result<usize, EspError> {
+    diag::ffi_guard::record_enter(diag::ffi_guard::FFI_UART_READ);
+    // SAFETY:
+    //   Invariant: uart_read_bytes writes to a caller-owned buffer, UART
+    //   driver must be installed. This is guaranteed by uart_init_stdin()
+    //   having been called at boot (see main.rs).
+    //   Context: called from UART reader thread after uart_init_stdin().
+    //   Risk: safe — buf is owned stack memory, UART_NUM_0 is valid,
+    //         portMAX_DELAY = u32::MAX blocks until data arrives (no busy-wait).
+    #[allow(clippy::cast_sign_loss)]
+    let ret = unsafe {
+        esp_idf_sys::uart_read_bytes(
+            esp_idf_sys::uart_port_t_UART_NUM_0,
+            buf.as_mut_ptr().cast::<core::ffi::c_void>(),
+            buf.len() as u32,
+            u32::MAX, // portMAX_DELAY — block until ≥1 byte received
+        )
+    };
+    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_UART_READ, if ret < 0 { -1 } else { 0 });
+    if ret < 0 {
+        // SAFETY: ret < 0, so it is non-zero. NonZeroI32::new_unchecked
+        // is valid because 0 is the only value that fails the contract.
+        Err(unsafe { EspError::from_non_zero(NonZeroI32::new_unchecked(ret)) })
+    } else {
+        Ok(ret as usize)
     }
 }
 

@@ -46,7 +46,147 @@ impl RampConfig {
     }
 }
 
+/// Iterator that lazily computes per-step intervals for a trapezoidal acceleration ramp.
+///
+/// Produces the same values as [`compute_ramp`] but without heap allocation.
+/// Each call to `next()` computes the next interval in O(1).
+///
+/// The profile is:
+/// - **Acceleration**: intervals linearly decrease from `max_interval_us` to `min_interval_us`.
+/// - **Cruise**: constant interval at `min_interval_us`.
+/// - **Deceleration**: intervals linearly increase back to `max_interval_us`.
+///
+/// If `total_steps` is less than `accel_steps + decel_steps`, the profile becomes
+/// triangular (accel immediately followed by decel, no cruise phase).
+///
+/// # Zero steps
+///
+/// `RampIter::new(0, _)` yields no items.
+#[derive(Debug, Clone)]
+pub struct RampIter {
+    total_steps: u32,
+    pos: u32,
+    /// Number of acceleration steps (computed from total vs config).
+    accel_steps: u32,
+    /// Number of deceleration steps (computed from total vs config).
+    decel_steps: u32,
+    /// Number of cruise steps (computed from total vs config).
+    cruise_steps: u32,
+    /// `max_interval_us - min_interval_us` as i64 for signed arithmetic.
+    range: i64,
+    min_interval_us: u32,
+    max_interval_us: u32,
+}
+
+impl RampIter {
+    /// Create a new lazy ramp iterator.
+    ///
+    /// Pre-computes the accel/decel/cruise split from `total_steps` and `config`.
+    /// Construction is O(1) — no heap allocation.
+    pub fn new(total_steps: u32, config: &RampConfig) -> Self {
+        if total_steps == 0 {
+            return Self {
+                total_steps: 0,
+                pos: 0,
+                accel_steps: 0,
+                decel_steps: 0,
+                cruise_steps: 0,
+                range: 0,
+                min_interval_us: 0,
+                max_interval_us: 0,
+            };
+        }
+
+        let range = i64::from(config.max_interval_us) - i64::from(config.min_interval_us);
+
+        let (accel_steps, decel_steps, cruise_steps) =
+            if total_steps >= config.accel_steps + config.decel_steps {
+                (
+                    config.accel_steps,
+                    config.decel_steps,
+                    total_steps - config.accel_steps - config.decel_steps,
+                )
+            } else {
+                let half = total_steps / 2;
+                (half, total_steps - half, 0)
+            };
+
+        Self {
+            total_steps,
+            pos: 0,
+            accel_steps,
+            decel_steps,
+            cruise_steps,
+            range,
+            min_interval_us: config.min_interval_us,
+            max_interval_us: config.max_interval_us,
+        }
+    }
+}
+
+impl Iterator for RampIter {
+    type Item = u32;
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
+    fn next(&mut self) -> Option<u32> {
+        if self.pos >= self.total_steps {
+            return None;
+        }
+        let i = self.pos;
+        self.pos += 1;
+
+        let interval = if i < self.accel_steps {
+            // Acceleration phase: decreasing intervals
+            let progress = if self.accel_steps <= 1 {
+                1_i64
+            } else {
+                i64::from(i)
+            };
+            let denom = if self.accel_steps <= 1 {
+                1_i64
+            } else {
+                i64::from(self.accel_steps - 1)
+            };
+            i64::from(self.max_interval_us) - self.range * progress / denom
+        } else if i < self.accel_steps + self.cruise_steps {
+            // Cruise phase: constant min interval
+            return Some(self.min_interval_us);
+        } else {
+            // Deceleration phase: increasing intervals
+            let decel_i = i - self.accel_steps - self.cruise_steps;
+            let progress = if self.decel_steps <= 1 {
+                1_i64
+            } else {
+                i64::from(decel_i)
+            };
+            let denom = if self.decel_steps <= 1 {
+                1_i64
+            } else {
+                i64::from(self.decel_steps - 1)
+            };
+            i64::from(self.min_interval_us) + self.range * progress / denom
+        };
+
+        Some(
+            interval
+                .max(i64::from(self.min_interval_us))
+                .min(i64::from(self.max_interval_us)) as u32,
+        )
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = (self.total_steps - self.pos) as usize;
+        (remaining, Some(remaining))
+    }
+}
+
 /// Compute a trapezoidal acceleration ramp as a vector of per-step intervals (microseconds).
+///
+/// This is an allocating version — prefer [`RampIter`] for new code.
 ///
 /// The profile is:
 /// - **Acceleration**: intervals linearly decrease from `max_interval_us` to `min_interval_us`.
@@ -60,8 +200,10 @@ impl RampConfig {
 ///
 /// # Allocation note
 ///
-/// The returned `Vec` is allocated once per motion config. This is permitted by
-/// `docs/refs/coding_style.md §5` (heap allowed at init or config-change time).
+/// The returned `Vec` allocates `total_steps * 4` bytes on the heap. For large
+/// step counts (> 2000) in constrained heap environments, use [`RampIter`] instead.
+///
+/// Kept for backward compatibility and tests.
 #[allow(
     clippy::disallowed_types,
     clippy::cast_possible_truncation,
@@ -69,68 +211,7 @@ impl RampConfig {
     clippy::cast_lossless
 )]
 pub fn compute_ramp(total_steps: u32, config: &RampConfig) -> Vec<u32> {
-    if total_steps == 0 {
-        return Vec::new();
-    }
-
-    let range = i64::from(config.max_interval_us) - i64::from(config.min_interval_us);
-
-    let (accel_steps, decel_steps, cruise_steps) =
-        if total_steps >= config.accel_steps + config.decel_steps {
-            (
-                config.accel_steps,
-                config.decel_steps,
-                total_steps - config.accel_steps - config.decel_steps,
-            )
-        } else {
-            let half = total_steps / 2;
-            (half, total_steps - half, 0)
-        };
-
-    // SAFETY: total_steps is non-zero here, and Vec allocation at config-change time is allowed.
-    let mut intervals = Vec::with_capacity(total_steps as usize);
-
-    // Acceleration phase: decreasing intervals
-    for i in 0..accel_steps {
-        let progress = if accel_steps <= 1 {
-            1_i64
-        } else {
-            i64::from(i)
-        };
-        let denom = if accel_steps <= 1 {
-            1_i64
-        } else {
-            i64::from(accel_steps - 1)
-        };
-        let interval = i64::from(config.max_interval_us) - range * progress / denom;
-        // interval is clamped below by min_interval_us and above by max_interval_us,
-        // so the i64→u32 cast is safe (non-negative and within range).
-        intervals.push(interval.max(i64::from(config.min_interval_us)) as u32);
-    }
-
-    // Cruise phase: constant min interval
-    for _ in 0..cruise_steps {
-        intervals.push(config.min_interval_us);
-    }
-
-    // Deceleration phase: increasing intervals
-    for i in 0..decel_steps {
-        let progress = if decel_steps <= 1 {
-            1_i64
-        } else {
-            i64::from(i)
-        };
-        let denom = if decel_steps <= 1 {
-            1_i64
-        } else {
-            i64::from(decel_steps - 1)
-        };
-        let interval = i64::from(config.min_interval_us) + range * progress / denom;
-        // interval is clamped, so i64→u32 cast is safe.
-        intervals.push(interval.min(i64::from(config.max_interval_us)) as u32);
-    }
-
-    intervals
+    RampIter::new(total_steps, config).collect()
 }
 
 #[cfg(test)]

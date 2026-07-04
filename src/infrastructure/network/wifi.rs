@@ -512,7 +512,7 @@ impl<'d> WifiManager<'d> {
         let empty_ssid = heapless::String::new();
         let empty_password = heapless::String::new();
 
-        match NvsManager::open("wifi", false) {
+        match NvsManager::open("wifi", true) {
             Ok(nvs) => {
                 let ssid = nvs
                     .read_str::<32>("ssid")

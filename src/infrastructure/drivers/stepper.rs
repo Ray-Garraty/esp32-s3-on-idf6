@@ -39,7 +39,7 @@ use crate::domain::context::MotorContext;
 use crate::domain::driver_traits::StepperMotor;
 use crate::domain::types::{Direction, Hz, Steps};
 use crate::errors::StepperError;
-use crate::stepper::ramp::{compute_ramp, RampConfig};
+use crate::stepper::ramp::{RampConfig, RampIter};
 
 /// Static assertion: RMT chunk size must fit within the RMT memory block
 /// (indirect mode, 128 symbols per block).
@@ -181,11 +181,12 @@ impl<'d> RmtStepper<'d> {
         self.stop_flag = None;
     }
 
-    /// Move the motor using a pre-computed sequence of step intervals.
+    /// Move the motor using a sequence of step intervals.
     ///
-    /// Each entry in `intervals_us` is the total period for one step in
-    /// microseconds. The RMT hardware generates the pulse train with zero
-    /// CPU load during transmission.
+    /// Each element in `intervals` is the total period for one step in
+    /// microseconds. Accepts any iterator of `u32` (slice, Vec, [`RampIter`], etc.).
+    /// The RMT hardware generates the pulse train with zero CPU load during
+    /// transmission.
     ///
     /// # Symbol Encoding
     ///
@@ -204,7 +205,7 @@ impl<'d> RmtStepper<'d> {
     ///
     /// # Empty Input
     ///
-    /// An empty slice returns `Ok(())` immediately with no RMT operations.
+    /// An empty iterator returns `Ok(())` immediately with no RMT operations.
     ///
     /// # BLOCKING
     ///
@@ -219,12 +220,8 @@ impl<'d> RmtStepper<'d> {
     pub fn move_steps_intervals(
         &mut self,
         _ctx: &MotorContext,
-        intervals_us: &[u32],
+        intervals: impl IntoIterator<Item = u32>,
     ) -> Result<(), StepperError> {
-        if intervals_us.is_empty() {
-            return Ok(());
-        }
-
         // Pre-flight: verify GR-2 (stop flag) and GR-1 (motor thread)
         let _ = diag::preconditions::assert_rmt_preconditions(
             self.stop_flag,
@@ -245,7 +242,7 @@ impl<'d> RmtStepper<'d> {
         #[allow(clippy::disallowed_types)]
         let mut symbols = Vec::with_capacity(config::RMT_CHUNK_MAX);
 
-        for &interval in intervals_us {
+        for interval in intervals {
             if symbols.len() >= config::RMT_CHUNK_MAX {
                 self.transmit(&symbols)?;
                 symbols.clear();
@@ -324,15 +321,14 @@ impl StepperMotor for RmtStepper<'_> {
             self.set_direction(Direction::LiqOut);
         }
 
-        // Compute ramp from Steps and Hz
+        // Compute ramp from Steps and Hz (lazy iterator — no heap allocation)
         let ramp_config = RampConfig::new(
             config::RAMP_ACCEL_STEPS,
             config::RAMP_DECEL_STEPS,
             speed.0,
             config::STEPPER_MIN_HZ,
         );
-        let intervals = compute_ramp(steps.abs(), &ramp_config);
-        self.move_steps_intervals(ctx, &intervals)?;
+        self.move_steps_intervals(ctx, RampIter::new(steps.abs(), &ramp_config))?;
 
         // Update position after successful motion (steps is signed)
         self.position.fetch_add(steps.0, Ordering::Release);

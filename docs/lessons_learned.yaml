@@ -1,4 +1,321 @@
 lessons:
+  - id: LL-015
+    date: 2026-07-04
+    crash_signature: "heap free=3K largest=3K after ~10s steady-state — no crash but everything degrades — OOM on any alloc >3KB"
+    category: dma_heap_fragmentation
+    trigger_patterns:
+      - "free=3K.*largest=3K"
+      - "Heap: free=\\d+K, largest=\\d+K, DMA_largest=\\d+K"
+      - "Failed to create task"
+      - "UART reader thread disconnected"
+      - "ESP_ERR_HTTPD_TASK"
+    lesson: >
+      After full init sequence (WiFi→HTTP→BLE→motor/temp/uart threads) and
+      ~10 seconds of runtime, the heap collapses to 3KB free / 3KB largest
+      contiguous block. This is not a leak but cumulative internal
+      fragmentation: each init phase allocates and frees buffers, leaving
+      the TLSF allocator with many small holes.
+
+      Measured heap trajectory during a single boot:
+        Boot:          159K free, 108K largest
+        Pre-WiFi:      136K free, 108K largest
+        Post-WiFi:      69K free,  60K largest  (WiFi driver allocs)
+        Post-HTTP:      50K free,  42K largest  (HTTP server task + handlers)
+        Post-BLE:       30K free,  20K largest  (NimBLE HCI + GATT + advertising)
+        Motor spawn:    25K free,  15K largest  (16KB stack alloc fragments)
+        Temp spawn:     22K free,  12K largest
+        UART spawn:     18K free,  10K largest
+        10s runtime:     3K free,   3K largest  (WebSocket broadcasts + logging)
+
+      Every prior fix in this session (LL-010 through LL-014) fixed a symptom
+      but exposed the next symptom further down the heap cascade. The system
+      has no DRAM margin — any alloc > 3KB will OOM.
+
+      The feasibility study §7 was correct: "no margin — 0 to 5 KB free".
+      Phase 0 measurements (§11) were misleading because they tested only
+      WiFi + BLE init without HTTP server, worker threads, or runtime load.
+
+    diagnostic: >
+      1. Log heap_caps_get_free_size(MALLOC_CAP_DEFAULT) and
+         heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) after every
+         init phase and every 10s in steady-state.
+      2. If largest < 10KB after all inits, the system will OOM on any
+         non-trivial operation.
+      3. If largest drops continuously during steady-state (not just during
+         init), there is a runtime allocation pattern that fragments the heap.
+      4. Check broadcast_websocket_event() — each call may alloc+free
+         heapless::String which, despite "heapless" name, may trigger
+         internal reallocation on the C side.
+      5. Check log::info! in the main loop — format_args! allocates
+         temporaries on the stack (not heap) but also triggers C-side
+         printf buffer management.
+    fix: >
+      The only reliable fix on ESP32-WROOM-32 (no PSRAM) is one of:
+      A) Hardware: upgrade to ESP32-WROVER-B (8MB PSRAM, pin-compatible,
+         +$1.50-2.00). PSRAM makes all DRAM constraints disappear.
+      B) Reduce feature set: strip BLE or HTTP server to free ~50-70KB.
+         Product impact: loss of BLE connectivity or WebUI.
+      C) Aggressive DRAM budget: reduce NimBLE buffers (ACL=12, MSYS=12,
+         CCCD=4), reduce HTTP handler count, remove WebSocket static file
+         handlers, reduce log buffer, use opt-level=s. Saves ~15-20KB
+         but still leaves zero margin.
+      Option A is the only permanent fix. Options B/C are temporary patches.
+    refs:
+      - docs/plans/completed/26_06_27_rust_esp_idf_v6_feasibility_study.md (§7, §11)
+      - sdkconfig.defaults (all CONFIG_* buffer sizes)
+      - src/infrastructure/network/http_server.rs (broadcast_websocket_event)
+      - src/main.rs (init order, thread spawns)
+
+  - id: LL-014
+    date: 2026-07-04
+    crash_signature: "UART reader thread panic on std::io::stdin().read() — first call panics — stdout (println!) works fine"
+    category: api_misuse
+    trigger_patterns:
+      - "std::io::stdin\\(\\)\\.read"
+      - "UART reader thread disconnected"
+      - "stdin.*panic"
+      - "uart_driver_install.*not called"
+      - "uart_vfs_dev_use_driver"
+    lesson: >
+      ESP-IDF's boot console only sets up polled-mode output via direct UART
+      register writes (printf/println! works). It does NOT install the UART
+      driver required for interrupt-driven blocking input. When
+      std::io::stdin().read() (which goes through libc read(0) → ESP-IDF VFS)
+      is called, the VFS layer has no driver backing fd 0, causing a panic.
+
+      The three-step fix:
+        1. uart_vfs_dev_register() — register UART VFS device (idempotent)
+        2. uart_driver_install(UART_NUM_0, rx_buf, 0, queue_size, NULL, 0)
+           — install UART driver with RX buffer
+        3. uart_vfs_dev_use_driver(UART_NUM_0) — switch VFS to driver mode
+
+      This init was planned as a feature (uart0_driver_init) in esp-idf-sys's
+      start.rs but was never completed — the code remains commented out.
+    diagnostic: >
+      1. Check if stdout (println!) works but stdin (read) panics —
+         this confirms the UART driver is not installed for VFS reads.
+      2. Check esp-idf-sys/src/start.rs for the commented-out init_uart0()
+         function — this is the canonical fix.
+      3. Verify that uart_vfs_dev_register(), uart_driver_install(), and
+         uart_vfs_dev_use_driver() are available in the generated bindings.
+      4. Rule out stack overflow (LL-010/LL-001) by checking watermark first;
+         if watermark > 2048 with 8KB stack, it's not overflow.
+    fix: >
+      Add uart_init_stdin() in esp_safe.rs that calls the three FFI functions
+      above. Call it once from main() before spawning any thread that reads
+      from stdin. See docs/crash_reports/uart_stdin_panic.md for the complete
+      implementation.
+    refs:
+      - src/esp_safe.rs (uart_init_stdin)
+      - src/main.rs (call site before UART thread)
+      - docs/crash_reports/uart_stdin_panic.md
+      - ~/.cargo/git/checkouts/esp-idf-sys-*/src/start.rs (commented-out init code)
+
+  - id: LL-013
+    date: 2026-07-04
+    crash_signature: "pthread: Failed to create task! ×3 — UART reader thread disconnected flooding — post-BLE heap free=11KB largest=9KB — motor/temp/uart threads never spawned"
+    category: dma_heap_fragmentation
+    trigger_patterns:
+      - "Failed to create task"
+      - "UART reader thread disconnected"
+      - "pthread: Failed to create task"
+      - "PTHREAD_TASK_STACK_SIZE_DEFAULT"
+    lesson: >
+      BLE NimBLE init consumes ~30KB of DRAM via MALLOC_CAP_INTERNAL for the
+      host controller interface, GATT database, and advertising buffers. After
+      WiFi (69→50KB) and HTTP (50→30KB), BLE consumes the remaining contiguous
+      INTERNAL memory, leaving only 11KB free / 9KB largest block.
+
+      When subsequent threads (motor 16KB, temp 16KB, uart 8KB) are spawned via
+      std::thread, the FreeRTOS pthread layer calls xTaskCreate() which needs
+      MALLOC_CAP_INTERNAL stack memory. With only 9KB largest contiguous block,
+      even the 8KB uart thread fails. The `pthread: Failed to create task!` log
+      confirms xTaskCreate returned pdFAIL.
+
+      The consequence is not a crash but a silent degradation: motor never homes,
+      temperature never reads, UART stdin reader never starts (producing endless
+      "UART reader thread disconnected" warnings).
+
+      This is a DRAM budget problem: WiFi + HTTP + BLE consume ~148KB of the
+      ~196KB usable DRAM, leaving only ~48KB for all other threads. With motor
+      (16K) + temp (16K) + uart (8K) = 40KB total stack requirement, there is
+      physically enough memory but it is fragmented into pieces < 9KB.
+
+    diagnostic: >
+      1. Check post-BLE heap: free < 15KB or largest < 10KB → threads will fail.
+      2. Look for "pthread: Failed to create task!" in the log — this confirms
+         xTaskCreate failure from DRAM exhaustion.
+      3. Count the thread spawns that fail: each failure is one uncreatable thread.
+      4. Check if the failing threads are spawned AFTER BLE init in the boot
+         sequence — if yes, either move them BEFORE BLE or reduce BLE footprint.
+      5. Run `idf.py menuconfig` → Component config → Bluetooth → NimBLE Options
+         and check: CONFIG_BT_NIMBLE_ACL_BUF_COUNT, CONFIG_BT_NIMBLE_HCI_EVT_BUF_SIZE,
+         CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT.
+    fix: >
+      Option A (preferred): Reorder boot sequence so that motor/temp/uart threads
+      are spawned BEFORE BLE init (while heap has 50KB+ largest block). BLE init
+      becomes the last step after all worker threads are running.
+
+      Option B: Reduce NimBLE DRAM footprint in sdkconfig.defaults:
+        CONFIG_BT_NIMBLE_ACL_BUF_COUNT=12 (was 24, saves ~2KB)
+        CONFIG_BT_NIMBLE_HCI_EVT_BUF_SIZE=70 (was 256, saves ~1KB)
+        CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=12 (was 24, saves ~3KB)
+        CONFIG_BT_NIMBLE_MAX_CCCD=4 (was 8, saves ~1KB)
+
+      Option C: Reduce thread stack sizes (risky — see GR-6 budget table):
+        motor: 16K → 12K (risks stack overflow on complex homing profiles)
+        temp: 16K → 8K (risks stack overflow on DS18B20 bitbang)
+        uart: 8K → keep (already at minimum per LL-010)
+
+      Option A is preferred because it doesn't reduce safety margins.
+    refs:
+      - sdkconfig.defaults (NimBLE buffer configs)
+      - src/main.rs (thread spawn order)
+      - src/config.rs (thread stack sizes)
+      - AGENTS.md §3 (DRAM init order triangle GR-3)
+      - AGENTS.md §4 (thread model & stack budget GR-6)
+      - docs/crash_reports/2026-07-04_http_dropped_motor_oom.md
+    fix_applied: 2026-07-04
+
+  - id: LL-012
+    date: 2026-07-04
+    crash_signature: "memory allocation of 40000 bytes failed — compute_ramp — motor_task homing — free=30KB largest=20KB"
+    category: heap_exhaustion
+    trigger_patterns:
+      - "memory allocation of \\d+ bytes failed"
+      - "compute_ramp"
+      - "with_capacity.*total_steps"
+      - "HOMING_MAX_STEPS"
+    lesson: >
+      compute_ramp() allocates Vec<u32> with capacity = total_steps. With
+      HOMING_MAX_STEPS=10000 this is 40KB; with full-volume motion (62,922
+      steps via volume_to_steps) this would be ~250KB. These allocations
+      happen in the motor thread AFTER BLE init has consumed ~30KB heap,
+      leaving only 20KB largest contiguous block.
+
+      Use RampIter (a lazy iterator) instead of compute_ramp wherever
+      possible. RampIter produces identical per-step intervals but computes
+      them on-the-fly with zero heap allocation. The only memory needed is
+      a small chunk buffer (RMT_CHUNK_MAX × 2 symbols × 8 bytes = ~2KB)
+      inside move_steps_intervals().
+
+      The same pattern applies to move_steps() (the StepperMotor trait
+      impl) which previously allocated Vec for every motion command. Both
+      homing and regular motion commands now use RampIter directly.
+    diagnostic: >
+      1. If crash shows "memory allocation of NNNNN bytes failed" with
+         compute_ramp in the backtrace, the fix is to use RampIter instead.
+      2. Check heap at crash time: free < NNNNN or largest < NNNNN.
+      3. Check if BLE init (30KB) has already consumed memory before
+         the motor task runs.
+    fix: >
+      Replace compute_ramp + Vec allocation with RampIter:
+        // BEFORE: let intervals = compute_ramp(steps, &cfg);
+        //         stepper.move_steps_intervals(ctx, &intervals)?;
+        // AFTER:  stepper.move_steps_intervals(ctx, RampIter::new(steps, &cfg))?;
+      move_steps_intervals() accepts impl IntoIterator<Item = u32> so
+      RampIter can be passed directly.
+    refs:
+      - src/stepper/ramp.rs (RampIter struct)
+      - src/infrastructure/drivers/stepper.rs (move_steps_intervals)
+      - src/motor_task.rs (homing call site)
+      - docs/crash_reports/2026-07-04_http_dropped_motor_oom.md
+
+  - id: LL-011
+    date: 2026-07-04
+    crash_signature: "Unregistered Httpd server handler for URI ... Httpd server stopped — immediate after startup"
+    category: api_misuse
+    trigger_patterns:
+      - "Unregistered Httpd server handler"
+      - "Httpd server stopped"
+      - "G_HTTP_SERVER_ALIVE.*false"
+      - "http_ok.*false"
+    lesson: >
+      When HttpServer::new() is called with `match Ok(_)`, the underscore
+      pattern discards the created HttpServer immediately. When the match
+      arm ends, the HttpServer goes out of scope and its Drop impl calls
+      httpd_stop() via EspHttpServer::drop(). This unregisters all
+      handlers and stops the server before BLE init even starts.
+
+      The fix is to bind the HttpServer to a variable (e.g. `let _http_server`
+      for explicit lifetime management) so it lives for the duration of the
+      enclosing scope (net_owner thread loop).
+
+      Any RAII guard that wraps an ESP-IDF resource that starts a task or
+      allocates a service MUST be stored by name, not matched as `_` or
+      `Ok(_)`. The `_` pattern is a sign that the caller didn't think about
+      the object's lifetime — it should be linted.
+    diagnostic: >
+      1. Check for "Unregistered Httpd server handler" logs immediately
+         after "HTTP: server started" — this indicates the server was
+         created and immediately destroyed.
+      2. Find the HttpServer::new() call site and check if the return
+         value is bound to `_` or stored in a `bool` without keeping
+         the server.
+      3. If `G_HTTP_SERVER_ALIVE` is set to true then immediately false,
+         the HttpServer Drop cleared it.
+    fix: >
+      Store the HttpServer:
+        let _http_server = match HttpServer::new(wifi_mgr) {
+            Ok(server) => Some(server),
+            Err(e) => { log::error!(...); None }
+        };
+      The `_http_server` naming convention signals intentional discard
+      (it's not used after creation but its Drop is important).
+    refs:
+      - src/main.rs (net_owner thread, ~line 243)
+      - src/infrastructure/network/http_server.rs (HttpServer::new, Drop)
+      - docs/crash_reports/2026-07-04_http_dropped_motor_oom.md
+
+  - id: LL-010
+    date: 2026-07-04
+    crash_signature: "IllegalInstruction + stack overflow in task pthread — uart watermark=540 — UART_THREAD_STACK=4096 — preceded by wifi:malloc buffer fail"
+    category: stack_overflow
+    trigger_patterns:
+      - "stack overflow in task pthread"
+      - "uart watermark=540"
+      - "UART_THREAD_STACK"
+      - "Thread 3 'uart' low stack"
+    lesson: >
+      Rust std::thread tasks using `std::io::stdin().read()` need MORE than
+      4 KB stack. The FFI call chain (Rust std → libc → ESP-IDF VFS → UART
+      driver → FreeRTOS xQueueReceive) consumes 3+ KB of stack. With
+      CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192, the std::thread default is
+      8 KB — any explicit stack_size below 8 KB for threads doing FFI I/O
+      will overflow.
+
+      The diagnostic routine `check_watermark()` triggers `log::warn!()` when
+      the watermark drops below 1024 bytes. The `log::warn!()` call itself
+      consumes ~300-400 bytes of stack for format_args! temporaries and FFI
+      calls (mutex_lock/unlock, esp_timer_get_time). This means the diagnostic
+      code can push an already-critical thread over the edge — the warning
+      becomes the final straw.
+
+      ALL threads showing watermark=0 in the crash dump does NOT mean all
+      threads overflowed. The emergency_dump() renders `u16::MAX` (never
+      checked) as 0. Only the thread that was registered AND checked before
+      the crash has a meaningful watermark.
+
+    diagnostic: >
+      1. Check which thread has a non-zero watermark — that's the only thread
+         whose stack was checked before the crash.
+      2. Check `src/config.rs` for the thread's stack size — anything below
+         8192 for threads doing FFI calls is suspicious.
+      3. Verify the `UART_THREAD_STACK` (and any other small-stack thread)
+         against the AGENTS.md GR-6 budget table.
+      4. If `check_watermark` fires a warning on a critically low stack, the
+         `log::warn!()` call itself may push the stack over — reduce log
+         verbosity or increase the stack.
+    fix: >
+      Set UART_THREAD_STACK to at least 8192 (matching the
+      CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT). For threads doing blocking
+      FFI I/O, 16384 is safer. Review ALL thread stack sizes against the
+      GR-6 budget table in AGENTS.md.
+    refs:
+      - src/config.rs
+      - docs/crash_reports/2026-07-04_uart_stack_overflow.md
+
+
   - id: LL-001
     date: 2026-07-02
     crash_signature: "PC=0x40359c07 A2=0xFFFFFFFC EXCVADDR=0x0"
