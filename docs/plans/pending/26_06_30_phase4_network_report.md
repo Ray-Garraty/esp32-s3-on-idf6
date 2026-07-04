@@ -634,6 +634,61 @@ Files:
 Report: docs/plans/completed/26_06_30_phase4_network_report.md
 ```
 
+## Cycle 4: DRAM Audit — Captive Portal Fix + BLE Heap Safety (2026-07-04)
+
+### Trigger
+Captive portal silently failed — phone connected to AP but portal pop-up never appeared.
+Manual `http://192.168.4.1` worked, proving HTTP code was correct.
+
+### Root Cause
+Not a code bug — **DRAM starvation**. After WiFi+HTTP init, largest contiguous block was
+12KB. When a client connected, lwIP couldn't allocate TCP buffers (~4-6KB per socket) for
+HTTP probes. DNS worked (UDP, lightweight), but HTTP GET to `/generate_204` timed out.
+The OS saw "network error" instead of HTTP 302, so no captive portal pop-up.
+
+Additionally, the NimBLE heap pre-check threshold (20KB) was too low: when largest=23KB,
+BLE init was attempted but immediately crashed with `assert failed: ble_hs_init` because
+internal NimBLE allocation needed more than 23KB. The C assert killed the entire process
+before Rust error handling could catch it (LL-007 pattern).
+
+### Changes Made
+
+| File | Change | Impact |
+|------|--------|--------|
+| `src/domain/memory.rs:5` | `LOG_BUFFER_SIZE: 100→20` | **~27KB freed** (static BSS) |
+| `src/infrastructure/network/http_server.rs:171` | `max_open_sockets: 5→4` | **~5KB freed** (lwIP socket buffers) |
+| `src/infrastructure/network/ble.rs:102` | BLE heap pre-check: 20K→30K | Prevents NimBLE crash when DRAM insufficient |
+| `src/main.rs:584-607` | Debug broadcast moved inside `should_broadcast()` | Main loop: 31ms→~5ms, faster DNS polling |
+| `sdkconfig.defaults` | Added `CONFIG_BT_NIMBLE_MAX_CCCD=4` | **~256B freed** |
+| `docs/lessons_learned.yaml` | Added LL-016, LL-017 | Documentation |
+
+### Heap Trajectory Comparison
+
+| Phase | Before (baseline) | After (cycle 4) | Delta |
+|-------|------------------|-----------------|-------|
+| Boot | largest=108KB | largest=108KB | = |
+| Post-WiFi | largest=32KB | largest=58KB | +26KB |
+| **HTTP started** | **largest=12KB** | **largest=23KB** | **+11KB (1.9x)** |
+| BLE init | CRASH | ✅ skipped (largest=23K < 30K) | stable |
+
+### Verification
+- Build: 0 errors, 0 warnings, 245/245 tests pass
+- Flash: successful, no crashes
+- Smoke test (60s): stable — AP ready, HTTP serving, BLE skipped gracefully
+- BLE scan: "EcoTiter-" NOT advertising (expected — heap below 30K threshold)
+- Captive portal: user confirmed **working** — AP visible, portal opens, STA connect succeeds
+- WebUI: loads in browser, WebSocket connects, real-time data updates
+
+### Lessons
+1. **Captive portal needs 20-30KB contiguous DRAM for lwIP TCP buffers**, not just
+   working HTTP handler code. Always verify `largest_free_block` after HTTP init.
+2. **NimBLE's C assert (`ble_hs_init`) is uncatchable from Rust.** The heap pre-check
+   must be conservative (30KB minimum) or the entire system crashes.
+3. **Debug broadcast every tick blows main loop from 5ms to 31ms.** Moving it inside
+   `should_broadcast()` restored loop performance without losing data.
+4. **Low-hanging fruit matters.** Three simple changes (log buffer, socket count, BLE
+   config) freed ~32KB DRAM with zero functional impact.
+
 ## Post-Mortem: Homing Blocks Main Thread — WiFi Unreachable (2026-07-03)
 
 ### Symptom

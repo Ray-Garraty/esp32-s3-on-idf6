@@ -168,7 +168,7 @@ impl HttpServer {
 
         let config = Configuration {
             stack_size: config::HTTP_SERVER_STACK,
-            max_open_sockets: 5,
+            max_open_sockets: 4,
             ..Default::default()
         };
 

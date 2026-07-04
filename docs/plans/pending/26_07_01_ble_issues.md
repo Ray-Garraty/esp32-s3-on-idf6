@@ -435,3 +435,70 @@ for WiFi timers and BLE.
 - `docs/plans/pending/26_07_01_webui_transfer.md` — WebUI transfer plan
 - ESP-IDF coexistence docs: `docs.espressif.com/…/coexist.html` — default
   coexistence (no preference) gives 50/50 WiFi/BLE time slices automatically
+
+---
+
+## Session 3 (2026-07-04): BLE disabled — heap too fragmented (largest=23KB)
+
+### Current state
+
+BLE is **deactivated at runtime** via a heap pre-check guard in `ble.rs`:
+
+```rust
+let (_free, largest, _dma) = crate::esp_safe::heap_stats();
+if largest < 30_000 {  // ← threshold raised from 20KB → 30KB
+    log::error!("BLE init skipped: heap too fragmented (largest={}K, need >=30K)",
+        largest / 1024);
+    return Err(NetworkError::BleInitFailed);
+}
+```
+
+### Why 20KB wasn't enough
+
+The original threshold (20KB) was too low. After HTTP init, `largest=23KB` marginally
+exceeded the old threshold, so BLE init was attempted. `BLEDevice::init()` called
+`nimble_port_init()` which internally asserts in `ble_hs_init()` with:
+
+```
+assert failed: ble_hs_init ble_hs.c:975 (rc == 0)
+```
+
+This C assert fires **before** Rust error handling can catch it, killing the entire
+process. The NimBLE host stack needs more contiguous DRAM than the 23KB available
+after HTTP init + WiFi + other thread stacks.
+
+### Heap trajectory (current baseline with DRAM optimizations)
+
+| Phase | Free | Largest | Notes |
+|-------|------|---------|-------|
+| Boot | 183KB | 108KB | — |
+| Pre-WiFi | 163K | 108K | — |
+| Post-WiFi | 58K | 58K | WiFi buffers 8→4 (LL-016) |
+| HTTP started | **30K** | **23K** | max_open_sockets 5→4, LOG_BUFFER 100→20 |
+| BLE init attempt | — | — | Skipped: 23K < 30K threshold |
+
+### BLE scan test result (2026-07-04)
+
+`scripts/ble_serial_test.py --scan-only` found 10+ nearby BLE devices
+(LYWSD03MMC, Samsung TV, Haier) but **no "EcoTiter-"** — expected, since BLE
+is not advertising.
+
+### Prerequisites for BLE activation
+
+BLE cannot be enabled until one of the following is true:
+
+1. **Hardware upgrade** — ESP32-WROVER-B with 8MB PSRAM
+   (+$1.50-2.00, pin-compatible). All DRAM constraints disappear.
+2. **More DRAM freed** — currently largest=23KB after HTTP init. Need
+   largest >= 30KB for BLE init to succeed with margin. Remaining options:
+   - `MAX_RESPONSE_SIZE: 512→256` (~4-8KB)
+   - `CONFIG_LWIP_MAX_SOCKETS: 8→4` (~2-4KB)
+   - Remove debug broadcast (~576B stack)
+3. **Skipping HTTP server in AP mode** — if HTTP server is not needed
+   when no client is connected, largest would be ~40KB after WiFi init.
+
+### Recommendation
+
+Focus on captive portal and WebUI functionality (working), defer BLE
+activation until hardware upgrade or until DRAM budget allows largest
+>= 30KB with safety margin.

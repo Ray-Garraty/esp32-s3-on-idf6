@@ -579,10 +579,9 @@ fn main() {
                         "status", &d,
                     );
                 }
-            }
 
-            // debug broadcast
-            {
+                // debug broadcast (same rate as status broadcast)
+                {
                 let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
                     heapless::String::new();
                 let motor_busy = motor_state::MOTOR_BUSY.load(Ordering::Acquire);
@@ -604,6 +603,7 @@ fn main() {
                         "debug", &d,
                     );
                 }
+                } // debug broadcast block
             }
 
             // limitsw — periodic push (~1s)

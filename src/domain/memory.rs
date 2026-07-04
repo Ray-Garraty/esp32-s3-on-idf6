@@ -2,7 +2,7 @@
 // ── Fixed-size buffer constants ───────────────────────────────
 pub const MAX_COMMAND_SIZE: usize = 256;
 pub const MAX_RESPONSE_SIZE: usize = 512;
-pub const LOG_BUFFER_SIZE: usize = 100;
+pub const LOG_BUFFER_SIZE: usize = 20;
 
 pub use super::logging::{MAX_LOG_MODULE_SIZE, MAX_LOG_MSG_SIZE};
 pub const ADC_BUF_SIZE: usize = 64;
