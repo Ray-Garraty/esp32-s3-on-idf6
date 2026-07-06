@@ -52,7 +52,11 @@ pub static HOMING_STOP_STEPS: AtomicI32 = AtomicI32::new(0);
 ///   makes the truncation-safe cast the intentional clamping boundary.
 /// - `cast_precision_loss`: `f32` mantissa (24 bit) is ~16.7 M; max burette
 ///   encoding is `50.0 × 100 = 5000`, far below the loss threshold.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "explicit clamping to i32::MAX/MIN, max burette encoding 5000 within f32 exact range"
+)]
 fn encode_volume_x100(vol_ml: f32) -> i32 {
     let scaled = (vol_ml * 100.0).round();
     if scaled > (i32::MAX as f32) {
@@ -71,7 +75,10 @@ fn encode_volume_x100(vol_ml: f32) -> i32 {
 /// `cast_precision_loss`: max encoded volume is `50.0 × 100 = 5000`,
 /// well within `f32`'s 24-bit exact-representable range (~16.7 M).
 /// No precision is lost for any physically possible burette volume.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "max encoded volume 50.0*100=5000, well within f32 24-bit exact range"
+)]
 fn decode_volume_x100(encoded: i32) -> f32 {
     encoded as f32 / 100.0
 }

@@ -55,7 +55,10 @@ pub struct AdcDriver {
     /// Channel borrows the ADC driver via a `'static` reference.
     channel: EspChannel,
     /// Leaked `'static` reference to the ADC driver — must outlive the channel.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "Leaked ref kept alive for lifetime of channel, never directly accessed"
+    )]
     adc_ref: &'static EspDriver,
     /// Rolling-average ring buffer (up to `ADC_SAMPLES` entries).
     buf: Vec<u16, 64>,
@@ -131,7 +134,10 @@ impl AdcDriver {
     /// Return the rolling average of the last N samples, if any.
     ///
     /// Returns `None` if no samples have been read yet.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "sum of at most 64 u16 values (max 262080) divided by count fits in u16"
+    )]
     pub fn avg_mv(&self) -> Option<u16> {
         let len = self.buf.len();
         if len == 0 {
@@ -154,7 +160,10 @@ impl AdcDriver {
     ///
     /// Formula: `calibrated = a × raw + b`, where `a = COEFF_A_X1000 / 1000`.
     /// Result is clamped to `i16` range.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "result clamped to i16 range before cast"
+    )]
     pub fn calibrated_mv(&self) -> i16 {
         let raw = self.buf.last().copied().unwrap_or(0);
         let a = i32::from(COEFF_A_X1000.load(Ordering::Relaxed));

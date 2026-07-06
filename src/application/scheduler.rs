@@ -22,7 +22,10 @@ static G_TICK_MS: AtomicU32 = AtomicU32::new(0);
 ///
 /// Must be called from the main loop every tick with the tick duration.
 /// The counter wraps at `u32::MAX` (~49.7 days with 10ms ticks).
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "u64 to u32 truncation wraps at ~49.7 days, acceptable for lab instrument"
+)]
 pub fn tick(ms: u64) {
     // Saturating add to avoid panic on overflow; wrapping is intended.
     // Truncation to u32 is deliberate for xtensa compatibility — the tick

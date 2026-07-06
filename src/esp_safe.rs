@@ -185,11 +185,11 @@ pub fn uart_init_stdin() {
         if !esp_idf_sys::uart_is_driver_installed(esp_idf_sys::uart_port_t_UART_NUM_0) {
             let ret = esp_idf_sys::uart_driver_install(
                 esp_idf_sys::uart_port_t_UART_NUM_0, // uart_num: UART0
-                256,                                   // rx_buffer_size
-                0,                                     // tx_buffer_size (0 = no TX buffering)
-                10,                                    // queue_size (RX event queue depth)
-                core::ptr::null_mut(),                 // uart_queue (NULL = don't need handle)
-                0,                                     // intr_alloc_flags (default)
+                256,                                 // rx_buffer_size
+                0,                                   // tx_buffer_size (0 = no TX buffering)
+                10,                                  // queue_size (RX event queue depth)
+                core::ptr::null_mut(),               // uart_queue (NULL = don't need handle)
+                0,                                   // intr_alloc_flags (default)
             );
             if ret != 0 {
                 // Non-fatal: stdin simply won't work, but we log it
@@ -200,7 +200,11 @@ pub fn uart_init_stdin() {
         // Step 3: Switch VFS to driver mode for blocking interrupt-driven I/O
         // Note: uart_vfs_dev_use_driver takes c_int (i32), not uart_port_t (c_uint).
         // UART_NUM_0 = 0, fits safely in i32.
-        #[allow(clippy::cast_possible_wrap)]
+
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "UART_NUM_0 = 0, fits safely in i32"
+        )]
         esp_idf_sys::uart_vfs_dev_use_driver(esp_idf_sys::uart_port_t_UART_NUM_0 as i32);
     }
     diag::ffi_guard::record_exit(diag::ffi_guard::FFI_UART_INIT, 0);
@@ -256,7 +260,8 @@ pub fn uart_read_stdin_blocking(buf: &mut [u8]) -> Result<usize, EspError> {
     };
     diag::ffi_guard::record_exit(diag::ffi_guard::FFI_UART_READ, if ret < 0 { -1 } else { 0 });
     if ret < 0 {
-        #[allow(clippy::expect_used)]
+        // .expect() is safe: ret < 0 was just verified, so NonZeroI32::new cannot fail.
+        #[expect(clippy::expect_used)]
         let nz = NonZeroI32::new(ret).expect("ret < 0 => non-zero");
         Err(EspError::from_non_zero(nz))
     } else {
@@ -318,7 +323,10 @@ pub fn wifi_deinit_retry(max_attempts: u32) -> bool {
         // SAFETY: esp_wifi_deinit is safe if called after esp_wifi_init
         // (even failed init). It may return error code but no UB.
         let ret = unsafe { esp_idf_sys::esp_wifi_deinit() };
-        diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_WIFI_DEINIT, if ret == 0 { 0 } else { -1 });
+        diag::ffi_guard::record_exit(
+            diag::ffi_guard::FFI_ESP_WIFI_DEINIT,
+            if ret == 0 { 0 } else { -1 },
+        );
         if ret == 0 {
             return true;
         }
@@ -335,13 +343,15 @@ pub fn wifi_deinit_retry(max_attempts: u32) -> bool {
 /// Returns a 64-bit microsecond timestamp from the hardware timer.
 /// Safe to call from any context (read-only HW register).
 /// Used for diagnostic main loop timing.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "esp_timer_get_time returns i64 but hardware timer is always non-negative"
+)]
 pub fn micros() -> u64 {
     // SAFETY: esp_timer_get_time() is a read-only hardware register read.
     // Safe from any context — no heap, no locks, no OS calls.
-    #[allow(clippy::cast_sign_loss)]
-    unsafe {
-        esp_idf_sys::esp_timer_get_time() as u64
-    }
+
+    unsafe { esp_idf_sys::esp_timer_get_time() as u64 }
 }
 
 // ── Hardware exception panic handler (linker-wrapped) ────────────────
@@ -351,6 +361,7 @@ pub fn micros() -> u64 {
 
 /// Matches `panic_info_t` from ESP-IDF
 /// `components/esp_system/include/esp_private/panic_internal.h`
+// C-FFI struct — accessed via raw pointer cast in panic handler, not directly constructed.
 #[repr(C)]
 #[allow(dead_code)]
 struct PanicInfo {
@@ -368,6 +379,7 @@ struct PanicInfo {
 /// Matches `XtExcFrame` from ESP-IDF
 /// `components/xtensa/include/xtensa_context.h`
 /// ESP32 windowed ABI with hardware loops (XCHAL_HAVE_LOOPS=1).
+// C-FFI struct — accessed via raw pointer cast in do_backtrace, not directly constructed.
 #[repr(C)]
 #[allow(dead_code)]
 struct XtExcFrame {
@@ -500,7 +512,10 @@ fn print_bt_entry(w: &mut impl core::fmt::Write, pc: u32, sp: u32) {
 /// The algorithm reads the base-save area at [sp-16] (return
 /// address) and [sp-12] (previous frame sp), which the `entry`
 /// instruction / window-underflow handler has left behind.
-#[allow(clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "XtExcFrame i32 fields are hardware register values, always non-negative for valid addresses"
+)]
 fn do_backtrace(w: &mut impl core::fmt::Write, frame: *const XtExcFrame) {
     if frame.is_null() {
         return;
@@ -629,7 +644,10 @@ impl core::fmt::Write for CrashWriter {
 /// inconsistent. This function uses only lock-free volatile reads and raw
 /// UART writes. It must NOT allocate, lock mutexes, or use `format!()`.
 #[no_mangle]
-#[allow(clippy::not_unsafe_ptr_arg_deref, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "XtExcFrame i32 fields are hardware register values, always non-negative"
+)]
 pub unsafe extern "C" fn __wrap_esp_panic_handler(info: *const core::ffi::c_void) {
     use core::fmt::Write;
 

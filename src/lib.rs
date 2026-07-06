@@ -15,10 +15,6 @@
 #![warn(clippy::large_enum_variant)]
 #![warn(clippy::boxed_local)]
 #![warn(clippy::vec_box)]
-#![deny(clippy::cast_possible_truncation)]
-#![deny(clippy::cast_sign_loss)]
-#![deny(clippy::cast_precision_loss)]
-#![deny(clippy::cast_lossless)]
 #![warn(clippy::float_cmp)]
 #![warn(clippy::float_cmp_const)]
 #![warn(clippy::if_not_else)]
@@ -27,6 +23,13 @@
 #![warn(clippy::needless_pass_by_value)]
 #![warn(clippy::trivially_copy_pass_by_ref)]
 #![warn(clippy::unnecessary_wraps)]
+// Crate-level clippy allows — each justified below:
+// - module_name_repetitions: many submodules share names; renaming harms discoverability.
+// - missing_errors_doc: Result return types are self-documenting via thiserror variants.
+// - must_use_candidate: many pub fns return values, but not all benefit from #[must_use].
+// - similar_names: domain types (Ml/MlMin, Steps/Hz) use short parallel names intentionally.
+// - doc_markdown: code spans in docs are common; backtick noise outweighs benefit.
+// - multiple_crate_versions: cargo-deny handles version conflicts; clippy is noisy here.
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::must_use_candidate)]

@@ -75,7 +75,10 @@ impl CommandHandler for SystemHandler {
 /// position is in steps (i32, max ~2.1B). For f32 mantissa (24 bit, ~16.7 M),
 /// positions above 16.7 million steps lose precision. At 200 steps/mL this
 /// corresponds to ~83 kL, physically impossible for a burette.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "current_pos up to ~2.1B, f32 mantissa 24bit loses precision above 16.7M; physically impossible for burette (83 kL equivalent)"
+)]
 fn handle_get_status(ctx: &HandlerContext<'_>, id: u64) -> CommandResponse {
     let sts = motor_state::get_broadcast_sts();
     let vol = motor_state::get_current_volume_ml();

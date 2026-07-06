@@ -108,7 +108,11 @@ pub struct CalSpeedSeqPlan {
 /// Calculate the number of cycles needed for a given volume.
 ///
 /// `ceil(volume / nominal)`, saturating cast to `u8`.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "cycles saturated to 255 before cast, always non-negative"
+)]
 pub fn calc_total_cycles(volume: Ml, nominal: Ml) -> u8 {
     if nominal.0 <= 0.0 {
         return 0;
@@ -125,7 +129,6 @@ pub fn calc_total_cycles(volume: Ml, nominal: Ml) -> u8 {
 ///
 /// `fmod(volume, nominal)`. If the residual is below `PLANNER_RESIDUAL_THRESHOLD`,
 /// returns `nominal` (i.e., the last cycle is a full one).
-#[allow(clippy::cast_precision_loss)]
 pub fn calc_remaining_vol(volume: Ml, nominal: Ml) -> Ml {
     if nominal.0 <= 0.0 {
         return Ml(0.0);
@@ -148,7 +151,6 @@ pub fn calc_remaining_vol(volume: Ml, nominal: Ml) -> Ml {
 /// 3. Speed out of range → reject
 /// 4. Burette busy → reject
 /// 5. Compute cycles, decide FillFirst vs Direct
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn plan_dose_volume(
     vol: Ml,
     speed: MlMin,
@@ -310,7 +312,11 @@ pub fn plan_rinse(cycles: u8, speed: MlMin, is_busy: bool) -> RinsePlan {
 /// Plan a calibration run.
 ///
 /// `mode` must be `"dose"` or `"speed"`.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "freq clamped to [0, 65535] via u16 type, sign not applicable"
+)]
 pub fn plan_cal_run(
     mode: &str,
     speed: MlMin,
@@ -389,7 +395,6 @@ pub fn plan_cal_run(
 /// Plan a calibration speed sequence.
 ///
 /// `freq_count` must be between 3 and 8 (inclusive).
-#[allow(clippy::cast_precision_loss)]
 pub fn plan_cal_speed_seq(
     freq_count: u8,
     fill_speed: MlMin,

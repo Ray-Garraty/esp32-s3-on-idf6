@@ -422,6 +422,7 @@ known_good: <last working commit hash>")
 - LF (`\n`) line endings. No trailing whitespace.
 - All pipelines: 0 errors, 0 warnings — no "pre-existing" excuses.
 - Two-strike rule: 2 attempts per task, then stop and consult user.
+- **Every `#[allow()]` / `#[expect()]` suppression MUST have an English `//` comment within the preceding 3 lines** explaining why the lint cannot be satisfied by changing the code. Prefer `#[expect]` over `#[allow]` when the lint always fires. A bare suppression with no justification is a broken window and will be rejected by CI (`scripts/check_lint_suppressions.py`).
 
 ### 8.2 Error Handling
 
@@ -521,6 +522,8 @@ Before submitting any change, verify:
 - [ ] `scripts/build.sh test` — all host tests pass
 - [ ] No `unwrap()`/`expect()`/`panic!()`/`todo!()`/`unreachable!()` in production
 - [ ] No `Vec`/`String` in main loop or motor thread hot paths (use `heapless`)
+- [ ] Every `#[allow()]` / `#[expect()]` has an English comment within preceding 3 lines
+- [ ] `scripts/check_lint_suppressions.py` passes
 - [ ] No `esp-idf-*` imports in `domain/` layer
 - [ ] Main loop has NO blocking operations (GR-1)
 - [ ] Every RMT motion has a stop flag (GR-2)

@@ -14,7 +14,6 @@ use super::black_box::DiagEvent;
 /// Uses `esp_safe::heap_stats()` which wraps `esp_get_free_heap_size()` and
 /// `heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)`. On ESP32 without
 /// PSRAM these are equivalent to MALLOC_CAP_INTERNAL values.
-#[allow(clippy::cast_possible_truncation)]
 pub fn snapshot(phase: &'static str) {
     let (free, largest, _dma) = crate::esp_safe::heap_stats();
 
@@ -34,7 +33,10 @@ pub fn snapshot(phase: &'static str) {
 
 /// Warn if the largest free DRAM block is smaller than `bytes`.
 /// Call before allocating a large contiguous buffer.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "largest/1024 capped to u16::MAX, fragmentation values typically <64KB"
+)]
 pub fn assert_can_allocate(bytes: usize, context: &'static str) {
     let (_free, largest, _dma) = crate::esp_safe::heap_stats();
     let largest = largest as usize;

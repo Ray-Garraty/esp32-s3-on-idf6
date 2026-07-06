@@ -17,7 +17,7 @@
 
 use std::sync::OnceLock;
 
-use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, EspDefaultNvs};
+use esp_idf_svc::nvs::{EspDefaultNvs, EspDefaultNvsPartition, EspNvs};
 
 use crate::errors::ResourceError;
 
@@ -60,13 +60,15 @@ fn open_stallguard(readwrite: bool) -> Result<EspDefaultNvs, ResourceError> {
 /// Read the StallGuard threshold from NVS.
 ///
 /// Returns `DEFAULT_SG_THRESHOLD` (0) if not set.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "StallGuard threshold is 0-255, safe u32 to u8"
+)]
 pub fn stallguard_read_threshold() -> u8 {
-    #[allow(clippy::cast_possible_truncation)]
-    let threshold = open_stallguard(false)
+    open_stallguard(false)
         .ok()
         .and_then(|nvs| nvs.get_u32(KEY_SG_THRESHOLD).ok().flatten())
-        .unwrap_or(DEFAULT_SG_THRESHOLD) as u8;
-    threshold
+        .unwrap_or(DEFAULT_SG_THRESHOLD) as u8
 }
 
 /// Write the StallGuard threshold to NVS.
@@ -86,14 +88,20 @@ fn open_wifi(readwrite: bool) -> Result<EspDefaultNvs, ResourceError> {
 }
 
 /// Read a string value from the wifi namespace into a heapless::String<N>.
-pub fn wifi_read_str<const N: usize>(key: &str) -> Result<Option<heapless::String<N>>, ResourceError> {
+pub fn wifi_read_str<const N: usize>(
+    key: &str,
+) -> Result<Option<heapless::String<N>>, ResourceError> {
     let nvs = open_wifi(true)?;
     let mut buf = [0u8; 128];
-    let val = nvs.get_str(key, &mut buf).map_err(|_| ResourceError::NvsOpenFailed)?;
+    let val = nvs
+        .get_str(key, &mut buf)
+        .map_err(|_| ResourceError::NvsOpenFailed)?;
     match val {
         Some(s) => {
             let mut result: heapless::String<N> = heapless::String::new();
-            result.push_str(s).map_err(|_| ResourceError::NvsOpenFailed)?;
+            result
+                .push_str(s)
+                .map_err(|_| ResourceError::NvsOpenFailed)?;
             Ok(Some(result))
         }
         None => Ok(None),
@@ -103,7 +111,8 @@ pub fn wifi_read_str<const N: usize>(key: &str) -> Result<Option<heapless::Strin
 /// Write a string value to the wifi namespace.
 pub fn wifi_write_str(key: &str, value: &str) -> Result<(), ResourceError> {
     let nvs = open_wifi(true)?;
-    nvs.set_str(key, value).map_err(|_| ResourceError::NvsOpenFailed)
+    nvs.set_str(key, value)
+        .map_err(|_| ResourceError::NvsOpenFailed)
 }
 
 /// Erase a key from the wifi namespace.

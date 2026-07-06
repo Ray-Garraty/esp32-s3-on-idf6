@@ -219,7 +219,8 @@ impl BleManager {
     ///
     /// - If 5 consecutive notify failures → `zombie_kill()` (Level 1)
     /// - If `connected_count()==0` but local flag is true → kill (Level 3)
-    #[allow(unused)]
+    // TODO: wire into notify thread in Phase 5; currently unused but implementation is complete.
+    #[expect(unused)]
     fn ble_send(&mut self, data: &[u8]) -> Result<(), ()> {
         let server = BLEDevice::take().get_server();
         let Some(tx_char) = self.tx_char.as_ref() else {

@@ -125,7 +125,11 @@ fn handle_adc_cal_compute(raw_mv: Option<i16>, id: u64) -> CommandResponse {
         };
     };
     // i16 → u16 cast: intentional — ADC raw values are always non-negative.
-    #[allow(clippy::cast_sign_loss)]
+
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "i16 to u16: ADC raw values are guaranteed non-negative by hardware"
+    )]
     let calibrated = adc_cal::calibrated_from_raw(raw as u16);
     let mut data: CompactJson = CompactJson::new();
     let _ = write!(data, r#"{{"raw_mv":{raw},"calibrated_mv":{calibrated}}}"#);

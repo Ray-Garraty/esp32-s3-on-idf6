@@ -130,7 +130,6 @@ pub enum BuretteCommand {
 /// 4. **Params**   — bounds and ranges checked by the planner module
 ///
 /// Returns `Ok(true)` if the transition is valid, `Err(StateError)` otherwise.
-#[allow(clippy::needless_pass_by_value)]
 pub const fn can_transition_to(
     state: &BuretteState,
     cmd: &BuretteCommand,

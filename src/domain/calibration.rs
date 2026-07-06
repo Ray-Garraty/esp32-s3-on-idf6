@@ -144,7 +144,10 @@ pub struct SpeedCalResult {
 ///
 /// Uses `lroundf` semantics (`.round() as i32`).
 /// Returns 0 for negative volume.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "deliberate lroundf semantics for step count"
+)]
 pub fn volume_to_steps(vol: Ml, steps_per_ml: f32) -> Steps {
     if vol.0 < 0.0 {
         return Steps(0);
@@ -158,7 +161,10 @@ pub fn volume_to_steps(vol: Ml, steps_per_ml: f32) -> Steps {
 ///
 /// `delta = steps - base_steps`, then `vol = delta / steps_per_ml`.
 /// Clamped to `[0, nominal_vol]`. Returns 0 if `steps_per_ml < 0.001`.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "max steps ~1e9, f32 mantissa ~7 digits; actual steps ~7e5, no precision loss"
+)]
 pub fn steps_to_volume(steps: Steps, base: Steps, steps_per_ml: f32, nominal: Ml) -> Ml {
     if steps_per_ml < 0.001 {
         return Ml(0.0);
@@ -182,7 +188,11 @@ pub fn steps_to_volume(steps: Steps, base: Steps, steps_per_ml: f32, nominal: Ml
 /// `freq = speed / coeff`, rounded via `lroundf`.
 /// Clamped to `[min_freq, max_freq]`.
 /// Returns `min_freq` if coefficient is near zero.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "freq clamped to [min_freq, max_freq] before cast"
+)]
 pub fn speed_to_frequency(speed: MlMin, coeff: f32, min_freq: u16, max_freq: u16) -> u16 {
     if coeff < 0.000_001 {
         return min_freq;
@@ -196,7 +206,7 @@ pub fn speed_to_frequency(speed: MlMin, coeff: f32, min_freq: u16, max_freq: u16
         max_freq
     } else {
         // Safe: freq is clamped to [min_freq, max_freq], both u16
-        #[allow(clippy::cast_possible_truncation)]
+
         {
             freq as u16
         }
@@ -221,7 +231,6 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 ///
 /// Temperature is clamped to `[15.0, 30.0]`, pressure to `[80.0, 106.7]`.
 /// Returns the Z-factor for the given environmental conditions.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn get_z_factor(temperature: f32, pressure: f32) -> f32 {
     // Clamp inputs to table bounds
     let temp = temperature.clamp(TEMP_VALS[0], TEMP_VALS[CAL_Z_TABLE_ROWS - 1]);
@@ -284,7 +293,10 @@ pub fn calculate_new_steps_per_ml(current_spm: f32, target_vol: Ml, actual_vol: 
 /// Formula (matches legacy C++ exactly):
 ///   k = (Σfv - Σf·Σv/n) / (Σff - Σf²/n)
 ///   r² = 1 - SS_res / SS_tot
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "count is 2-8, well within f32 exact range"
+)]
 pub fn calculate_speed_calibration(frequencies: &[f32], speeds: &[f32]) -> SpeedCalResult {
     let count = frequencies.len().min(speeds.len());
     if count < 2 {

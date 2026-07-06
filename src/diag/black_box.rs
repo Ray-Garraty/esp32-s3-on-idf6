@@ -137,26 +137,22 @@ impl BlackBox {
 
     /// Record an event. Lock-free: atomic index increment, then volatile write.
     /// Safe to call from any context including ISR and panic handler.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::undocumented_unsafe_blocks,
-        clippy::volatile_composites,
-        clippy::as_ptr_cast_mut,
-        clippy::ptr_cast_constness
-    )]
     pub fn record(&self, event: DiagEvent) {
         let idx = self.write_idx.fetch_add(1, Ordering::Relaxed) as usize % CAPACITY;
-        // SAFETY: Each slot has a single writer (atomic index is monotonic).
-        // write_volatile prevents compiler reordering past the atomic increment.
-        // timestamp uses esp_timer_get_time which is read-only and safe after boot.
+        #[allow(clippy::undocumented_unsafe_blocks)]
         let record = Record {
+            // SAFETY: esp_timer_get_time() reads a hardware register; no side effects.
             timestamp_us: unsafe { u32::try_from(esp_timer_get_time()).unwrap_or(0) / 1000 },
             event,
             thread_slot: current_thread_slot(),
             padding: [0; 2],
             checksum: 0,
         };
+        // SAFETY: Each slot has a single writer (atomic index is monotonic).
+        // write_volatile prevents compiler reordering past the atomic increment.
+        // idx is bounded by CAPACITY (checked by modulo on line 141).
+        // Record has padding bytes which trigger volatile_composites — intentional for lock-free ring buffer.
+        #[expect(clippy::volatile_composites)]
         unsafe {
             let ptr = self.buffer.as_ptr().cast_mut();
             core::ptr::write_volatile(ptr.add(idx), record);
@@ -165,7 +161,8 @@ impl BlackBox {
     }
 
     /// Write all events to `writer` (newest first). Used from panic handler.
-    #[allow(clippy::cast_possible_truncation, clippy::volatile_composites)]
+    /// Record has padding bytes; volatile read is intentional for lock-free ring buffer.
+    #[expect(clippy::volatile_composites)]
     pub fn dump(&self, writer: &mut dyn core::fmt::Write) {
         let count = self
             .count
@@ -208,8 +205,10 @@ pub fn dump(writer: &mut dyn core::fmt::Write) {
 
 use std::cell::Cell;
 
+// `Cell::new` in const context is not possible for thread-local
+// (const fn not stable for Cell expressions in thread_local! macro).
 std::thread_local! {
-    #[allow(clippy::missing_const_for_thread_local)]
+    #[expect(clippy::missing_const_for_thread_local)]
     static THREAD_SLOT: Cell<u8> = Cell::new(0xFF);
 }
 

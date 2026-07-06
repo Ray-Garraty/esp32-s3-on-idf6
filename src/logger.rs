@@ -3,6 +3,7 @@
 //! This module is only available on ESP32 (xtensa) targets because it depends on
 //! `esp_idf_sys::esp_timer_get_time()` and uses `println!` for UART output.
 
+// The module name `logger` is a natural, short name; renaming would not improve readability.
 #![allow(clippy::module_name_repetitions)]
 
 use core::fmt::Write as FmtWrite;
@@ -80,7 +81,10 @@ impl Log for Logger {
         let mut module: heapless::String<MAX_LOG_MODULE_SIZE> = heapless::String::new();
         write!(module, "{target}").ok();
 
-        let mut buf = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut buf = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         buf.push(LogEntry {
             ts_ms,
             level,

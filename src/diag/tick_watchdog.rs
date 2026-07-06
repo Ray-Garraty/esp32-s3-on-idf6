@@ -19,7 +19,6 @@ const CRITICAL_THRESHOLD_US: u32 = 500_000;
 static LAST_TICK_US: AtomicU32 = AtomicU32::new(0);
 
 /// Call at the START of each main loop iteration.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn tick_begin() {
     let now = u32::try_from(crate::esp_safe::micros()).unwrap_or(0);
     LAST_TICK_US.store(now, Ordering::Release);
@@ -27,7 +26,6 @@ pub fn tick_begin() {
 
 /// Call at the END of each main loop iteration (after all work, before sleep).
 /// Detects overruns and records diagnostic events.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn tick_end() {
     let now = u32::try_from(crate::esp_safe::micros()).unwrap_or(0);
     let start = LAST_TICK_US.load(Ordering::Acquire);

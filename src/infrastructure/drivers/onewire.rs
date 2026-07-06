@@ -33,7 +33,10 @@ static TEMP_C_X100: AtomicI32 = AtomicI32::new(DISCONNECTED);
 /// Return the last valid temperature reading, if any.
 ///
 /// Returns `None` if the sensor has never been read or is disconnected.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "temperature in hundredths, max -55..125°C, well within f32 exact range"
+)]
 pub fn temp_celsius() -> Option<f32> {
     let v = TEMP_C_X100.load(Ordering::Relaxed);
     if v == DISCONNECTED {
@@ -207,7 +210,10 @@ pub fn read_sensor(bus: &mut OneWireBus) -> Option<f32> {
         return None;
     }
 
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "temp is -55..125, temp*100 within i32 range"
+    )]
     TEMP_C_X100.store((temp * 100.0) as i32, Ordering::Relaxed);
     Some(temp)
 }

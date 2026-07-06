@@ -50,6 +50,7 @@ pub enum StepperError {
     Rmt { code: i32 },
     /// FUTURE: used when merging limit switch into stepper state machine in Phase 5.
     /// Currently, the driver uses StepperError::LimitSwitchReached for stop_flag polling.
+    // Type referenced in thiserror Display impl but never constructed until Phase 5.
     #[allow(dead_code)]
     #[error("Limit switch triggered: {switch:?}")]
     LimitSwitchTriggered { switch: LimitSwitchId },

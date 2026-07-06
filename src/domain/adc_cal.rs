@@ -32,7 +32,11 @@ pub(crate) static COEFF_B: AtomicI16 = AtomicI16::new(DEFAULT_B);
 ///
 /// Uses round-to-nearest (add 0.5 before truncation) to minimise
 /// quantisation error when converting from floating-point.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "intentional fixed-point quantisation with round-to-nearest"
+)]
 pub fn set_calibration(a: f32, b: f32) {
     COEFF_A_X1000.store((a.mul_add(1000.0, 0.5)) as u16, Ordering::Relaxed);
     COEFF_B.store((b + 0.5) as i16, Ordering::Relaxed);
@@ -52,7 +56,10 @@ pub fn reset_calibration() {
 }
 
 /// Compute calibrated mV from a given raw value using the current coefficients.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "clamped to i16 range before cast"
+)]
 pub fn calibrated_from_raw(raw: u16) -> i16 {
     let a = i32::from(COEFF_A_X1000.load(Ordering::Relaxed));
     let b = i32::from(COEFF_B.load(Ordering::Relaxed));

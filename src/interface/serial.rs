@@ -63,7 +63,10 @@ impl SerialReader {
     /// # Safety
     ///
     /// The `out` buffer must be large enough to hold `MAX_COMMAND_SIZE` bytes.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "u64 to u32 wraps at ~49.7 days, wrapping arithmetic in is_usb_alive() handles wrap"
+    )]
     pub fn push_byte(&mut self, byte: u8, out: &mut Vec<u8, MAX_COMMAND_SIZE>) -> bool {
         if byte == b'\n' {
             // Complete line received — copy to out and clear internal buffer.
@@ -117,8 +120,11 @@ pub fn is_usb_alive(timeout_ms: u64) -> bool {
 /// `(now.wrapping_sub(last)) < timeout`, which handles wraparound correctly
 /// for intervals up to 49.7 days. Lab equipment is rebooted periodically,
 /// making this acceptable.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "u64 to u32 wraps at ~49.7 days, see push_byte justification"
+)]
 pub fn serial_touch() {
-    #[allow(clippy::cast_possible_truncation)]
     G_LAST_SERIAL_ACTIVITY.store(scheduler::elapsed_ms() as u32, Ordering::Release);
 }
 

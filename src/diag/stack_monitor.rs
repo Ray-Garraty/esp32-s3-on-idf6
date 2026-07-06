@@ -31,7 +31,8 @@ struct ThreadInfo {
 }
 
 /// Fixed-size registry — all threads known at compile time.
-#[allow(clippy::declare_interior_mutable_const)]
+// const + Atomic* pattern forces interior mutability; this is by design.
+#[expect(clippy::declare_interior_mutable_const)]
 static THREADS: [ThreadInfo; THREAD_COUNT] = {
     const EMPTY: ThreadInfo = ThreadInfo {
         name: OnceLock::new(),
@@ -57,9 +58,11 @@ pub fn register_thread(slot: u8, name: &'static str) {
 /// Check the current thread's stack watermark against thresholds.
 /// Records `DiagEvent::StackLow` / `StackCritical` if below threshold.
 /// Safe to call from any registered thread.
-#[allow(clippy::cast_possible_truncation)]
 pub fn check_watermark(slot: u8) {
-    let Some(info) = THREADS.get(slot as usize).filter(|t| t.registered.load(Ordering::Acquire)) else {
+    let Some(info) = THREADS
+        .get(slot as usize)
+        .filter(|t| t.registered.load(Ordering::Acquire))
+    else {
         return;
     };
 

@@ -51,6 +51,10 @@ nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
 multiple_crate_versions = "allow"
 undocumented_unsafe_blocks = "deny"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+cast_lossless = "warn"
 
 [features]
 strict-lints = []

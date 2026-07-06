@@ -26,11 +26,8 @@ impl RampConfig {
     /// `max_hz` is the maximum step frequency (cruise speed).
     /// `min_hz` is the minimum step frequency (start/stop speed).
     /// Intervals are derived as `1_000_000 / hz`.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::manual_checked_ops
-    )]
+    /// Zero checks on max_hz/min_hz are explicit by design (const fn, no checked_div).
+    #[allow(clippy::manual_checked_ops)]
     pub const fn new(accel_steps: u32, decel_steps: u32, max_hz: u32, min_hz: u32) -> Self {
         Self {
             accel_steps,
@@ -127,10 +124,10 @@ impl RampIter {
 impl Iterator for RampIter {
     type Item = u32;
 
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_lossless
+        reason = "interval clamped to [min, max] before cast, i64 values bounded at compile time"
     )]
     fn next(&mut self) -> Option<u32> {
         if self.pos >= self.total_steps {
@@ -204,12 +201,9 @@ impl Iterator for RampIter {
 /// step counts (> 2000) in constrained heap environments, use [`RampIter`] instead.
 ///
 /// Kept for backward compatibility and tests.
-#[allow(
-    clippy::disallowed_types,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_lossless
-)]
+/// Vec is disallowed in production hot paths but permitted here for config-time ramp
+/// computation and test-only usage (see docs/refs/coding_style.md §5).
+#[cfg(any(test, doc))]
 pub fn compute_ramp(total_steps: u32, config: &RampConfig) -> Vec<u32> {
     RampIter::new(total_steps, config).collect()
 }

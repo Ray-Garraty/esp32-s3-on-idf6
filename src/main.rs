@@ -42,7 +42,11 @@ fn setup_panic_hook() {
     }));
 }
 
-#[allow(clippy::expect_used, clippy::too_many_lines)]
+// `expect_used`: main() uses .expect() for init failures that are fatal
+// (peripherals, NVS, system event loop) — unwinding is acceptable here.
+// `too_many_lines`: main() orchestrates the full device lifecycle; splitting
+// would obscure the init sequence and GR-3 ordering dependency.
+#[expect(clippy::expect_used, clippy::too_many_lines)]
 fn main() {
     use core::fmt::Write as CoreWrite;
     use ecotiter_fw::application::command::{CommandEnvelope, CommandResponse, HandlerContext};
@@ -136,11 +140,9 @@ fn main() {
         mpsc::sync_channel::<(u64, CommandResponse)>(config::MAX_PENDING_RESPONSES);
 
     // ── Resources shared with Owner Thread ──
-    #[allow(clippy::expect_used)]
     let channels: &'static ecotiter_fw::domain::channels::SystemChannels = Box::leak(Box::new(
         ecotiter_fw::domain::channels::SystemChannels::new(),
     ));
-    #[allow(clippy::expect_used)]
     let cal_config: &'static ecotiter_fw::domain::calibration::CalibrationConfig = Box::leak(
         Box::new(ecotiter_fw::domain::calibration::CalibrationConfig::new()),
     );
@@ -148,6 +150,7 @@ fn main() {
     // Resources for Owner Thread
     let modem = peripherals.modem;
     let sys_loop = EspSystemEventLoop::take().expect("System event loop");
+    // .expect() on NVS init is acceptable: firmware cannot function without storage.
     #[allow(clippy::expect_used)]
     let nvs = nvs::nvs_init().expect("NVS init");
     let ble_active = Arc::new(AtomicBool::new(false));
@@ -582,27 +585,28 @@ fn main() {
 
                 // debug broadcast (same rate as status broadcast)
                 {
-                let mut d: heapless::String<{ ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE }> =
-                    heapless::String::new();
-                let motor_busy = motor_state::MOTOR_BUSY.load(Ordering::Acquire);
-                let _ = write!(
-                    d,
-                    r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":{},"bleConnected":{},"stepperDrv":{{"isConnected":true,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":{}}}}},"#,
-                    // Root { } closed by second write_buretteSteps part
-                    ecotiter_fw::interface::serial::is_usb_alive(config::USB_ALIVE_TIMEOUT_MS),
-                    ble_mgr.is_connected(),
-                    motor_busy,
-                );
-                let _ = write!(
-                    d,
-                    r#""buretteSteps":{{"taken":{}}}}}"#,
-                    motor_state::CURRENT_POSITION.load(Ordering::Acquire),
-                );
-                if http_server::G_HTTP_SERVER_ALIVE.load(Ordering::Acquire) {
-                    ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
+                    let mut d: heapless::String<
+                        { ecotiter_fw::domain::memory::MAX_RESPONSE_SIZE },
+                    > = heapless::String::new();
+                    let motor_busy = motor_state::MOTOR_BUSY.load(Ordering::Acquire);
+                    let _ = write!(
+                        d,
+                        r#"{{"adc":{{"raw_mv":{mv}}},"usbSerialConnected":{},"bleConnected":{},"stepperDrv":{{"isConnected":true,"otpw":false,"ot":false,"motor":{{"stallGuard":{{"value":null,"isStalled":false,"threshold":null}},"isMoving":{}}}}},"#,
+                        // Root { } closed by second write_buretteSteps part
+                        ecotiter_fw::interface::serial::is_usb_alive(config::USB_ALIVE_TIMEOUT_MS),
+                        ble_mgr.is_connected(),
+                        motor_busy,
+                    );
+                    let _ = write!(
+                        d,
+                        r#""buretteSteps":{{"taken":{}}}}}"#,
+                        motor_state::CURRENT_POSITION.load(Ordering::Acquire),
+                    );
+                    if http_server::G_HTTP_SERVER_ALIVE.load(Ordering::Acquire) {
+                        ecotiter_fw::infrastructure::network::http_server::broadcast_websocket_event(
                         "debug", &d,
                     );
-                }
+                    }
                 } // debug broadcast block
             }
 
