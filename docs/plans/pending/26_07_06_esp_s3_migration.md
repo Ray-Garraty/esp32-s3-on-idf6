@@ -4,8 +4,27 @@ title: ESP32 → ESP32-S3 Migration Plan
 description: Comprehensive migration plan for porting the firmware from classic ESP32 (Xtensa LX6) to ESP32-S3 (Xtensa LX7)
 tags: [migration, esp32-s3, esp32, plan]
 timestamp: 2026-07-06
-status: pending
+status: in_progress
 ---
+
+# ESP32 → ESP32-S3 Migration Plan
+
+## Status (2026-07-06)
+
+All source changes are complete. Build succeeds. Firmware flashes but **crashes on boot** — `abort()` in `diag::init()` → `stack_monitor::register_thread()` → `log::info!()` due to `disable_wdt()` calling `log::warn!()` before `logger::init()` (LL-019).
+
+### Remaining work
+
+- **Fix the boot crash:** move `logger::init()` before `disable_wdt()` in `main.rs` (or remove `log::warn!()` from `disable_wdt()`)
+- **Build + flash + smoke test** after fix
+- **Full validation** per Phase 7 table
+
+### Key findings during migration
+
+1. **ADC pin**: GPIO34 not an ADC pin on S3 (ADC1 pins are GPIO1-10 only). Migrated to GPIO4 (ADC1_CH3).
+2. **IRAM section**: S3 linker script accepts `.iram1` for IRAM placement, NOT `.iram0.text` (which is the OUTPUT section name, not input).
+3. **Panic handler in flash bug**: `__wrap_esp_panic_handler` and its call chain (do_backtrace, CrashWriter, is_sane_sp, etc.) must be in IRAM via `#[link_section = ".iram1"]` for crash dumps to appear after hardware exceptions.
+4. **WDT + logging**: `disable_wdt()` must not call `log::warn!()` because it runs before `logger::init()`.
 
 # ESP32 → ESP32-S3 Migration Plan
 
@@ -63,7 +82,7 @@ idf.py reconfigure
 | EN | 27 | YES | P4 (SPI flash) | Keep — same caveat |
 | LIMIT_FULL | 32 | YES | P4 (SPI flash) | Keep |
 | LIMIT_EMPTY | 35 | YES | P3 (8-line SPI) | Keep — P3 acceptable |
-| ADC (pH) | 34 | YES | P3 (8-line SPI) | Keep |
+| ADC (pH) | 34 | **NO** ❌ | — | Move to **GPIO4** (ADC1_CH3, P2 free) |
 | DS18B20 | 33 | YES | P3 (8-line SPI) | Keep |
 | LED | 2 | YES | P2 (free) | Keep — no longer a strapping pin on S3 ✅ |
 | VALVE | 14 | YES | P2 (free) | Keep |
@@ -90,9 +109,15 @@ const _: () = assert!(RMT_CHUNK_MAX <= 192, "S3 RMT shared RAM = 384 words");
 
 **ADC** (§4.2.2.1, Table 5-6): DB_12 range = 0–2900 mV (vs 0–3900 mV on ESP32). Sampling rate = 100 kSPS (vs 200 kSPS). Recalibrate `adc_cal` coefficients.
 
+⚠️ **GPIO34 is NOT an ADC pin on S3.** ADC1 pins are GPIO1-10 only. GPIO34 has no ADC function. Pin relocated to **GPIO4 (ADC1_CH3)**.
+
 **BLE** (§4.3.3): No Bluetooth Classic. Remove `ESP_COEX_PREFER_BT` references. BLE 5.0 features are optional (2 Mbps PHY, Coded PHY, Advertising Extensions).
 
 **WiFi** (§4.3.2): WPA3 available as optional upgrade. No breaking changes.
+
+**IRAM placement**: S3 linker script expects `#[link_section = ".iram1"]` for IRAM code, NOT `.iram0.text`. The `.iram0.text` is an output section name in the linker script template `sections.ld.in`; the matching input section pattern is `*(.iram1 .iram1.*)`. Functions in the panic handler call chain (__wrap_esp_panic_handler, do_backtrace, CrashWriter, is_sane_sp, is_executable, print_bt_entry, black_box::dump, emergency_dump) MUST be in IRAM to produce crash output when flash cache is inconsistent after an exception.
+
+**WDT + logger init order**: `disable_wdt()` must NOT call `log::warn!()` because the logger is initialized later in `main.rs`. If TWDT deinit fails, the `log::warn!()` call panics → abort → boot loop with no diagnostic output.
 
 ### Phase 5: Scripts & tools
 
@@ -115,6 +140,12 @@ Flash to ESP32-S3 dev board via USB Serial/JTAG (`/dev/ttyACM0` or `COMx`):
 ```bash
 espflash flash --monitor target/xtensa-esp32s3-espidf/debug/ecotiter
 ```
+
+### Phase 7: Boot crash fix — `disable_wdt()` logs before `logger::init()`
+
+**Root cause**: PR #1 (disable_wdt return value check) introduced `log::warn!()` into `disable_wdt()`, which is called on line 87 of `main.rs` — BEFORE `logger::init()` on line 90. When `esp_task_wdt_deinit()` fails on S3, the early `log::warn!()` panics because the log system is not initialized.
+
+**Fix**: Move `logger::init()` before `disable_wdt()` in `main.rs`, OR remove `log::warn!()` from `disable_wdt()` and defer error logging to after init.
 
 ### Phase 7: Validation
 
@@ -155,6 +186,8 @@ espflash flash --monitor target/xtensa-esp32s3-espidf/debug/ecotiter
 - [ ] GR-5: No stored C pointers across FFI boundary (no change needed)
 - [ ] GR-6: Stack budgets verified (S3 slightly less SRAM but budget table still valid)
 - [ ] GR-7: Diagnostic instrumentation present (ffi_guard, preconditions, stack_monitor, state_tracer, tick_watchdog)
+- [x] LL-010: `__wrap_esp_panic_handler` placed in IRAM via `#[link_section = ".iram1"]`
+- [x] LL-019: `disable_wdt()` must not log before `logger::init()` — **fix pending**
 
 ---
 
@@ -172,45 +205,63 @@ espflash flash --monitor target/xtensa-esp32s3-espidf/debug/ecotiter
 | 6 | `src/esp_safe.rs:481` | `is_executable()` IRAM range | Figure 4-1, lines 2559–2560 |
 | 7 | `src/esp_safe.rs:483` | `is_executable()` flash cache range | Figure 4-1, lines 2563–2564 |
 | 8 | `src/esp_safe.rs:565` | `UART0_BASE` | Figure 4-1, lines 2571–2572 |
+| 9 | `src/esp_safe.rs` | `disable_wdt()`: check return value; IRAM section for panic handler chain | LL-019, LL-010 |
+| 10 | `src/diag/black_box.rs:201` | `dump()` free function — IRAM section | LL-010 |
+| 11 | `src/diag/stack_monitor.rs:98` | `emergency_dump()` — IRAM section | LL-010 |
 
 ### High priority (correctness or data loss)
 
 | # | File | Change | Datasheet ref |
 |---|---|---|---|
-| 9 | `src/infrastructure/drivers/stepper.rs` | Add RMT 384-word assertion | §4.2.1.11, line 3468 |
-| 10 | `src/infrastructure/drivers/adc.rs` | Verify DB_12 range (0–2900 mV), recalibrate | Table 5-6, line 3856 |
-| 11 | `scripts/build.sh` | Target triple + default port | — |
-| 12 | `scripts/crash_analyzer.py` | ELF path pattern | — |
-| 13 | `scripts/decode_backtrace.sh` | ELF path | — |
-| 14 | `scripts/analyze_last_crash.sh` | ELF path | — |
-| 15 | `scripts/serial_monitor.py` | ELF path | — |
-| 16 | `scripts/pre_commit.sh` | Target triple references | — |
+| 12 | `src/infrastructure/drivers/stepper.rs` | Add RMT 384-word assertion | §4.2.1.11, line 3468 |
+| 13 | `src/infrastructure/drivers/adc.rs` | GPIO34→GPIO4 (ADC1_CH3), DB_12 range 0–2900mV | Table 5-6, line 3856 |
+| 14 | `scripts/build.sh` | Target triple + default port | — |
+| 15 | `scripts/crash_analyzer.py` | ELF path pattern | — |
+| 16 | `scripts/decode_backtrace.sh` | ELF path | — |
+| 17 | `scripts/analyze_last_crash.sh` | ELF path | — |
+| 18 | `scripts/serial_monitor.py` | ELF path | — |
+| 19 | `scripts/pre_commit.sh` | Target triple references | — |
+| 20 | `src/main.rs:87,90` | Swap `logger::init()` and `disable_wdt()` order | LL-019 |
 
 ### Medium priority (correctness, not safety-critical)
 
 | # | File | Change | Datasheet ref |
 |---|---|---|---|
-| 17 | `components_esp32.lock` | Delete (auto-regenerate) | — |
-| 18 | `sdkconfig.defaults` | Remove BT coex preference | §4.3.3 (BLE 5 only) |
-| 19 | `docs/refs/project.md` | Memory map, pinout table | Figure 4-1, §2 |
+| 21 | `components_esp32.lock` | Delete (auto-regenerate) | — |
+| 22 | `sdkconfig.defaults` | Remove BT coex preference | §4.3.3 (BLE 5 only) |
+| 23 | `docs/refs/project.md` | Memory map, pinout table, ADC pin GPIO4 | Figure 4-1, §2 |
 
 ### Low priority (documentation, optional features)
 
 | # | File | Change | Datasheet ref |
 |---|---|---|---|
-| 20 | `Cargo.toml` | Review `esp32-nimble` S3 support | §4.3.3 |
-| 21 | `build.rs` | Verify NimBLE/HAL patches work for S3 | — |
+| 24 | `Cargo.toml` | Review `esp32-nimble` S3 support | §4.3.3 |
+| 25 | `build.rs` | Verify NimBLE/HAL patches work for S3 | — |
+
+### Files with changes applied
+
+- `rust-toolchain.toml`, `.cargo/config.toml`, `sdkconfig.defaults` — build system
+- `src/config.rs` — PIN_STEP 25→21, PIN_ADC 34→4
+- `src/esp_safe.rs` — memory map, UART0_BASE, disable_wdt() return check, IRAM sections
+- `src/main.rs` — ADC pin gpio34→gpio4, STEP pin gpio25→gpio21, **fix pending: logger/wdt order**
+- `src/infrastructure/drivers/stepper.rs` — RMT assertion 128→192
+- `src/infrastructure/drivers/adc.rs` — GPIO34→GPIO4, note about S3 voltage range
+- `src/domain/adc_cal.rs` — note about S3 voltage range
+- `src/diag/black_box.rs` — IRAM section for dump()
+- `src/diag/stack_monitor.rs` — IRAM section for emergency_dump()
+- `scripts/build.sh`, `crash_analyzer.py`, `decode_backtrace.sh`, `analyze_last_crash.sh`, `serial_monitor.py`, `pre_commit.sh`
+- `docs/refs/project.md`
 
 ### Files with no changes required
 
-- `src/lib.rs`, `src/main.rs`, `src/errors.rs`
+- `src/lib.rs`, `src/errors.rs`
 - `src/motor_task.rs`, `src/temp_monitor.rs`
 - `src/infrastructure/drivers/onewire.rs`, `limitswitch.rs`, `led.rs`, `valve.rs`
 - `src/infrastructure/network/wifi.rs`, `http_server.rs`, `ble.rs`
 - `src/infrastructure/storage/nvs.rs`
 - `src/esp_mutex.rs`, `src/logger.rs`
 - `src/interface/serial.rs`
-- `src/diag/*`
+- `src/diag/mod.rs`
 
 ---
 

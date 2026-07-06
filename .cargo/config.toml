@@ -1,4 +1,4 @@
-[target.xtensa-esp32-espidf]
+[target.xtensa-esp32s3-espidf]
 linker = "ldproxy"
 runner = "espflash flash --monitor"
 
@@ -6,10 +6,10 @@ runner = "espflash flash --monitor"
 build-std = ["std", "panic_abort"]
 
 [alias]
-check-esp = "check --target xtensa-esp32-espidf"
-clippy-esp = "clippy --target xtensa-esp32-espidf -- -D warnings"
+check-esp = "check --target xtensa-esp32s3-espidf"
+clippy-esp = "clippy --target xtensa-esp32s3-espidf -- -D warnings"
 test-host = "test --lib"
-build-esp = "build --target xtensa-esp32-espidf"
+build-esp = "build --target xtensa-esp32s3-espidf"
 
 [net]
 git-fetch-with-cli = true
@@ -23,7 +23,7 @@ rustflags = [
 ]
 
 [env]
-MCU = "esp32"
+MCU = "esp32s3"
 ESP_IDF_VERSION = "v6.0.1"
 IDF_PATH = "/home/vlabe/.espressif/v6.0.1/esp-idf"
-LIBCLANG_PATH = "/home/vlabe/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib"
+LIBCLANG_PATH = "/home/vlabe/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/lib"

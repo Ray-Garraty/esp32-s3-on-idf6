@@ -650,7 +650,7 @@ def main() -> int:
                 elf_path = str(c)
                 break
     if not elf_path:
-        elf_path = "target/xtensa-esp32-espidf/debug/ecotiter"
+        elf_path = "target/xtensa-esp32s3-espidf/debug/ecotiter"
 
     # Parse
     info = parse_crash_dump(text)

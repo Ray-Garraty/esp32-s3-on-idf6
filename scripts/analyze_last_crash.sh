@@ -10,7 +10,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
 LOG_DIR="$PROJECT_DIR/logs"
-ELF="${ELF:-$PROJECT_DIR/target/xtensa-esp32-espidf/debug/ecotiter}"
+ELF="${ELF:-$PROJECT_DIR/target/xtensa-esp32s3-espidf/debug/ecotiter}"
 NO_DECODE=""
 
 # Parse args

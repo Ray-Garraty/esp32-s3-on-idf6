@@ -29,10 +29,11 @@ pub fn disable_wdt() {
     //   Invariant: esp_task_wdt_deinit requires FreeRTOS scheduler running.
     //   Context: called once at boot from main task.
     //   Risk: safe even if called multiple times (idempotent).
-    unsafe {
-        esp_idf_sys::esp_task_wdt_deinit();
+    let ret = unsafe { esp_idf_sys::esp_task_wdt_deinit() };
+    if ret != 0 {
+        log::warn!("TWDT: esp_task_wdt_deinit returned {ret:#x} — TWDT may still be active");
     }
-    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_WDT, 0);
+    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_WDT, if ret == 0 { 0 } else { -1 });
 }
 
 /// Suppress debug-level logs from the ESP-IDF HTTP server txrx component.
@@ -485,23 +486,27 @@ const fn process_pc(pc: u32) -> u32 {
     pc.wrapping_sub(3)
 }
 
-/// Check whether a stack-pointer value falls inside the ESP32 DRAM
+/// Check whether a stack-pointer value falls inside the ESP32-S3 DRAM
 /// region where stack memory lives.
+#[link_section = ".iram1"]
 fn is_sane_sp(sp: u32) -> bool {
-    (0x3FFB_0000..0x4000_0000).contains(&sp)
+    // S3 DRAM range (datasheet §4.1.2, Figure 4-1)
+    (0x3FC8_8000..0x3FF0_0000).contains(&sp)
 }
 
 /// Check whether an address lies in executable memory (IRAM or flash
 /// cache).
+#[link_section = ".iram1"]
 fn is_executable(pc: u32) -> bool {
-    // IRAM range
-    (0x4000_0000..0x400C_2000).contains(&pc)
-        // Flash cache range
-        || (0x400D_0000..0x4040_0000).contains(&pc)
+    // S3 IRAM range (datasheet §4.1.2)
+    (0x4037_0000..0x403E_0000).contains(&pc)
+        // S3 Flash cache range (datasheet §4.1.2)
+        || (0x4200_0000..0x43FF_FFFF).contains(&pc)
 }
 
 /// Print a single backtrace entry in machine-parseable format:
 /// `0xPC:0xSP`
+#[link_section = ".iram1"]
 fn print_bt_entry(w: &mut impl core::fmt::Write, pc: u32, sp: u32) {
     let _ = writeln!(w, "0x{pc:08x}:0x{sp:08x}");
 }
@@ -516,6 +521,7 @@ fn print_bt_entry(w: &mut impl core::fmt::Write, pc: u32, sp: u32) {
     clippy::cast_sign_loss,
     reason = "XtExcFrame i32 fields are hardware register values, always non-negative for valid addresses"
 )]
+#[link_section = ".iram1"]
 fn do_backtrace(w: &mut impl core::fmt::Write, frame: *const XtExcFrame) {
     if frame.is_null() {
         return;
@@ -581,13 +587,13 @@ extern "C" {
     fn __real_esp_panic_handler(info: *const core::ffi::c_void);
 }
 
-/// ESP32 UART0 base address (AHB bus).
-const UART0_BASE: u32 = 0x3FF4_0000;
+/// ESP32-S3 UART0 base address (AHB bus).
+const UART0_BASE: u32 = 0x6000_0000; // S3 AHB bus base
 /// UART FIFO AHB register — write a byte here to transmit on UART0.
 const UART_FIFO_AHB: *mut u8 = UART0_BASE as *mut u8;
 /// UART Status register — bits 16..23 hold `txfifo_cnt` (0–128).
 const UART_STATUS: *mut u32 = (UART0_BASE + 0x1C) as *mut u32;
-/// Maximum TX FIFO depth on ESP32 UART.
+/// Maximum TX FIFO depth on ESP32-S3 UART.
 const UART_TX_FIFO_SIZE: u32 = 128;
 
 /// Writer that outputs directly to UART0 via MMIO register writes.
@@ -598,6 +604,7 @@ const UART_TX_FIFO_SIZE: u32 = 128;
 struct CrashWriter;
 
 impl core::fmt::Write for CrashWriter {
+    #[link_section = ".iram1"]
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for &byte in s.as_bytes() {
             // Wait for TX FIFO to have room (i.e., not completely full).
@@ -644,6 +651,7 @@ impl core::fmt::Write for CrashWriter {
 /// inconsistent. This function uses only lock-free volatile reads and raw
 /// UART writes. It must NOT allocate, lock mutexes, or use `format!()`.
 #[no_mangle]
+#[link_section = ".iram1"]
 #[expect(
     clippy::cast_sign_loss,
     reason = "XtExcFrame i32 fields are hardware register values, always non-negative"

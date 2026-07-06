@@ -1,4 +1,4 @@
-//! ADC driver for pH electrode (ADC1_CH6, GPIO34).
+//! ADC driver for pH electrode (ADC1_CH3, GPIO4 on ESP32-S3).
 //!
 //! Provides:
 //! - Oneshot ADC read with DB_12 attenuation.
@@ -34,8 +34,8 @@ pub use crate::domain::adc_cal::{
 /// Oneshot ADC driver for ADC unit 1.
 type EspDriver = EspAdcDriver<'static, ADCU1>;
 
-/// ADC channel type for GPIO34 (ADC1_CH6).
-type AdcChan = <esp_idf_hal::gpio::Gpio34<'static> as ADCPin>::AdcChannel;
+/// ADC channel type for GPIO4 (ADC1_CH3 on ESP32-S3).
+type AdcChan = <esp_idf_hal::gpio::Gpio4<'static> as ADCPin>::AdcChannel;
 
 /// Oneshot ADC channel driver that borrows the ADC driver.
 type EspChannel = AdcChannelDriver<'static, AdcChan, &'static EspDriver>;
@@ -65,7 +65,7 @@ pub struct AdcDriver {
 }
 
 impl AdcDriver {
-    /// Create a new ADC driver on ADC1_CH6 (GPIO34) with DB_12 attenuation.
+    /// Create a new ADC driver on ADC1_CH3 (GPIO4) with DB_12 attenuation.
     ///
     /// # Errors
     ///
@@ -73,7 +73,7 @@ impl AdcDriver {
     /// or channel cannot be initialised.
     pub fn new(
         adc: esp_idf_hal::adc::ADC1<'static>,
-        pin: esp_idf_hal::gpio::Gpio34<'static>,
+        pin: esp_idf_hal::gpio::Gpio4<'static>,
     ) -> Result<Self, SensorError> {
         let adc_driver = Box::new(EspDriver::new(adc)?);
         let adc_ref: &'static EspDriver = Box::leak(adc_driver);
@@ -96,7 +96,7 @@ impl AdcDriver {
             }
         };
         log::info!(
-            "ADC: initialized on GPIO34 (ADC1_CH6, DB_12 atten), first raw read = {first_read}"
+            "ADC: initialized on GPIO4 (ADC1_CH3, DB_12 atten), first raw read = {first_read}"
         );
         if first_read == 0 {
             log::warn!("ADC: first read is 0 — possible causes: GPIO34 floating, wrong channel, ADC not calibrated");
@@ -113,6 +113,13 @@ impl AdcDriver {
     /// Perform a single ADC read and return the result in millivolts.
     ///
     /// The reading is also added to the rolling-average buffer.
+    ///
+    /// # Note (ESP32-S3)
+    ///
+    /// On ESP32-S3, ADC DB_12 has a 0–2900 mV range (vs 0–3900 mV on ESP32).
+    /// The calibration coefficients in `adc_cal` are user-tunable defaults
+    /// (`ADC_DEFAULT_A`/`ADC_DEFAULT_B` in config.rs); adjust them if the
+    /// narrower S3 voltage scale requires different scaling.
     ///
     /// # Errors
     ///

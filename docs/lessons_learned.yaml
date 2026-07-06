@@ -732,6 +732,115 @@ lessons:
     refs:
       - docs/crash_reports/2026-07-04_ble_host_task_null_deref.md
 
+  - id: LL-019
+    date: 2026-07-06
+    crash_signature: "abort() at PC 0x4211843a — panic_fmt via println!() in Logger::log — print_to::<Stdout> panics on ESP-IDF v6 early boot"
+    category: api_misuse
+    trigger_patterns:
+      - "abort.*called at PC 0x4211843a"
+      - "panic_fmt.*print_to"
+      - "Logger::log.*println"
+      - "print_to::<Stdout>"
+    lesson: >
+      On ESP-IDF v6 at early boot (~110ms after app_main), println!() panics
+      because Rust's std I/O stack (Stdout::write → libc::write(1, ...) → VFS
+      → UART) is not fully initialized. The print_to::<Stdout> function at
+      stdio.rs:1165 calls `stdout().lock().write(buf)` — when the underlying
+      write returns Err (TLS/VFS init incomplete), it calls
+      panic!("failed printing to stdout: ...") which is fatal.
+
+      In this project, the crash was triggered by println!() at logger.rs:77
+      inside Logger::log. Every log::info!() call went through println!() →
+      panic → abort → boot loop with zero application output.
+
+      Root cause chain: Logger::log → println!() → _print → print_to::<Stdout>
+      → write(1, ...) returns Err → panic → abort.
+
+      The fix is NOT to reorder init calls (disable_wdt order was a red
+      herring) but to replace println!() with a direct FFI write(1, ...) call
+      that bypasses Rust's std I/O entirely.
+
+      Note: log::warn!() when no logger is set is silently dropped — it does
+      NOT panic. The disable_wdt() init-order theory was incorrect.
+    diagnostic: >
+      1. Use xtensa-esp32s3-elf-addr2line on the abort PC. If the call chain
+         includes print_to::<Stdout> → _print → Logger::log, the issue is
+         println!(), not init order.
+      2. Check the implementation of the Log trait in the project — if it uses
+         println!() or print!(), replace with direct FFI write.
+      3. The fix is NOT reordering init. Even with logger::init() before
+         all other calls, println!() inside Logger::log will still panic.
+    fix: >
+      Replace println!() in Logger::log with a direct FFI write(1, ...) call
+      that does not use Rust's std I/O:
+        let mut out: heapless::String<N> = heapless::String::new();
+        let _ = write!(out, "[{}] {}", level, record.args());
+        unsafe { esp_idf_sys::write(1, out.as_ptr().cast::<c_void>(), out.len()); }
+      Any function that goes through libc::write() without Rust's Stdout
+      wrapper will work because it doesn't depend on TLS or the std mutex.
+    refs:
+      - src/logger.rs (println! replacement)
+      - src/esp_safe.rs (panic_write_str — direct write FFI)
+      - docs/crash_reports/2026-07-06_abort_boot_loop.md
+
+  - id: LL-021
+    date: 2026-07-06
+    crash_signature: "TG1WDT_SYS_RST at ~980ms after app_main — IWDT fires during init sequence — Saved PC in _xt_handle_exc"
+    category: init_order_error
+    trigger_patterns:
+      - "TG1WDT_SYS_RST"
+      - "PRO CPU has been reset by WDT"
+      - "CONFIG_ESP_INT_WDT"
+      - "rst:0x8"
+    lesson: >
+      The Interrupt Watchdog (IWDT, CONFIG_ESP_INT_WDT) is enabled by default
+      in ESP-IDF v6 with a 300ms timeout. It fires when interrupts are masked
+      for >300ms cumulative. NVS flash writes, WiFi firmware loading, and BLE
+      controller init all legitimately mask interrupts during flash I/O. On
+      ESP32-S3 with the full feature set, the cumulative masked time during
+      init exceeds 300ms, causing TG1WDT_SYS_RST — a hard reset with no
+      diagnostic output.
+
+      Key characteristics:
+      - Timing: ~900-1050ms after app_main() — consistent with init sequence
+        duration, NOT a 300ms IWDT timeout. The IWDT fires after interrupts
+        are re-enabled (the timeout counter clears when unmasked), so the
+        actual crash happens when the next interrupt-masking operation pushes
+        over the threshold.
+      - Saved PC: Always in _xt_handle_exc (lines 740-806 of xtensa_vectors.S).
+        This is NOT evidence that an exception occurred — it's an artifact of
+        the IWDT catching the CPU during Xtensa exception vector dispatch.
+      - No crash dump, no Guru Meditation, no Rust panic — the IWDT is a
+        hardware timer that asynchronously resets the chip.
+
+      The IWDT is a DIFFERENT watchdog from the FreeRTOS Task WDT (TWDT).
+      disable_wdt() (calls esp_task_wdt_deinit()) only disables the TWDT.
+      The IWDT must be disabled separately via sdkconfig.
+
+      Fix: CONFIG_ESP_INT_WDT=n in sdkconfig.defaults. The firmware manages
+      its own watchdog strategy via disable_wdt() for TWDT, and the main loop
+      has its own tick watchdog.
+    diagnostic: >
+      1. Check rst cause: if TG1WDT_SYS_RST (0x8) and timing ~1s after
+         app_main(), the IWDT is the likely cause.
+      2. Check CONFIG_ESP_INT_WDT in sdkconfig. If enabled (default=y),
+         and the init sequence exceeds its timeout, this is the root cause.
+      3. Saved PC in _xt_handle_exc is an artifact of the WDT catching the
+         CPU during exception dispatch — it does NOT mean a real exception
+         occurred.
+      4. Distinguish from TWDT: TWDT shows "Task watchdog got triggered"
+         with backtrace. IWDT shows only rst:0x8 with no firmware output.
+    fix: >
+      Disable IWDT in sdkconfig.defaults:
+        CONFIG_ESP_INT_WDT=n
+      Then run `cargo build` to regenerate sdkconfig. The IWDT is not
+      needed when the firmware has its own watchdog management (TWDT via
+      disable_wdt(), main loop tick watchdog).
+    refs:
+      - sdkconfig.defaults
+      - src/esp_safe.rs (disable_wdt)
+      - docs/crash_reports/2026-07-06_tg1wdt_bootloop_s3_migration.md
+
   - id: LL-008
     date: 2026-07-04
     crash_signature: "IllegalInstruction + stack overflow in task pthread — net_owner watermark=0 — preceded by wifi:malloc buffer fail"

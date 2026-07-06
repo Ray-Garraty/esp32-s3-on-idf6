@@ -17,17 +17,17 @@ pub const STA_POST_CONNECT_DELAY_MS: u64 = 500;
 pub const STA_DHCP_TIMEOUT_MS: u64 = 5000;
 
 // ── GPIO Pin Assignments ──────────────────────────────────────
-pub const PIN_STEP: u8 = 25;
+pub const PIN_STEP: u8 = 21;
 pub const PIN_DIR: u8 = 26;
 pub const PIN_EN: u8 = 27;
 pub const PIN_LIMIT_FULL: u8 = 32;
 pub const PIN_LIMIT_EMPTY: u8 = 35;
-pub const PIN_ADC: u8 = 34;
+pub const PIN_ADC: u8 = 4;
 pub const PIN_TEMP: u8 = 33;
 pub const PIN_LED: u8 = 2;
 pub const PIN_VALVE: u8 = 14;
 
-// ── ADC (pH electrode, GPIO34, ADC1_CH6) ──────────────────────
+// ── ADC (pH electrode, GPIO4, ADC1_CH3 on S3) ─────────────────
 pub const ADC_SAMPLES: u32 = 64;
 pub const ADC_ATTENUATION_DB: u8 = 12;
 

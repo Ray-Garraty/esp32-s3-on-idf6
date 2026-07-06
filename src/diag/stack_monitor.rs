@@ -95,6 +95,7 @@ pub fn check_watermark(slot: u8) {
 }
 
 /// Emergency dump of all thread watermarks. Called from panic handler.
+#[link_section = ".iram1"]
 pub fn emergency_dump(writer: &mut dyn core::fmt::Write) {
     let _ = writeln!(writer, "=== STACK ===");
     for (slot, info) in THREADS.iter().enumerate() {

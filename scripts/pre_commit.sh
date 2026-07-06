@@ -44,10 +44,10 @@ if [ "$fast_mode" = false ]; then
     }
 
     echo "=== 10. Clippy (xtensa target) ==="
-    xtensa clippy --target xtensa-esp32-espidf -- -D warnings
+    xtensa clippy --target xtensa-esp32s3-espidf -- -D warnings
 
     echo "=== 11. Check (xtensa) ==="
-    xtensa check --target xtensa-esp32-espidf
+    xtensa check --target xtensa-esp32s3-espidf
 fi
 
 echo "=== All checks passed ==="

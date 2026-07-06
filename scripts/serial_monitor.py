@@ -50,7 +50,7 @@ def analyze_crash(crash_text: str, project_dir: Path, writeline):
     try:
         # Run crash_analyzer
         analyzer = SCRIPT_DIR / "crash_analyzer.py"
-        elf = project_dir / "target" / "xtensa-esp32-espidf" / "debug" / "ecotiter"
+        elf = project_dir / "target" / "xtensa-esp32s3-espidf" / "debug" / "ecotiter"
 
         result = subprocess.run(
             [sys.executable, str(analyzer), "--dump", tmp_path, "--elf", str(elf)],
@@ -83,7 +83,7 @@ def main():
 
     port = args.port or find_esp32_port()
     if not port:
-        print("ERROR: ESP32 not found. Specify port manually: python3 serial_monitor.py /dev/ttyUSB0", flush=True)
+        print("ERROR: ESP32-S3 not found. Specify port manually: python3 serial_monitor.py /dev/ttyACM0", flush=True)
         return 1
 
     log_file = None
@@ -125,10 +125,10 @@ def main():
                 except OSError:
                     pass
 
-        writeline(f"=== Connected to {port} @ {BAUDRATE} baud ===")
+        writeline(f"=== Connected to ESP32-S3 on {port} @ {BAUDRATE} baud ===")
 
         if not args.no_reset:
-            writeline("=== Resetting ESP32 (DTR pulse) ===")
+            writeline("=== Resetting ESP32-S3 (DTR pulse) ===")
             ser.dtr = False
             ser.rts = False
             time.sleep(0.1)

@@ -43,7 +43,10 @@ use crate::stepper::ramp::{RampConfig, RampIter};
 
 /// Static assertion: RMT chunk size must fit within the RMT memory block
 /// (indirect mode, 128 symbols per block).
-const _: () = assert!(config::RMT_CHUNK_MAX <= 128);
+const _: () = assert!(
+    config::RMT_CHUNK_MAX <= 192,
+    "S3 RMT shared RAM = 384 words"
+);
 
 /// RMT-based stepper motor controller.
 ///

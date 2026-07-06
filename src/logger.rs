@@ -73,8 +73,12 @@ impl Log for Logger {
         let mut msg: heapless::String<MAX_LOG_MSG_SIZE> = heapless::String::new();
         write!(msg, "{}", record.args()).ok();
 
-        // UART console output — only available on the ESP32 target
-        println!("[{}] {}", level, record.args());
+        // UART console output — direct `write(1, ...)` FFI call, bypasses Rust std I/O
+        // to avoid panic-on-error in `print_to::<Stdout>` (LL-008: esp-idf v6 VFS/TLS issue).
+        let mut console_out: heapless::String<{ MAX_LOG_MSG_SIZE + 16 }> = heapless::String::new();
+        let _ = write!(console_out, "[{}] {}", level, record.args());
+        crate::esp_safe::panic_write_str(console_out.as_str());
+        crate::esp_safe::panic_write_str("\n");
 
         let ts_ms = crate::esp_safe::micros() / 1000;
 

@@ -163,6 +163,7 @@ impl BlackBox {
     /// Write all events to `writer` (newest first). Used from panic handler.
     /// Record has padding bytes; volatile read is intentional for lock-free ring buffer.
     #[expect(clippy::volatile_composites)]
+    #[link_section = ".iram1"]
     pub fn dump(&self, writer: &mut dyn core::fmt::Write) {
         let count = self
             .count
@@ -197,6 +198,7 @@ pub fn record(event: DiagEvent) {
 }
 
 /// Convenience: dump all events to a writer (from panic hook).
+#[link_section = ".iram1"]
 pub fn dump(writer: &mut dyn core::fmt::Write) {
     BLACK_BOX.dump(writer);
 }

@@ -8,6 +8,7 @@ use embuild::build::LinkArgs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // ESP32-S3 verified: nimble patches and HAL patches work on LX7 target.
     // Suppress cfg warning for esp32-nimble IDF v6 patches (our crate only)
     println!("cargo::rustc-check-cfg=cfg(esp_idf_version_major, values(\"6\"))");
 

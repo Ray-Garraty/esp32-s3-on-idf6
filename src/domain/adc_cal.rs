@@ -7,6 +7,13 @@
 //! - Slope `a` = `COEFF_A_X1000 / 1000` (stored as `u16`).
 //! - Offset `b` = `COEFF_B` (stored as `i16`).
 //!
+//! # Note (ESP32-S3)
+//!
+//! ESP32-S3 ADC DB_12 range is 0–2900 mV (vs 0–3900 mV on ESP32).
+//! Calibration coefficients are user-tunable via `ADC_DEFAULT_A` and
+//! `ADC_DEFAULT_B` in `config.rs`. The fixed-point math is unchanged.
+//! See ESP32-S3 TRM §28.2.2.1 and datasheet §4.3.1.
+//!
 //! This module has NO hardware dependencies — it compiles on any target.
 
 #![forbid(unsafe_code)]

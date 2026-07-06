@@ -84,10 +84,10 @@ fn main() {
     // Catches stack overflow / BSS corruption before any heap allocation.
     ecotiter_fw::esp_safe::check_heap_integrity();
 
+    ecotiter_fw::logger::init();
+
     ecotiter_fw::esp_safe::disable_wdt();
     ecotiter_fw::esp_safe::suppress_httpd_txrx_logs();
-
-    ecotiter_fw::logger::init();
 
     setup_panic_hook();
     diag::init();
@@ -106,9 +106,9 @@ fn main() {
 
     // ── Lightweight hardware drivers (main task, 32 KB stack) ──
 
-    // ADC (pH electrode on GPIO34, ADC1_CH6)
+    // ADC (pH electrode on GPIO4, ADC1_CH3 on ESP32-S3)
     let mut adc =
-        AdcDriver::new(peripherals.adc1, peripherals.pins.gpio34).expect("AdcDriver::new()");
+        AdcDriver::new(peripherals.adc1, peripherals.pins.gpio4).expect("AdcDriver::new()");
 
     // Status LED (GPIO2)
     let mut led = Led::new(peripherals.pins.gpio2.degrade_output()).expect("Led::new()");
@@ -125,9 +125,9 @@ fn main() {
     ecotiter_fw::infrastructure::drivers::valve::global_valve_init(valve);
     info!("Valve: init OK");
 
-    // ── RMT Stepper (STEP=GPIO25, DIR=GPIO26, EN=GPIO27) ────────
+    // ── RMT Stepper (STEP=GPIO21, DIR=GPIO26, EN=GPIO27) ────────
     let mut stepper = RmtStepper::new(
-        peripherals.pins.gpio25.degrade_output(),
+        peripherals.pins.gpio21.degrade_output(),
         peripherals.pins.gpio26.degrade_output(),
         peripherals.pins.gpio27.degrade_output(),
     )

@@ -15,13 +15,17 @@ ESP_BASE="$HOME/.rustup/toolchains/esp"
 # Cargo + rustc from ESP toolchain (bypasses broken .cargo/bin symlinks)
 export PATH="$ESP_BASE/bin:$PATH"
 
-# Xtensa C cross-compiler (for bindgen / libclang)
-for d in "$ESP_BASE"/xtensa-esp-elf/esp-*/xtensa-esp-elf/bin; do
+# Xtensa C cross-compiler (for bindgen / libclang) — try S3 first, fallback to generic
+for d in "$ESP_BASE"/xtensa-esp32s3-elf/esp-*/xtensa-esp32s3-elf/bin \
+         "$ESP_BASE"/xtensa-esp-elf/esp-*/xtensa-esp-elf/bin; do
     [ -d "$d" ] && export PATH="$d:$PATH" && break
 done
 
 # clang / libclang for esp-idf-sys bindgen
-for d in "$ESP_BASE"/xtensa-esp32-elf-clang/esp-*/esp-clang; do
+# Try S3-specific clang first, fallback to ESP32 clang (same toolchain build)
+for d in "$ESP_BASE"/xtensa-esp32s3-elf-clang/esp-*/esp-clang \
+         "$ESP_BASE"/xtensa-esp32-elf-clang/esp-*/esp-clang \
+         "$HOME/.espressif/tools/esp-clang/esp-*/esp-clang"; do
     if [ -d "$d" ]; then
         export LIBCLANG_PATH="$d/lib"
         export CLANG_PATH="$d/bin/clang"
@@ -46,7 +50,7 @@ if ! type cargo >/dev/null 2>&1; then
     exit 1
 fi
 
-TARGET="xtensa-esp32-espidf"
+TARGET="xtensa-esp32s3-espidf"
 
 # ── If sourced with no args, just set env and return ─────────────────
 if [[ "${BASH_SOURCE[0]}" != "$0" ]] && [ $# -eq 0 ]; then
@@ -81,13 +85,13 @@ case "${1:-build}" in
         cargo fmt --all -- --check
         ;;
     flash)
-        PORT="${2:-/dev/ttyUSB0}"
+        PORT="${2:-/dev/ttyACM0}"
         ELF="target/$TARGET/debug/ecotiter"
         if [ ! -f "$ELF" ]; then
             echo "ERROR: ELF not found at $ELF — build first" >&2
             exit 1
         fi
-        echo "=== Flashing to $PORT ==="
+        echo "=== Flashing to ESP32-S3 via USB Serial/JTAG (ttyACM0) on $PORT ==="
         espflash flash --port "$PORT" "$ELF"
         ;;
     *)
