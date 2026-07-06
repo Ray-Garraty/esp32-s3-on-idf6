@@ -33,12 +33,11 @@ pub const FFI_ESP_TIMER: u8 = 15;
 pub const FFI_ESP_WDT: u8 = 16;
 pub const FFI_ESP_HEAP: u8 = 17;
 pub const FFI_ESP_RESTART: u8 = 18;
-pub const FFI_ESP_COEX: u8 = 19;
-pub const FFI_WATERMARK: u8 = 20;
-pub const FFI_NETIF_INIT: u8 = 21;
-pub const FFI_ESP_WIFI_DEINIT: u8 = 22;
-pub const FFI_UART_INIT: u8 = 23;
-pub const FFI_UART_READ: u8 = 24;
+pub const FFI_WATERMARK: u8 = 19;
+pub const FFI_NETIF_INIT: u8 = 20;
+pub const FFI_ESP_WIFI_DEINIT: u8 = 21;
+pub const FFI_UART_INIT: u8 = 22;
+pub const FFI_UART_READ: u8 = 23;
 
 /// Record an FFI entry event.
 #[inline]

@@ -68,7 +68,7 @@ timestamp: 2026-06-29
 | Valve | 14 | PinDriver::output | LOW=input, HIGH=output |
 | Limit FULL | 32 | PinDriver::input + ISR | Syringe bottom |
 | Limit EMPTY | 35 | PinDriver::input + ISR | Syringe top |
-| pH electrode | 34 | ADC1_CH6 | DB_12 atten, 12-bit |
+| pH electrode | 4 | ADC1_CH3 | DB_12 atten, 0–2900 mV range (S3) |
 | DS18B20 | 33 | OneWire bitbang | 4.7k ohm pull-up |
 | Status LED | 2 | PinDriver::output | Active HIGH |
 | USB-Serial RX | 3 | **DO NOT TOUCH** | |

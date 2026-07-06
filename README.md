@@ -1,6 +1,6 @@
 # esp32-rs-on-idf6
 
-**ESP32 + Rust + ESP-IDF v6 — experimental firmware reference**
+**ESP32-S3 + Rust + ESP-IDF v6 — experimental firmware reference**
 
 An experimental firmware stack exploring ESP32 + Rust + ESP-IDF v6 with WiFi/BLE coexistence, RMT stepper control, limit switch ISRs, DS18B20 bitbang, ADC, multi-threaded architecture, and a comprehensive diagnostic subsystem.
 
@@ -40,7 +40,7 @@ This project includes a set of custom [OpenCode](https://opencode.ai) AI sub-age
 | **planner** | Analyzes tasks and produces structured plans with acceptance criteria |
 | **verifier** | Validates plan feasibility against real code and hardware invariants |
 | **implementer** | Implements code from verified plans, runs all checks |
-| **validator** | Builds firmware, flashes real ESP32, runs smoke tests |
+| **validator** | Builds firmware, flashes real ESP32-S3, runs smoke tests |
 | **reviewer** | Code review (architecture, style, safety, conventions) |
 | **debugger** | Embedded crash analysis using Occam's Razor protocol (S1–S5) |
 | **reporter** | Generates completion reports and conventional-commit messages |
@@ -52,13 +52,13 @@ All agents enforce the non-negotiable rules in [AGENTS.md](./AGENTS.md) — gold
 
 | Signal | GPIO | Driver |
 |---|---|---|
-| TMC2209 STEP | 25 | RMT (TxChannelDriver) |
+| TMC2209 STEP | 21 | RMT (TxChannelDriver) |
 | TMC2209 DIR | 26 | PinDriver::output |
 | TMC2209 EN | 27 | PinDriver::output (active LOW) |
 | Valve | 14 | PinDriver::output (LOW=input, HIGH=output) |
 | Limit FULL | 32 | PinDriver::input + ISR |
 | Limit HOME | 35 | PinDriver::input + ISR |
-| pH electrode | 34 | ADC1_CH6 (12-bit) |
+| pH electrode | 4 | ADC1_CH3 (12-bit, 0–2900 mV) |
 | DS18B20 | 33 | OneWire bitbang |
 | Status LED | 2 | PinDriver::output |
 | USB-Serial RX | **3** | **DO NOT TOUCH** |

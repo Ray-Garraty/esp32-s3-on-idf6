@@ -99,7 +99,7 @@ impl AdcDriver {
             "ADC: initialized on GPIO4 (ADC1_CH3, DB_12 atten), first raw read = {first_read}"
         );
         if first_read == 0 {
-            log::warn!("ADC: first read is 0 — possible causes: GPIO34 floating, wrong channel, ADC not calibrated");
+            log::warn!("ADC: first read is 0 — possible causes: GPIO4 floating, wrong channel, ADC not calibrated");
             log::warn!("ADC: check CONFIG_ADC_CAL_EFUSE_VREF_ENABLE and hardware connection");
         }
 

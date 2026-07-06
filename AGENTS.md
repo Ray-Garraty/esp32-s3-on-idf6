@@ -96,7 +96,6 @@ This order is the only one that works with current buffer config.*
 
 **Forbidden:**
 - `esp_coex_preference_set(ESP_COEX_PREFER_BT)` — deprecated in ESP-IDF v6
-- `ble.set_coex_ble_preferred()`
 
 Use default `ESP_COEX_PREFER_BALANCE` — the ESP32 coexistence arbitrator
 automatically gives 50/50 airtime.
@@ -178,11 +177,15 @@ If you cannot confidently fill this → **stop and ask the user.**
 |---|---|---|
 | 1 | U0TXD | Serial output — **DO NOT TOUCH** |
 | 3 | U0RXD | Serial input — **DO NOT TOUCH** |
-| 2 | On-board LED (?) | Available |
-| 4–5, 12–19, 21–27 | General purpose | Available |
+| 2 | Status LED | `PinDriver::output` — Active HIGH |
+| 4 | ADC (pH electrode) | `AdcChannel` (ADC1_CH3) — 0–2900 mV range |
+| 14 | Valve | `PinDriver::output` — LOW=input, HIGH=output |
+| 21 | TMC2209 STEP | `TxChannelDriver` (RMT) — pulse train |
+| 26 | TMC2209 DIR | `PinDriver::output` — HIGH=CW |
+| 27 | TMC2209 EN | `PinDriver::output` — Active LOW |
 | 32 | Endstop FULL | `PinDriver::input` + PosEdge ISR → `AtomicBool` |
+| 33 | DS18B20 | OneWire bitbang — 4.7k pull-up |
 | 35 | Endstop HOME | `PinDriver::input` + PosEdge ISR → `AtomicBool` |
-| EN | TMC2209 EN | Active LOW → `set_low()` in constructor |
 
 **GPIO pin constructors have private fields** — always use
 `peripherals.pins.gpioXX.degrade_output()`.
@@ -435,7 +438,7 @@ known_good: <last working commit hash>")
 
 ### 8.3 Unsafe Policy
 
-**Total unsafe blocks: 27** (Last audited: 2026-07-06, baseline in
+**Total unsafe blocks: 26** (Last audited: 2026-07-06, baseline in
 `scripts/check_unsafe.py`)
 
 **Modules with `#![forbid(unsafe_code)]`:**
@@ -446,7 +449,7 @@ complete list. These modules must never contain `unsafe` code.
 
 | File | Blocks | Reason |
 |---|---|---|
-| `esp_safe.rs` | 20 | Safe wrappers around ESP-IDF boot-time and panic-handler FFI calls (WDT, heap, UART, HW registers, panic handler, `--wrap` entry) |
+| `esp_safe.rs` | 19 | Safe wrappers around ESP-IDF boot-time and panic-handler FFI calls (WDT, heap, UART, HW registers, panic handler, `--wrap` entry) |
 | `diag/black_box.rs` | 3 | Lock-free volatile ring buffer for ISR/panic context — no heap/mutex available |
 | `infrastructure/network/http_server.rs` | 2 | WebSocket `httpd_ws_send_frame_async` FFI + `unsafe impl Send` for opaque C handle |
 | `infrastructure/drivers/limitswitch.rs` | 1 | GPIO ISR `subscribe()` callback — closure runs in interrupt context |
@@ -595,6 +598,7 @@ for the insight gained.*
 
 ---
 
-*Last updated: 2026-07-03. Derived from post-mortems LL-001, LL-002,
+*Last updated: 2026-07-06. Derived from post-mortems LL-001, LL-002,
 homing-blocks-main (2026-07-03), BLE-coexistence (2026-07-01),
-SSE-Guru-Meditation (2026-07-02), DRAM-triangle (2026-07-01).*
+SSE-Guru-Meditation (2026-07-02), DRAM-triangle (2026-07-01). ESP32-S3
+migration completed 2026-07-06 (see docs/plans/completed/26_07_06_esp_s3_migration.md).*

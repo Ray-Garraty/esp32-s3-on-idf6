@@ -294,22 +294,6 @@ pub fn netif_init() {
     diag::ffi_guard::record_exit(diag::ffi_guard::FFI_NETIF_INIT, 0);
 }
 
-/// Set BT/WiFi coexistence priority to prefer BLE.
-///
-/// Safe to call once at init before any radio activity. Uses a simple
-/// register write — no side effects on memory safety.
-pub fn set_coex_ble_preferred() {
-    diag::ffi_guard::record_enter(diag::ffi_guard::FFI_ESP_COEX);
-    // SAFETY:
-    //   Invariant: esp_coex_preference_set is a register write, no memory effects.
-    //   Context: called once at init before any radio activity.
-    //   Risk: if called later, may cause brief radio renegotiation; no UB.
-    unsafe {
-        esp_idf_sys::esp_coex_preference_set(esp_idf_sys::esp_coex_prefer_t_ESP_COEX_PREFER_BT);
-    }
-    diag::ffi_guard::record_exit(diag::ffi_guard::FFI_ESP_COEX, 0);
-}
-
 /// Retry esp_wifi_deinit() up to `max_attempts` times with delay.
 ///
 /// ESP-IDF v6.0.1 has a race where esp_wifi_init() partially fails (task

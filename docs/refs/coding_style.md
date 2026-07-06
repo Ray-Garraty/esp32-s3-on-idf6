@@ -8,7 +8,7 @@ timestamp: 2026-06-29
 
 # Coding Style Guide
 
-Based on proven conventions from the ASMPL autosampler project, adapted for the esp32-rs-on-idf6 ESP32 + Rust + ESP-IDF v6 stack, and extended with [Qwen-recommended](https://github.com/qwen-lm) architectural principles.
+Based on proven conventions from the ASMPL autosampler project, adapted for the esp32-rs-on-idf6 ESP32-S3 + Rust + ESP-IDF v6 stack, and extended with [Qwen-recommended](https://github.com/qwen-lm) architectural principles.
 
 ## 1. Layered Architecture
 
@@ -312,7 +312,7 @@ error!("Limit switch triggered"; switch = ?switch_id, action = "emergency_stop")
 // Backed by log crate + EspLogger (std mode) + ring buffer for HTTP access
 ```
 
-## 9. ESP32 Special Rules
+## 9. ESP32-S3 Special Rules
 
 ### 9.1 WDT
 
@@ -344,8 +344,8 @@ Every `unsafe` block must have a comment explaining why it is safe.
 
 | Thread | Stack | Notes |
 |---|---|---|
-| Main loop | 16 KB | `CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384` |
-| Motor (RMT stepper) | 4 KB | |
+| Main loop | 32 KB | `CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768` |
+| Motor (RMT stepper) | 16 KB | Increased from 4 KB — stack overflow on homing |
 | Temperature (DS18B20) | 16 KB | Bitbang call chain |
 | BLE notify | 8 KB | |
 | HTTP server | 12 KB | `stack_size: 12288` |
@@ -374,7 +374,7 @@ See [testing.md](../guides/testing.md) for the 3-tier strategy, and [project.md]
 - Function has **preconditions** the caller must satisfy
 
 ```rust
-/// Feed the Task Watchdog Timer to prevent ESP32 reset.
+/// Feed the Task Watchdog Timer to prevent ESP32-S3 reset.
 /// Must be called at least every ~5 s (default WDT timeout).
 pub fn feed_watchdog() { /* ... */ }
 ```
@@ -445,7 +445,7 @@ stepper.move_steps(config::HOMING_STEPS, config::HOMING_SPEED_HZ);
 ### Testing
 - [ ] `cargo test --lib` passes
 - [ ] `cargo +esp clippy -- -D warnings` passes
-- [ ] `cargo +esp build --target xtensa-esp32-espidf` passes
+- [ ] `cargo +esp build --target xtensa-esp32s3-espidf` passes
 
 ## 14. Dependency Version Duplicates
 
@@ -459,7 +459,7 @@ Embedded ecosystem is in transition -- multiple major versions of core crates co
 | `bitflags` | 1.3 + 2.13 | Host build tooling vs firmware deps |
 
 **Policy:**
-- Duplicates are **accepted** -- ~5-10 KB binary overhead is acceptable on ESP32 (520 KB SRAM)
+- Duplicates are **accepted** -- ~5-10 KB binary overhead is acceptable on ESP32-S3 (512 KB SRAM)
 - **DO NOT** `[patch]` versions without verifying API compatibility
 - Monitor binary size (`cargo bloat`), not version count
 - Warning suppressed via `#![allow(clippy::multiple_crate_versions)]`
