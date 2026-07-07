@@ -11,7 +11,11 @@
 
 static constexpr auto TAG = "main";
 
+static constexpr auto BOOT_OK_MARKER = "BOOT_OK_MARKER";
+
 extern "C" void app_main(void) {
+    printf("BOOT_OK_MARKER\n");
+    fflush(stdout);
     nvs_flash_init();
     ecotiter::diag::BlackBox::instance().init();
     ecotiter::diag::StackMonitor::instance().registerMainTask();

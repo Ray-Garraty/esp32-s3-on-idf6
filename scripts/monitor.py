@@ -5,7 +5,7 @@ prints serial output with timestamps, saves to log file.
 
 Usage:
     python scripts/monitor.py                  # auto-detect port, 30s timeout
-    python scripts/monitor.py COM5             # specify port manually
+    python scripts/monitor.py /dev/ttyACM0      # specify port manually
     python scripts/monitor.py --timeout 60     # longer
     python scripts/monitor.py --no-reset       # skip DTR reset
     python scripts/monitor.py --no-log         # terminal only, no file
@@ -45,6 +45,7 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
     crash_state = CRASH_STATE_IDLE
     crash_buffer: list[str] = []
     log_path = None
+    log_file = None
     if not no_log:
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -68,14 +69,14 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
             rtscts=False,
             dsrdtr=False,
         )
-        ser.rts = True
-        ser.dtr = True
+        ser.dtr = False
+        ser.rts = False
 
         def writeline(line: str, end: str = "\n"):
             try:
                 print(line, end=end, flush=True)
             except UnicodeEncodeError:
-                safe = line.encode("utf-8", errors="replace").decode("cp1252", errors="replace")
+                safe = line.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
                 print(safe, end=end, flush=True)
             if log_file is not None:
                 try:
@@ -88,8 +89,16 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
 
         if not no_reset:
             writeline("=== Resetting ESP32-S3 (DTR pulse) ===")
-            ser.dtr = False; ser.rts = False; time.sleep(0.1)
-            ser.dtr = True;  ser.rts = True;  time.sleep(1.2)
+            ser.dtr = False
+            ser.rts = False
+            time.sleep(0.1)
+            ser.dtr = True
+            ser.rts = True
+            time.sleep(0.1)
+            ser.dtr = False
+            ser.rts = False
+            time.sleep(0.5)
+            ser.reset_input_buffer()
 
         if log_file:
             writeline(f"=== Logging to {log_file} ===")
@@ -141,8 +150,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
 
     except serial.SerialException as e:
         msg = f"[{timestamp()}] Error: Cannot open {port}: {e}"
-        safe = msg.encode("utf-8", errors="replace").decode("cp1252", errors="ignore")
-        sys.stdout.buffer.write((safe + "\n").encode("cp1252", errors="replace"))
+        safe = msg.encode("utf-8", errors="replace").decode("utf-8", errors="ignore")
+        sys.stdout.buffer.write((safe + "\n").encode("utf-8", errors="replace"))
         sys.stdout.buffer.flush()
         return 1
 
@@ -161,7 +170,7 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
 
 def main():
     parser = argparse.ArgumentParser(description="ESP32-S3 serial monitor")
-    parser.add_argument("port", nargs="?", default=None, help="COM port (auto-detect if omitted)")
+    parser.add_argument("port", nargs="?", default=None, help="Serial port (auto-detect if omitted)")
     parser.add_argument("--timeout", type=int, default=30, help="Monitor duration in seconds")
     parser.add_argument("--no-reset", action="store_true", help="Skip DTR reset on connect")
     parser.add_argument("--log-dir", default=DEFAULT_LOG_DIR, help="Directory for log files (default: project_root/logs/)")
@@ -170,7 +179,7 @@ def main():
 
     port = args.port or find_esp32_port()
     if not port:
-        print("ERROR: ESP32-S3 not found. Specify port: python scripts/monitor.py COM5", flush=True)
+        print("ERROR: ESP32-S3 not found. Specify port: python scripts/monitor.py /dev/ttyACM0", flush=True)
         return 1
 
     return monitor_port(port=port, timeout=args.timeout, log_dir=args.log_dir,
