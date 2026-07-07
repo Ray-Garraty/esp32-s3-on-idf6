@@ -1016,3 +1016,173 @@ lessons:
       - ~/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/llvm-objdump
       - AGENTS.md §7 (Crash Investigation — diagnostic system)
       - src/esp_safe.rs (boot_marker — MMIO UART write)
+
+  - id: LL-023
+    date: 2026-07-07
+    crash_signature: "assert failed: xTaskCreatePinnedToCore freertos_tasks_c_additions.h:161 — core ID 1 invalid with CONFIG_FREERTOS_UNICORE=y"
+    category: api_misuse
+    trigger_patterns:
+      - "assert failed: xTaskCreatePinnedToCore"
+      - "freertos_tasks_c_additions.h:161"
+      - "xTaskCreatePinnedToCore.*core 1"
+      - "xTaskCreatePinnedToCore.*core ID"
+    lesson: >
+      On ESP32-S3 with CONFIG_FREERTOS_UNICORE=y (single-core FreeRTOS), only
+      core 0 exists. Passing core ID 1 to xTaskCreatePinnedToCore() triggers
+      an assert in freertos_tasks_c_additions.h:161 which checks
+      `xCoreID >= 0 && xCoreID < configNUM_CORES`. With configNUM_CORES=1,
+      core 1 fails the assertion.
+
+      This assert fired inside the panic handler wrapper (crash_handler.cpp)
+      which was in .iram1 but called flash functions (printf, BlackBox::dump,
+      uxTaskGetStackHighWaterMark). The wrapper itself crashed (LoadProhibited),
+      causing ESP-IDF's recursive panic detection to fire. The only visible
+      symptom was "Panic handler entered multiple times" — the original assert
+      was completely masked.
+
+      The panic handler was in .iram1 because the CMakeLists.txt had
+      `-ffunction-sections` and a [[gnu::section(".iram1")]] attribute on the
+      wrapper — intended for LL-010 crash safety but backfired because
+      .iram1 functions must NOT call flash-resident functions.
+
+      Two bugs masked each other:
+        1. Primary: xTaskCreatePinnedToCore(..., 1) with UNICORE=y → assert
+        2. Secondary: panic handler in .iram1 calls flash functions → crash
+        3. Result: "Panic handler entered multiple times" with no visible assert
+    diagnostic: >
+      1. If crash shows only "Panic handler entered multiple times", assume
+         the primary crash is being masked by a broken wrapper (LL-025).
+      2. Remove or neutralize the panic handler wrapper (e.g. empty __wrap_
+         that calls __real_esp_panic_handler) to see the real first crash.
+      3. Check for xTaskCreatePinnedToCore with core ID != 0 when
+         CONFIG_FREERTOS_UNICORE=y. Use xTaskCreate() for unicore builds.
+      4. Verify Saved PC before/after the wrapper change — different PC
+         suggests the wrapper was the secondary crash.
+    fix: >
+      Use xTaskCreate() instead of xTaskCreatePinnedToCore() when the core
+      is not critical, or pass tskNO_AFFINITY / core 0 for unicore:
+        xTaskCreate(entry, name, stack_words, param, priority, &handle);
+      For the panic handler wrapper: do NOT place in .iram1 unless all
+      called functions are also in IRAM (printf is NOT). Remove .iram1
+      attribute or implement an IRAM-safe printf (ets_printf). See LL-025.
+    refs:
+      - main/main.cpp (xTaskCreate call site)
+      - components/diag/src/crash_handler.cpp (panic wrapper)
+      - AGENTS.md §3.3 (WDT & Brownout — but same .iram1 concern for panics)
+      - docs/lessons_learned.yaml (LL-025, LL-005)
+
+  - id: LL-024
+    date: 2026-07-07
+    crash_signature: "NULL dereference — xTaskGetHandle(nullptr) in panic handler — LoadProhibited inside xTaskGetHandle → recursive panic"
+    category: instrumentation_gap
+    trigger_patterns:
+      - "xTaskGetHandle.*nullptr"
+      - "xTaskGetHandle.*NULL"
+      - "Panic handler entered multiple times"
+      - "Saved PC.*0x4037[cC]0[0-9a-f]{2}"
+    lesson: >
+      xTaskGetHandle(NULL) is NOT a valid FreeRTOS API call. The function
+      calls strlen(pcNameToQuery) internally, which crashes on NULL input
+      (LoadProhibited at address 0). Even if strlen somehow returns, the
+      subsequent prvSearchForNameWithinSingleList() dereferences the first
+      byte of the name string — another NULL access.
+
+      The correct API to get the current task's stack watermark is
+      uxTaskGetStackHighWaterMark(NULL) where NULL means "current task".
+      This is explicitly documented in FreeRTOS and does NOT do a name-based
+      task handle lookup.
+
+      Both crash_handler.cpp and stack_monitor.cpp called xTaskGetHandle(NULL)
+      to get a TaskHandle for the current task. This pattern is wrong on
+      any FreeRTOS version.
+
+      This bug was pre-existing in the C++ port (introduced during Step 3.5
+      by the general agent) and was never caught by code review because the
+      panic handler was never exercised until Step 4 added the motor task
+      which triggered the primary crash (LL-023).
+    diagnostic: >
+      1. Search all panic handler / diagnostic code for xTaskGetHandle(nullptr)
+         or xTaskGetHandle(NULL).
+      2. Replace with uxTaskGetStackHighWaterMark(nullptr) which is the
+         correct API for getting the calling task's stack watermark.
+      3. Review all stack monitor code for the same pattern.
+    fix: >
+      Replace every instance of:
+        TaskHandle_t h = xTaskGetHandle(nullptr);
+        UBaseType_t wm = uxTaskGetStackHighWaterMark(h);
+      with:
+        UBaseType_t wm = uxTaskGetStackHighWaterMark(nullptr);
+      The nullptr parameter is explicitly supported by FreeRTOS for
+      uxTaskGetStackHighWaterMark and means "the calling task".
+    refs:
+      - components/diag/src/crash_handler.cpp
+      - components/diag/src/stack_monitor.cpp
+      - FreeRTOS API docs (uxTaskGetStackHighWaterMark)
+      - docs/lessons_learned.yaml (LL-025, LL-023)
+
+  - id: LL-025
+    date: 2026-07-07
+    crash_signature: "Panic handler entered multiple times — .iram1 wrapper calls flash functions (printf, BlackBox::dump) — secondary crash masks primary"
+    category: instrumentation_gap
+    trigger_patterns:
+      - "Panic handler entered multiple times"
+      - ".iram1.*panic_handler"
+      - "section.*iram1.*printf"
+      - "__wrap_esp_panic_handler.*crash"
+    lesson: >
+      A panic handler placed in IRAM (.iram1 section) MUST NOT call any
+      function that lives in flash. When the original crash is due to a
+      cache error (e.g., flash cache miss during interrupt, XTOS dispatch
+      error, or hardware exception that disabled cache), calling flash-
+      resident functions from an IRAM function will immediately crash
+      again with LoadProhibited or StoreProhibited.
+
+      This creates a deadly diagnostic black hole: the secondary crash in
+      the .iram1 wrapper triggers ESP-IDF's recursive panic detection
+      (PANIC_ENTRY_COUNT_MAX=2), causing "Panic handler entered multiple
+      times" — with zero visibility into the ORIGINAL crash.
+
+      The fix has two valid approaches:
+        A) Remove .iram1 from the wrapper — let it live in flash. Most
+           crash types (stack overflow, assert failure, null dereference)
+           do NOT disable the flash cache, so flash access works fine.
+           Only cache-specific crashes will exhibit the secondary crash,
+           and those are rare.
+        B) Implement an IRAM-safe version using only IRAM functions:
+           ets_printf() instead of printf(), and a reduced black box dump
+           that only touches IRAM data.
+
+      The cmake comment in diag/CMakeLists.txt says "Panic handler chain
+      MUST be in IRAM (LL-010)" — this was cargo-culted from the Rust
+      phase without understanding that LL-010's context was different
+      (stack overflow, which DOES corrupt flash cache). For non-stack-
+      overflow crashes, flash access from the wrapper is safe.
+
+      The safest approach: provide TWO paths — check for stack overflow
+      first (which is IRAM-safe via uxTaskGetStackHighWaterMark), and
+      only call flash functions if cache is confirmed intact.
+    diagnostic: >
+      1. If "Panic handler entered multiple times" is the ONLY crash
+         output, suspect the wrapper itself is crashing.
+      2. Check if __wrap_esp_panic_handler has .iram1 section attribute.
+      3. Check if it calls printf, puts, cout, or any other flash function.
+      4. Verify by removing .iram1 and rebuilding. If the real crash
+         appears, the .iram1 wrapper was the secondary crash cause.
+      5. For a permanent fix, use approach B: ets_printf + IRAM-safe dump.
+    fix: >
+      Remove .iram1 section from __wrap_esp_panic_handler:
+        // REMOVE: [[gnu::section(".iram1")]]
+        extern "C" void __wrap_esp_panic_handler(void* info) noexcept {
+          // Flash-safe: printf, BlackBox::dump all OK for most crashes
+          ...
+        }
+      For cache-related crashes, implement a two-phase approach:
+        Phase 1 (IRAM): check stack watermark, print minimal info via
+          ets_printf. If cache seems OK -> Phase 2 (flash).
+      Mark the function with __attribute__((noinline)) to prevent LTO
+      from inlining it and accidentally pulling flash calls into IRAM.
+    refs:
+      - components/diag/src/crash_handler.cpp
+      - components/diag/CMakeLists.txt (comment about IRAM)
+      - docs/lessons_learned.yaml (LL-010, LL-023, LL-024)
+      - AGENTS.md §3.3 (IRAM considerations for WDT/Brownout)

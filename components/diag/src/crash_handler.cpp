@@ -5,8 +5,7 @@
 
 #include "diag/black_box.hpp"
 
-extern "C" [[gnu::section(".iram1")]] void __wrap_esp_panic_handler(
-    void* info) noexcept {
+extern "C" void __wrap_esp_panic_handler(void* info) noexcept {
 
     __asm__ volatile("rsil a0, 3");
 
@@ -15,14 +14,8 @@ extern "C" [[gnu::section(".iram1")]] void __wrap_esp_panic_handler(
     ecotiter::diag::BlackBox::instance().dump();
 
     printf("=== STACK ===\n");
-    for (int i = 0; i < configNUM_CORES; ++i) {
-        TaskHandle_t task = xTaskGetHandle(nullptr);
-        if (task) {
-            UBaseType_t watermark = uxTaskGetStackHighWaterMark(task);
-            printf("t%d current watermark=%u\n", i,
-                   static_cast<unsigned>(watermark));
-        }
-    }
+    UBaseType_t wm = uxTaskGetStackHighWaterMark(nullptr);
+    printf("current watermark=%u\n", static_cast<unsigned>(wm));
 
     printf("!!! EXCEPTION END !!!\n");
 

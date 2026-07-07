@@ -7,13 +7,16 @@ idf_component_register(
         "src/drivers/adc.cpp"
         "src/drivers/onewire.cpp"
         "src/storage/nvs.cpp"
+        "src/motor_task.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         domain
+        diag
         esp_driver_gpio
         esp_driver_rmt
         esp_adc
         nvs_flash
         esp_timer
         esp_common
+        freertos
 )

@@ -23,7 +23,7 @@ hardening.
 Each step produces a buildable, flashable binary verified by a 30-second serial
 smoke test. No step moves forward unless the smoke test passes.
 
-### Current State (2026-07-07)
+### Current State (2026-07-07, updated after Step 4)
 
 | Layer | Status | Notes |
 |-------|--------|-------|
@@ -39,7 +39,8 @@ smoke test. No step moves forward unless the smoke test passes.
 | `application/` | ✅ Done | 10 .cpp, 8 headers, 35 Command variants, 6 handlers |
 | `interface/` | ✅ Done | SerialReader (UART), BroadcastEvent, REST API handlers |
 | `infrastructure/network/` | ⬜ Missing | WiFi, HTTP, BLE not started |
-| Thread model / `main.cpp` | ✅ Partial | UART cmd pipeline active, no WiFi/BLE/motor |
+| `infrastructure/motor_task` | ✅ Done | 16 KB FreeRTOS task, StepperMotor, homing, stop flags |
+| Thread model / `main.cpp` | ✅ Partial | UART cmd + motor task, no WiFi/BLE/temp |
 | Tests (Catch2 + uart_test.py) | ✅ Partial | 11 Catch2 files (159 tests) + 5 Python UART tests |
 
 ### Remaining Work
@@ -49,7 +50,7 @@ smoke test. No step moves forward unless the smoke test passes.
 | **2** | Application Layer | ~12 new files | ✅ Done (19 new files, 133/133 tests) |
 | **3** | Interface Layer (Serial + Broadcast + REST) | ~4 new files | ✅ Done (6 new files, 159/159 tests) |
 | **3.5** | UART Command Test | main.cpp rewrite + uart_test.py | ✅ Done (5/5 UART tests, BOOT OK) |
-| **4** | Stepper via UART (motor task + homing + stop flags) | motor_task.cpp, burette_ops доработка | Build + flash + moveSteps крутит мотором |
+| **4** | Stepper via UART (motor task + homing + stop flags) | motor_task.cpp, burette_ops wiring | ✅ Done (BOOT OK, 159/159 tests, lint clean) |
 | **5** | Sensors + Broadcast (ADC temp thread, broadcast via serial) | temp_thread.cpp, broadcast wiring | Build + flash + broadcast JSON по UART каждые 300ms |
 | **6** | BLE Layer (NimBLE NUS GATT) | ~2 new files | Build + flash + BLE advertising visible |
 | **7** | Network Layer (WiFi AP/STA + HTTP + WebUI) | ~6 new files + WebUI assets | Build + flash + AP visible on phone |
@@ -315,7 +316,7 @@ in real time. Create a Python test script to validate the exchange.
 
 ## Step 4 — Stepper via UART (Motor Task + Homing + Stop Flags)
 
-**Status: ⬜ Pending**
+**Status: ✅ COMPLETED (2026-07-07)**
 
 ### Objective
 
@@ -409,6 +410,33 @@ and limit switch integration.
 - `{"cmd":"emergencyStop"}` → immediate stop via `gStopFull=true`
 - HOME limit switch triggered → homing completes
 - 30-second smoke test: BOOT OK, no Guru/WDT/panic, `uxTaskGetStackHighWaterMark` > 20%
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| New files | 4 (motor_task.hpp/.cpp, ffi_guard.cpp, state_tracer.cpp) |
+| Modified files | 6 (burette_ops.cpp, stepper.hpp, main.cpp, crash_handler.cpp, stack_monitor.cpp, tests/CMakeLists.txt) |
+| Motor task stack | 16384 bytes (16 KB, GR-6) |
+| Stop flags | GR-2: `&gStopFull` / `&gStopHome` on all `moveStepsIntervals()` calls |
+| Host tests | 159/159 pass (442 assertions) |
+| Lint | Clean (0 warnings, 0 errors) |
+| Smoke test | BOOT OK, no Guru/WDT/panic |
+| Crash reports | `docs/crash_reports/2026-07-07_step4_boot_crash.md` |
+| Lessons learned | LL-023 (UNICORE core ID), LL-024 (xTaskGetHandle nullptr), LL-025 (.iram1 flash calls) |
+
+### Notable Issues
+
+1. **Boot crash masked by broken panic handler**: `xTaskCreatePinnedToCore(..., 1)`
+   with `CONFIG_FREERTOS_UNICORE=y` caused assert. The assert was invisible because
+   the panic handler itself crashed twice (xTaskGetHandle(nullptr) in LL-024,
+   .iram1 flash call in LL-025), producing only "Panic handler entered multiple
+   times". Fixed by using `xTaskCreate()` and fixing the panic handler chain.
+
+2. **Host test build broken**: `burette_ops.cpp` now includes
+   `infrastructure/motor_task.hpp` which pulls in `freertos/FreeRTOS.h` and
+   `freertos/queue.h`. Fixed by adding FreeRTOS stubs in `tests/stubs/` and
+   infrastructure include path to `tests/CMakeLists.txt`.
 
 ---
 

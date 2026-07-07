@@ -23,9 +23,7 @@ void StackMonitor::registerThread(const char* name, size_t stackSize) noexcept {
 }
 
 uint32_t StackMonitor::watermarkMain() const noexcept {
-    TaskHandle_t task = xTaskGetHandle(nullptr);
-    if (!task) return 0;
-    UBaseType_t wm = uxTaskGetStackHighWaterMark(task);
+    UBaseType_t wm = uxTaskGetStackHighWaterMark(nullptr);
     return static_cast<uint32_t>(wm);
 }
 

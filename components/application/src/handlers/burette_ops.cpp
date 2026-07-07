@@ -6,6 +6,8 @@
 
 #include "application/command.hpp"
 #include "domain/memory.hpp"
+#include "domain/types.hpp"
+#include "infrastructure/motor_task.hpp"
 
 namespace ecotiter::application::handlers::burette_ops {
 namespace {
@@ -37,6 +39,11 @@ CommandResponse makeCmdResponse(const char* cmdName,
   return rsp;
 }
 
+bool sendMotorCommand(infrastructure::MotorCommand&& cmd) {
+  if (infrastructure::gMotorCmdQueue == nullptr) return false;
+  return xQueueSend(infrastructure::gMotorCmdQueue, &cmd, pdMS_TO_TICKS(10)) == pdTRUE;
+}
+
 } // anonymous namespace
 
 std::expected<CommandResponse, domain::AppError> handleFill() {
@@ -60,11 +67,20 @@ std::expected<CommandResponse, domain::AppError> handleRinse() {
 }
 
 std::expected<CommandResponse, domain::AppError> handleStop() {
-  return makeCmdResponse("stop", R"(,"result":"stopping")");
+  domain::gBuretteState.store(domain::BuretteState::Stopping,
+                              std::memory_order_release);
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::Stop;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleEmergencyStop() {
-  return makeCmdResponse("emergencyStop", R"(,"result":"emergency_stop")");
+  domain::gStopFull.store(true, std::memory_order_release);
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::EmergencyStop;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleGetStatus(
@@ -86,9 +102,11 @@ std::expected<CommandResponse, domain::AppError> handleMoveSteps(
   if (!steps) {
     return makeErrorResponse("moveSteps requires 'steps' param");
   }
-  return makeCmdResponse("moveSteps",
-                         R"(,"steps":%ld)",
-                         static_cast<long>(steps->value));
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::MoveSteps;
+  cmd.steps = steps->value;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetDirection(
@@ -96,9 +114,12 @@ std::expected<CommandResponse, domain::AppError> handleSetDirection(
   if (!dir) {
     return makeErrorResponse("setDirection requires 'direction' param");
   }
-  const char* dirStr = (*dir == domain::Direction::Cw) ? "cw" : "ccw";
-  return makeCmdResponse("setDirection",
-                         R"(,"direction":"%s")", dirStr);
+  domain::gDirection.store(*dir, std::memory_order_release);
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::SetDirection;
+  cmd.direction = *dir;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetSpeed(
@@ -106,9 +127,12 @@ std::expected<CommandResponse, domain::AppError> handleSetSpeed(
   if (!speedHz) {
     return makeErrorResponse("setSpeed requires 'speed' param");
   }
-  return makeCmdResponse("setSpeed",
-                         R"(,"speed":%lu)",
-                         static_cast<unsigned long>(*speedHz));
+  domain::gSpeed.store(*speedHz, std::memory_order_release);
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::SetSpeed;
+  cmd.speedHz = *speedHz;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetAccel(
@@ -116,9 +140,12 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(
   if (!accelSteps) {
     return makeErrorResponse("setAccel requires 'accel' param");
   }
-  return makeCmdResponse("setAccel",
-                         R"(,"accel":%lu)",
-                         static_cast<unsigned long>(*accelSteps));
+  domain::gAccel.store(*accelSteps, std::memory_order_release);
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::SetAccel;
+  cmd.accelHzPerS = *accelSteps;
+  sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetVolume(

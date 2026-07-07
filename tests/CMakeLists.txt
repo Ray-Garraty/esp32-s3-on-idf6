@@ -56,12 +56,20 @@ target_include_directories(ecotiter_app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/domain/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/interface/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/infrastructure/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
 )
 
 target_link_libraries(ecotiter_app PUBLIC nlohmann_json::nlohmann_json)
 
+# --- Host stubs for components not under test ---
+set(STUB_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/stub_motor_task.cpp
+)
+
 # --- Unit test executable ---
 add_executable(unit_tests
+    ${STUB_SRCS}
     src/test_main.cpp
     src/test_types.cpp
     src/test_burette.cpp
@@ -80,6 +88,8 @@ target_include_directories(unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/domain/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/interface/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/infrastructure/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/stubs
 )
 
 target_link_libraries(unit_tests PRIVATE

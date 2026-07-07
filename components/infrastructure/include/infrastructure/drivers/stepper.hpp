@@ -54,6 +54,10 @@ public:
         return domain::Steps{position_.load(std::memory_order_acquire)};
     }
 
+    void setCurrentPosition(domain::Steps pos) noexcept {
+        position_.store(pos.value, std::memory_order_release);
+    }
+
 private:
     RmtChannel channel_;
     rmt_encoder_handle_t encoder_ = nullptr;

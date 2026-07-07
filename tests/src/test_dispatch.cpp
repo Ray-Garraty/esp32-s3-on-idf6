@@ -52,18 +52,18 @@ TEST_CASE("dispatch: rinse returns AckThen", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("dispatch: stop returns status", "[dispatch]") {
+TEST_CASE("dispatch: stop returns AckThen", "[dispatch]") {
   Command cmd{CommandType::Stop};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
+  REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("dispatch: emergencyStop returns status", "[dispatch]") {
+TEST_CASE("dispatch: emergencyStop returns AckThen", "[dispatch]") {
   Command cmd{CommandType::EmergencyStop};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
+  REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
 TEST_CASE("dispatch: getStatus returns JSON", "[dispatch]") {
@@ -83,12 +83,12 @@ TEST_CASE("dispatch: setDirection returns error without param", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: setDirection with param returns success", "[dispatch]") {
+TEST_CASE("dispatch: setDirection with param returns AckThen", "[dispatch]") {
   Command cmd{CommandType::SetDirection};
   cmd.direction = Direction::Cw;
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
+  REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
 TEST_CASE("dispatch: setSpeed returns error without param", "[dispatch]") {
@@ -98,12 +98,12 @@ TEST_CASE("dispatch: setSpeed returns error without param", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: setSpeed with param returns success", "[dispatch]") {
+TEST_CASE("dispatch: setSpeed with param returns AckThen", "[dispatch]") {
   Command cmd{CommandType::SetSpeed};
   cmd.speed = 1500;
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
+  REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
 TEST_CASE("dispatch: moveSteps returns error without param", "[dispatch]") {
@@ -113,12 +113,12 @@ TEST_CASE("dispatch: moveSteps returns error without param", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: moveSteps with param returns success", "[dispatch]") {
+TEST_CASE("dispatch: moveSteps with param returns AckThen", "[dispatch]") {
   Command cmd{CommandType::MoveSteps};
   cmd.steps = Steps{200};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
+  REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
 TEST_CASE("dispatch: valve.setPosition returns error without param", "[dispatch]") {

@@ -13,6 +13,7 @@
 #include "application/dispatch.hpp"
 #include "application/scheduler.hpp"
 #include "infrastructure/drivers/led.hpp"
+#include "infrastructure/motor_task.hpp"
 
 static constexpr auto TAG = "main";
 static constexpr auto BOOT_OK_MARKER = "BOOT_OK_MARKER";
@@ -37,6 +38,14 @@ extern "C" void app_main(void) {
 
     ecotiter::infrastructure::drivers::Led led(GPIO_NUM_2);
     (void)led;
+
+    xTaskCreate(
+        motorTaskEntry,
+        "motor",
+        16384 / sizeof(configSTACK_DEPTH_TYPE),
+        nullptr,
+        5,
+        nullptr);
 
     ecotiter::application::TickScheduler scheduler;
     TickType_t lastWake = xTaskGetTickCount();

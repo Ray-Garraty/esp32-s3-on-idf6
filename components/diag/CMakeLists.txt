@@ -2,9 +2,12 @@ idf_component_register(
     SRCS
         "src/black_box.cpp"
         "src/crash_handler.cpp"
+        "src/ffi_guard.cpp"
+        "src/state_tracer.cpp"
         "src/stack_monitor.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
+        esp_common
         esp_system
         esp_timer
         freertos
