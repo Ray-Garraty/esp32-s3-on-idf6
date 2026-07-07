@@ -1,0 +1,31 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace ecotiter::diag {
+
+class StackMonitor {
+public:
+    [[nodiscard]] static StackMonitor& instance() noexcept {
+        static StackMonitor sm;
+        return sm;
+    }
+
+    void registerMainTask() noexcept;
+    void registerThread(const char* name, size_t stackSize) noexcept;
+    [[nodiscard]] uint32_t watermarkMain() const noexcept;
+    void logAllWatermarks() const noexcept;
+
+    StackMonitor(const StackMonitor&) = delete;
+    StackMonitor& operator=(const StackMonitor&) = delete;
+
+private:
+    StackMonitor() = default;
+    static constexpr size_t MAX_THREADS = 8;
+    const char* names_[MAX_THREADS]{};
+    size_t stackSizes_[MAX_THREADS]{};
+    size_t count_{0};
+};
+
+} // namespace ecotiter::diag

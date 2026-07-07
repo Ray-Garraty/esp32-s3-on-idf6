@@ -1,0 +1,42 @@
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 100
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+NamespaceIndentation: None
+PointerAlignment: Left
+ReferenceAlignment: Left
+PackConstructorInitializers: Never
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+    SortPriority: 0
+  - Regex: '^".*\.hpp"'
+    Priority: 2
+    SortPriority: 0
+  - Regex: '^<[a-z_]+>'
+    Priority: 3
+    SortPriority: 0
+  - Regex: '.*'
+    Priority: 4
+    SortPriority: 0
+...

@@ -1,0 +1,21 @@
+menu "EcoTiter Configuration"
+
+    config ECOTITER_ENABLE_BLE
+        bool "Enable BLE support"
+        default y
+        help
+            Enable Bluetooth Low Energy (NimBLE) interface.
+
+    config ECOTITER_ENABLE_WIFI
+        bool "Enable WiFi support"
+        default y
+        help
+            Enable WiFi AP/STA and HTTP server.
+
+    config ECOTITER_ENABLE_DIAG
+        bool "Enable diagnostic subsystem"
+        default y
+        help
+            Enable black box, stack monitor, tick watchdog.
+
+endmenu

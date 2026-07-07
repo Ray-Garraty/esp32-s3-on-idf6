@@ -13,4 +13,15 @@ __pycache__/
 components_esp32.lock
 .opencode/tmp/
 /logs/
-/legacy/
+/legacy/arduino/
+
+# C++ project build artifacts
+/build/
+/build-tests/
+/compile_commands.json
+/sdkconfig
+/sdkconfig.old
+*.bin
+*.elf
+*.map
+idf_component.yml

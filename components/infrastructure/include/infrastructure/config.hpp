@@ -1,0 +1,41 @@
+#pragma once
+
+#include <cstdint>
+#include "driver/gpio.h"
+
+namespace ecotiter::config {
+
+// GPIO Pinout — from AGENTS.md x3.1
+inline constexpr gpio_num_t PIN_LED        = GPIO_NUM_2;
+inline constexpr gpio_num_t PIN_ADC_PH     = GPIO_NUM_4;   // ADC1_CH3
+inline constexpr gpio_num_t PIN_VALVE      = GPIO_NUM_14;
+inline constexpr gpio_num_t PIN_STEP       = GPIO_NUM_21;  // RMT channel
+inline constexpr gpio_num_t PIN_DIR        = GPIO_NUM_26;
+inline constexpr gpio_num_t PIN_EN         = GPIO_NUM_27;  // Active LOW
+inline constexpr gpio_num_t PIN_LIMIT_FULL = GPIO_NUM_32;
+inline constexpr gpio_num_t PIN_DS18B20    = GPIO_NUM_33;
+inline constexpr gpio_num_t PIN_LIMIT_HOME = GPIO_NUM_35;
+
+// RMT config
+inline constexpr uint32_t RMT_RESOLUTION_HZ = 1'000'000;  // 1 tick = 1 us
+inline constexpr uint32_t RMT_CHUNK_SYMBOLS = 128;
+inline constexpr uint32_t RMT_MAX_SYMBOLS   = 192;  // S3 shared RAM = 384 words
+
+// Stepper kinematics
+inline constexpr uint32_t STEP_FREQ_MIN_HZ = 30;
+inline constexpr uint32_t STEP_FREQ_MAX_HZ = 3000;
+
+// Network
+inline constexpr const char* AP_SSID       = "EcoTiter-AP";
+inline constexpr uint32_t STA_RECONNECT_MS = 10'000;
+
+// Memory map (ESP32-S3) — for is_sane_sp() in panic handler
+inline constexpr uintptr_t DRAM_START        = 0x3FC8'8000;
+inline constexpr uintptr_t DRAM_END          = 0x3FF0'0000;
+inline constexpr uintptr_t IRAM_START        = 0x4037'0000;
+inline constexpr uintptr_t IRAM_END          = 0x403E'0000;
+inline constexpr uintptr_t FLASH_CACHE_START = 0x4200'0000;
+inline constexpr uintptr_t FLASH_CACHE_END   = 0x43FF'FFFF;
+inline constexpr uintptr_t UART0_BASE        = 0x6000'0000;
+
+} // namespace ecotiter::config

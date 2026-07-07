@@ -1,160 +1,132 @@
 ---
 type: Architecture Reference
 title: Coding Style Guide
-description: Coding conventions, error hierarchy, state machine patterns, memory budget, and concurrency rules for esp32-rs-on-idf6 firmware
-tags: [coding-style, conventions, architecture]
-timestamp: 2026-06-29
+description: Coding conventions, error hierarchy, state machine patterns, memory budget, and concurrency rules for ecotiter C++23 firmware
+tags: [coding-style, conventions, architecture, c++23]
+timestamp: 2026-07-07
 ---
 
-# Coding Style Guide
+# Coding Style Guide (C++23 / ESP-IDF v6)
 
-Based on proven conventions from the ASMPL autosampler project, adapted for the esp32-rs-on-idf6 ESP32-S3 + Rust + ESP-IDF v6 stack, and extended with [Qwen-recommended](https://github.com/qwen-lm) architectural principles.
+Based on proven conventions from the Rust project, adapted for C++23 + ESP-IDF v6,
+and extended with ESP32-S3 embedded best practices.
 
 ## 1. Layered Architecture
 
 Four layers with strict one-way dependency: `domain` -> `application` -> `infrastructure` -> `interface`.
 
-**Golden rule:** `domain/` must NEVER import `esp-idf-*` crates. Only `infrastructure/` talks to hardware. `application/` coordinates using domain types and infrastructure traits.
-
-See [project.md](./project.md) for the full crate structure.
+**Golden rule:** `domain/` must NEVER include `esp_*.h` headers. Only `infrastructure/` talks to hardware. `application/` coordinates using domain types and infrastructure traits.
 
 ## 2. Error Hierarchy
 
-Three-level typed errors with automatic conversion:
+Three-level typed errors with `std::expected`:
 
-```rust
-// errors.rs
-#[derive(Debug)]
-pub enum AppError {
-    Hardware(HardwareError),
-    Protocol(ProtocolError),
-    State(StateError),
-    Resource(ResourceError),
-}
+```cpp
+// domain/errors.hpp
+enum class StepperError { InitFailed, Rmt, LimitSwitchTriggered, Timeout };
+enum class SensorError { AdcReadFailed, TempSensorNotDetected, TempReadGlitch };
+enum class NetworkError { WifiConnectionFailed };
 
-#[derive(Debug)]
-pub enum HardwareError {
-    StepperMotor(StepperError),
-    Sensor(SensorError),
-    Network(NetworkError),
-}
+enum class HardwareError { StepperMotor, Sensor, Network };
+enum class ProtocolError { InvalidJson, UnknownCommand, MissingParam };
+enum class StateError { Busy, InvalidTransition, AlreadyRunning };
+enum class ResourceError { NvsOpenFailed, OutOfMemory };
 
-#[derive(Debug)]
-pub enum StepperError {
-    InitFailed { reason: &'static str },
-    Rmt { code: i32 },
-    LimitSwitchTriggered { switch: LimitSwitchId },
-    Timeout { operation: &'static str },
-}
+enum class AppError { Hardware, Protocol, State, Resource };
+```
 
-// From impls for automatic ? conversion
-impl From<StepperError> for AppError {
-    fn from(e: StepperError) -> Self {
-        AppError::Hardware(HardwareError::StepperMotor(e))
-    }
-}
-impl From<esp_idf_sys::EspError> for StepperError {
-    fn from(e: esp_idf_sys::EspError) -> Self {
-        StepperError::Rmt { code: e.code() }
-    }
-}
+```cpp
+// Domain-layered error type with std::expected
+using Result = std::expected<T, E>;  // alias in domain/errors.hpp
+
+[[nodiscard]] Result<void, StepperError> moveSteps(Steps steps, Hz speed);
+[[nodiscard]] Result<float, SensorError> readTemperature();
 ```
 
 ### Recovery Strategy
 
-```rust
-pub trait Recoverable {
-    fn can_recover(&self) -> bool;
-    fn recovery_action(&self) -> Option<RecoveryAction>;
-}
+| Error | Recoverable | Action |
+|-------|-------------|--------|
+| `NetworkError` | Yes | Retry after STA_RECONNECT_INTERVAL |
+| `StepperError::Rmt` | Yes | Retry chunk transmission |
+| `StepperError::Timeout` | No | Enter error state, require manual reset |
+| `StateError` | No | Fix caller logic |
+| `ProtocolError` | No | Log and ignore malformed command |
 
-impl Recoverable for AppError {
-    fn can_recover(&self) -> bool {
-        matches!(self, AppError::Hardware(HardwareError::Network(_)))
-    }
-    fn recovery_action(&self) -> Option<RecoveryAction> {
-        match self {
-            AppError::Hardware(HardwareError::Network(_)) => {
-                Some(RecoveryAction::Retry)
-            }
-            _ => None,
-        }
-    }
-}
-```
-
-## 3. Enum over Trait (choose deliberately)
+## 3. Enum over Inheritance (Choose Deliberately)
 
 ### When to use enums
 
-```rust
+```cpp
 // GOOD: Enum for state machines, commands, errors
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Direction { Cw, Ccw }
-
-#[derive(Debug)]
-pub enum BuretteState { Idle, Homing, Filling { .. }, Dosing { .. }, Error { .. } }
+enum class Direction : uint8_t { Cw, Ccw };
+enum class BuretteState { Idle, Homing, Filling, Emptying, Dosing, Rinsing, Stopping, Error };
 ```
 
-### When to use traits
+### When to use classes / interfaces
 
-```rust
-// GOOD: Trait for hardware abstraction (mockable in tests)
-pub trait StepperMotor {
-    fn move_steps(&mut self, steps: Steps, speed: Hz) -> Result<(), StepperError>;
-    fn stop(&mut self) -> Result<(), StepperError>;
-    fn position(&self) -> Steps;
-}
+```cpp
+// GOOD: Abstract interface for hardware abstraction (mockable in tests)
+class StepperMotor {
+public:
+    virtual ~StepperMotor() = default;
+    virtual Result<void, StepperError> moveSteps(Steps steps, Hz speed) = 0;
+    virtual Result<void, StepperError> stop() = 0;
+    virtual Steps position() const noexcept = 0;
+};
 
-// BAD: Trait for what should be an enum
-pub trait BuretteState { fn process(&self) -> Result<(), Error>; }
-struct IdleState; struct DosingState;  // Use enum instead!
+// BAD: Class hierarchy for what should be an enum
+class BuretteState { virtual void process() = 0; };
+class IdleState : public BuretteState { /* use enum instead! */ };
 ```
 
-See [project.md](./project.md) for the concrete `RmtStepper` implementation.
+## 4. State Machine: Explicit Enum + Exhaustive switch
 
-## 4. State Machine: Explicit Enum + Exhaustive Match
-
-```rust
-// Type-safe state with contextual payloads
-pub enum BuretteState {
+```cpp
+// Type-safe state
+enum class BuretteState {
     Idle,
-    Homing { started_at: Instant },
-    Filling { target_ml: Ml, progress: Ml },
-    Dosing { remaining_ml: Ml, speed: MlMin },
-    Rinsing { phase: RinsePhase, cycles_left: u32 },
+    Homing,
+    Filling,
+    Emptying,
+    Dosing,
+    Rinsing,
     Stopping,
-    Error { code: ErrorCode, message: heapless::String<64> },
-}
+    Error
+};
 
-pub enum BuretteCommand {
-    Fill(Ml),
-    Dose { volume: Ml, speed: MlMin },
+enum class BuretteCommand {
+    Fill,
+    Dose,
     Stop,
-    Reset,
-}
+    Reset
+};
 ```
 
 Validation pipeline order:
 1. **Safety** -- limit switches, valve position
 2. **Concurrency** -- return `Busy` if already moving
-3. **State Logic** -- reject invalid transitions via exhaustive match
+3. **State Logic** -- reject invalid transitions via exhaustive switch
 4. **Parameter Validation** -- bounds, ranges
 5. **Execution** -- perform the action
 
-```rust
-impl BuretteController {
-    pub fn handle_command(&mut self, cmd: BuretteCommand) -> Result<Response, AppError> {
-        match (&self.state, &cmd) {
-            (BuretteState::Idle, BuretteCommand::Fill(_)) => { /* OK */ },
-            (BuretteState::Idle, BuretteCommand::Dose { .. }) => { /* OK */ },
-            (BuretteState::Filling { .. }, BuretteCommand::Fill(_)) => {
-                return Err(AppError::State(StateError::AlreadyRunning));
-            },
-            (_, BuretteCommand::Stop) => { /* Always allowed */ },
-            _ => return Err(AppError::State(StateError::InvalidTransition)),
+```cpp
+Result<void, AppError> handleCommand(BuretteState state, BuretteCommand cmd) {
+    switch (state) {
+    case BuretteState::Idle:
+        switch (cmd) {
+        case BuretteCommand::Fill: return doFill();
+        case BuretteCommand::Dose: return doDose();
+        default: return std::unexpected(AppError::State(StateError::InvalidTransition));
         }
-        self.transition(cmd)
+    case BuretteState::Filling:
+        if (cmd == BuretteCommand::Fill) {
+            return std::unexpected(AppError::State(StateError::AlreadyRunning));
+        }
+        [[fallthrough]];
+    default:
+        if (cmd == BuretteCommand::Stop) return doStop();
+        return std::unexpected(AppError::State(StateError::InvalidTransition));
     }
 }
 ```
@@ -163,316 +135,242 @@ impl BuretteController {
 
 Fixed-size buffers for all hot paths. No heap allocations in main loop or motor thread.
 
-```rust
-// src/domain/memory.rs -- central budget definition
-pub mod memory {
-    use heapless::{String, Vec, Deque};
-    use crate::logging::LogEntry;
+```cpp
+// domain/memory.hpp -- central budget definition
+namespace ecotiter::domain::memory {
+    inline constexpr size_t MAX_CMD_SIZE   = 256;
+    inline constexpr size_t MAX_RSP_SIZE   = 512;
+    inline constexpr size_t LOG_BUF_SIZE   = 100;
+    inline constexpr size_t ADC_BUF_SIZE   = 64;
+    inline constexpr size_t DNS_BUF_SIZE   = 512;
 
-    pub const MAX_COMMAND_SIZE: usize = 256;
-    pub const MAX_RESPONSE_SIZE: usize = 512;
-    pub const LOG_BUFFER_SIZE: usize = 100;
-    pub const ADC_BUF_SIZE: usize = 64;
-    pub const DNS_BUF_SIZE: usize = 512;
-
-    pub type CommandBuffer = Vec<u8, MAX_COMMAND_SIZE>;
-    pub type ResponseBuffer = Vec<u8, MAX_RESPONSE_SIZE>;
-    pub type LogBuffer = Deque<LogEntry, LOG_BUFFER_SIZE>;
+    using CommandBuffer  = std::array<uint8_t, MAX_CMD_SIZE>;
+    using ResponseBuffer = std::array<uint8_t, MAX_RSP_SIZE>;
 }
 ```
 
-```rust
+```cpp
 // GOOD: Fixed-size buffers for hot paths
-let mut adc_buf = [0u16; memory::ADC_BUF_SIZE];
-let mut dns_buf = [0u8; memory::DNS_BUF_SIZE];
-```
+std::array<uint16_t, ADC_BUF_SIZE> adc_buf;
+std::array<uint8_t, DNS_BUF_SIZE> dns_buf;
 
-```rust
-// ALLOWED: Vec at init or config-change time only
-let intervals = compute_ramp(total_steps, &config); // Vec -- computed once per config
-```
+// ALLOWED: std::vector at init or config-change time only
+auto intervals = computeRamp(total_steps, config); // std::vector -- computed once
 
-```rust
-// BAD: Vec/String allocation in main loop or motor thread
+// BAD: std::vector/std::string allocation in main loop or motor thread
 loop {
-    let data: Vec<u32> = some_dynamic_data();  // NO -- use fixed buffer
-    let json = serde_json::to_string(&status).unwrap(); // NO -- pre-allocate
+    auto data = std::vector<uint32_t>{};  // NO -- use fixed buffer
 }
 ```
 
-## 6. Concurrency: Atomics + Channels, Never Block Main Loop
+## 6. Concurrency: Atomics + Queues, Never Block Main Loop
 
 ### Golden Rule
 
 The main loop (FreeRTOS `main` task) must **never** execute a blocking operation.
 
 | Context | Allowed | Forbidden |
-|---|---|---|
-| Main loop | `Atomic*` read/write, `try_lock()`, poll functions, `sleep(10ms)` | `send_and_wait()`, `lock()`, `recv()`, `sleep()` > 10ms |
-| Motor thread | `send_and_wait()`, blocking RMT, `Ets::delay_us` | Mutex contention |
+|---------|---------|-----------|
+| Main loop | `std::atomic` read/write, `try_lock()`, poll functions, `vTaskDelayUntil(10ms)` | `rmt_tx_wait_all_done()`, `lock()`, `xQueueReceive()`, `vTaskDelay()` > 10ms |
+| Motor thread | `rmt_tx_wait_all_done()`, blocking RMT | Mutex contention |
 | HTTP server task | Blocking writes to socket fd | Long computations |
-| BLE notify thread | `mpsc::recv()`, `server.notify()` | Main loop blocking |
-
-### Channel-Based Communication
-
-```rust
-// Motor thread reads from channel, writes atomics
-std::thread::Builder::new()
-    .stack_size(4096)
-    .name("motor".into())
-    .spawn(move || {
-        for cmd in cmd_rx {
-            match cmd {
-                Command::Move { steps, speed } => {
-                    TARGET.store(steps.0, Ordering::Release);
-                    SPEED.store(speed.0, Ordering::Release);
-                }
-                Command::Stop => { ENABLED.store(false, Ordering::Release); }
-            }
-        }
-    });
-```
+| BLE notify thread | `xQueueReceive()`, `ble_gatts_notify()` | Main loop blocking |
 
 ### Atomic Ordering
 
-```rust
-pub struct MotorState {
-    target: AtomicI32,
-    current: AtomicI32,
-    enabled: AtomicBool,
-}
+```cpp
+struct MotorState {
+    std::atomic<int32_t> target{0};
+    std::atomic<int32_t> current{0};
+    std::atomic<bool> enabled{false};
 
-impl MotorState {
-    pub fn update_current(&self, pos: i32) {      // motor thread (writer)
-        self.current.store(pos, Ordering::Release);
+    void updateCurrent(int32_t pos) noexcept {     // motor thread (writer)
+        current.store(pos, std::memory_order_release);
     }
-    pub fn current(&self) -> i32 {                  // main loop (reader)
-        self.current.load(Ordering::Acquire)
+    int32_t getCurrent() const noexcept {           // main loop (reader)
+        return current.load(std::memory_order_acquire);
     }
-    pub fn try_enable(&self) -> bool {               // compare-and-swap
-        self.enabled.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    bool tryEnable() noexcept {                     // compare-and-swap
+        bool expected = false;
+        return enabled.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_acquire);
     }
-}
+};
 ```
 
 ### Mutex Safety
-
 - `try_lock()` only in main loop (never `lock()`)
-- `Arc<Mutex<T>>` only for shared resources between tasks
+- `std::mutex` only for shared resources between tasks
 - Never hold a mutex across a blocking call
 
-```rust
+```cpp
 // GOOD:
-if let Ok(mut wifi) = wifi_mgr.try_lock() { wifi.process(); }
+std::scoped_lock lock(wifi_mutex, std::try_to_lock);
+if (lock) { wifi.process(); }
 
 // BAD:
-let wifi = wifi_mgr.lock().unwrap(); // may block HTTP task
+std::scoped_lock lock(wifi_mutex); // may block HTTP task
 ```
 
 ## 7. Types and Constants
 
-```rust
-// GOOD: Newtype wrappers for domain units
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Steps(pub i32);
-pub struct Hz(pub u32);
-pub struct Ml(pub f32);
-pub struct MlMin(pub f32);
+```cpp
+// GOOD: Strongly-typed wrappers for domain units
+struct Steps { int32_t value; };
+struct Hz { uint32_t value; };
+struct Ml { float value; };
+struct MlMin { float value; };
 
 // GOOD: Named constants, no magic numbers
-pub const AP_SSID: &str = "EcoTiter-AP";
-pub const MOTOR_THREAD_STACK: usize = 4096;
-pub const HTTP_SERVER_STACK: usize = 12288;
-pub const RMT_RESOLUTION: u32 = 1_000_000;
-```
+inline constexpr auto AP_SSID = "EcoTiter-AP";
+inline constexpr size_t MOTOR_THREAD_STACK = 16384;
+inline constexpr size_t HTTP_SERVER_STACK = 12288;
+inline constexpr uint32_t RMT_RESOLUTION = 1'000'000;
 
-```rust
 // BAD: Magic numbers
-stepper.move_steps(64, 2000);  // what is 64? what is 2000?
+stepper.moveSteps(Steps{64}, Hz{2000});  // what is 64? what is 2000?
 ```
 
-## 8. Structured Logging
+## 8. Logging
 
-```rust
-// domain/logging.rs
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    pub timestamp: u64,
-    pub level: Level,
-    pub module: &'static str,
-    pub message: heapless::String<128>,
-}
-
-// Application logging usage
-info!("Stepper move completed"; steps = steps.0, speed = speed.0);
-warn!("ADC read error"; error = %e, channel = 34);
-error!("Limit switch triggered"; switch = ?switch_id, action = "emergency_stop");
-
-// Logger implementation in infrastructure/
-// Backed by log crate + EspLogger (std mode) + ring buffer for HTTP access
+```cpp
+// ESP-IDF esp_log wrapped in C++ logger
+static constexpr auto TAG = "stepper";
+ESP_LOGI(TAG, "Move completed: %ld steps", steps.value);
+ESP_LOGW(TAG, "ADC read error on channel %d", channel);
+ESP_LOGE(TAG, "Limit switch triggered, emergency stop");
 ```
 
 ## 9. ESP32-S3 Special Rules
 
 ### 9.1 WDT
+Must be disabled at boot -- `rmt_tx_wait_all_done()` blocks > 250 ms.
 
-Must be disabled at boot -- RMT `send_and_wait()` blocks > 250 ms.
-
-```rust
-unsafe {
-    // Safe: called once at boot, before any task uses WDT
-    esp_idf_sys::esp_task_wdt_deinit();
-}
+```cpp
+// Use safe wrapper only
+esp_safe::disableWdt();  // calls esp_task_wdt_deinit() once at boot
 ```
 
 ### 9.2 RMT Stepper
-
-- `TxChannelDriver::new(step_pin, &config)` -- accepts `impl OutputPin + 'd`
-- `send_and_wait()` **only in motor thread**, never in main loop
-- `RmtChannel` trait must be in scope for `disable()`
+- `rmt_new_tx_channel()` wrapped in `RmtChannel` RAII class
+- `rmt_tx_wait_all_done()` **only in motor thread**, never in main loop
 
 ### 9.3 GPIO Pins
+- TMC2209 EN is active LOW -- call `gpio_set_level(en, 0)` in constructor
 
-- `GpioXX` have private fields -- use `peripherals.pins.gpioXX.degrade_output()`
-- TMC2209 EN is active LOW -- call `set_low()` in constructor
-
-### 9.4 Unsafe
-
-Every `unsafe` block must have a comment explaining why it is safe.
+### 9.4 Low-Level Operations
+- All MMIO/ISR/raw-pointer functions: `_raw` or `_isr` suffix
+- Preceding `// CONTRACT:` comment explaining invariants
+- RAII wrappers for all ESP-IDF handles
 
 ### 9.5 Thread Stack Sizes
 
 | Thread | Stack | Notes |
-|---|---|---|
-| Main loop | 32 KB | `CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768` |
-| Motor (RMT stepper) | 16 KB | Increased from 4 KB — stack overflow on homing |
+|--------|-------|-------|
+| Main loop | 32 KB | CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768 |
+| Motor (RMT stepper) | 16 KB | Increased from 4 KB -- stack overflow on homing |
 | Temperature (DS18B20) | 16 KB | Bitbang call chain |
 | BLE notify | 8 KB | |
-| HTTP server | 12 KB | `stack_size: 12288` |
-| std::thread default | 8 KB | `CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192` |
-
-### 9.6 `PinDriver` Generics
-
-`PinDriver<'d, MODE>` has **1** generic argument (MODE), not 2:
-
-```rust
-pub struct RmtStepper<'d> {
-    dir: PinDriver<'d, Output>,
-    en: PinDriver<'d, Output>,
-}
-```
+| HTTP server | 12 KB | stack_size: 12288 |
+| std::thread default | 8 KB | CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192 |
 
 ## 10. Testing
 
-See [testing.md](../guides/testing.md) for the 3-tier strategy, and [project.md](./project.md) for key test scenarios.
+See `docs/guides/testing.md` for the 3-tier strategy.
 
 ## 11. Documentation
 
-### When to write doc comments
+### When to write comments
 - Incorrect usage can **damage hardware** or cause WDT reset
-- **Semantics differ from signature** (side effects, ordering, 1-based indices)
+- **Semantics differ from signature** (side effects, ordering)
 - Function has **preconditions** the caller must satisfy
 
-```rust
+```cpp
 /// Feed the Task Watchdog Timer to prevent ESP32-S3 reset.
 /// Must be called at least every ~5 s (default WDT timeout).
-pub fn feed_watchdog() { /* ... */ }
+void feedWatchdog();
 ```
 
-### When NOT to write doc comments
-- Trivial getters (`fn is_enabled(&self) -> bool`)
+### When NOT to write comments
+- Trivial getters (`bool isEnabled() const noexcept`)
 - Self-explanatory enum variants (`Direction::Cw`, `Error::Busy`)
 
 ## 12. Anti-Patterns (Forbidden Patterns)
 
-```rust
+```cpp
 // BAD: Global mutable state
-static mut GLOBAL_STATE: Option<System> = None;
+static AppState globalState;  // no!
 
-// GOOD: Pass via channels or Arc<Mutex>
-pub struct System { /* ... */ }
+// GOOD: Pass via queues or std::shared_ptr<Mutex>
 ```
 
-```rust
+```cpp
 // BAD: Blocking in main loop
-loop { http_client.get("/api/data").wait(); /* BLOCKS! */ }
+loop { http_client.get("/api/data"); /* BLOCKS! */ }
 
 // GOOD: Non-blocking polling
 loop {
-    if let Some(response) = http_client.try_poll() { process(response); }
-    sleep(10ms);
+    if (auto response = http_client.tryPoll()) { process(response); }
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));
 }
 ```
 
-```rust
-// BAD: unwrap() in library code
-pub fn read_sensor() -> f32 { adc.read().unwrap() }
+```cpp
+// BAD: Ignoring errors
+void readSensor() { adc.read(); }
 
 // GOOD: Proper error propagation
-pub fn read_sensor() -> Result<f32, SensorError> { Ok(adc.read()?) }
+Result<float, SensorError> readSensor() {
+    auto result = adc.read();
+    if (!result) return std::unexpected(SensorError::AdcReadFailed);
+    return *result;
+}
 ```
 
-```rust
+```cpp
 // BAD: Magic numbers
-stepper.move_steps(64, 2000);
+stepper.moveSteps(Steps{64}, Hz{2000});
 
 // GOOD: Named constants
-stepper.move_steps(config::HOMING_STEPS, config::HOMING_SPEED_HZ);
+stepper.moveSteps(STEPS_HOMING, Hz{HOMING_SPEED_HZ});
 ```
 
 ## 13. Pre-Merge Checklist
 
 ### Architecture
-- [ ] Code follows layered architecture (`domain/` -> no `esp-idf` imports)
-- [ ] State machine uses exhaustive matching on enum pairs
-- [ ] No circular dependencies between modules
+- [ ] Code follows layered architecture (`domain/` -> no `esp_*.h` includes)
+- [ ] State machine uses exhaustive switch on enum
+- [ ] No circular dependencies between components
 
 ### Memory
-- [ ] No `Vec`/`String` in main loop or motor thread
-- [ ] `heapless` containers for all hot paths
-- [ ] All buffers have fixed sizes (defined in `memory` module)
+- [ ] No `std::vector`/`std::string` in main loop or motor thread
+- [ ] `std::array` for all hot paths
+- [ ] All buffers have fixed sizes (defined in `memory.hpp`)
 
 ### Concurrency
 - [ ] Main loop has NO blocking operations
-- [ ] Correct `Ordering` semantics (`Release`/`Acquire`/`AcqRel`)
+- [ ] Correct `std::memory_order` semantics (Release/Acquire/AcqRel)
 - [ ] `try_lock()` used in main loop, never `lock()`
 
 ### Error Handling
-- [ ] No `unwrap()`/`expect()` in library code
-- [ ] Errors use typed hierarchy (`AppError -> HardwareError -> StepperError`)
-- [ ] Every `unsafe` block has a safety comment
+- [ ] No ignored return values (use `[[nodiscard]]`)
+- [ ] Errors use typed hierarchy (`AppError` -> typed enums)
+- [ ] Every `// CONTRACT:` comment present on low-level operations
 
 ### Testing
-- [ ] `cargo test --lib` passes
-- [ ] `cargo +esp clippy -- -D warnings` passes
-- [ ] `cargo +esp build --target xtensa-esp32s3-espidf` passes
-
-## 14. Dependency Version Duplicates
-
-Embedded ecosystem is in transition -- multiple major versions of core crates coexist:
-
-| Crate | Versions | Rationale |
-|---|---|---|
-| `embedded-hal` | 0.2 + 1.0 | `esp-idf-hal` exposes both legacy and new trait APIs |
-| `embedded-io` | 0.6 + 0.7 | `embassy` (0.6) and `embedded-svc` (0.7) on different tracks |
-| `heapless` | 0.8 + 0.9 | `embassy-sync` pins 0.8; all ESP-IDF crates use 0.9 |
-| `bitflags` | 1.3 + 2.13 | Host build tooling vs firmware deps |
-
-**Policy:**
-- Duplicates are **accepted** -- ~5-10 KB binary overhead is acceptable on ESP32-S3 (512 KB SRAM)
-- **DO NOT** `[patch]` versions without verifying API compatibility
-- Monitor binary size (`cargo bloat`), not version count
-- Warning suppressed via `#![allow(clippy::multiple_crate_versions)]`
+- [ ] `ctest --output-on-failure` passes
+- [ ] `clang-tidy -p build/` -- 0 warnings
+- [ ] `idf.py build` -- 0 errors, 0 warnings
 
 ## Summary
 
 | Principle | Rule |
-|---|---|
+|-----------|------|
 | **Layers** | `domain` -> `application` -> `infrastructure` -> `interface`. One-way deps only. |
-| **Error Handling** | 3-level hierarchy: `AppError -> HardwareError -> StepperError`. No `unwrap` in lib. |
-| **Memory** | Fixed-size `heapless` buffers for hot paths. `Vec` only at init/config-change. |
-| **State Machine** | Explicit enum + exhaustive match. Pipeline: Safety -> Busy -> State -> Params -> Execute. |
-| **Concurrency** | `Atomic*` for ISR->task. `mpsc` for task->task. **Never block main loop.** `try_lock()`. |
-| **Types** | Newtype for domain units (`Steps`, `Hz`, `Ml`). Named constants -- no magic numbers. |
-| **Testing** | Host units + on-device integration + pytest HIL + **property-based** (proptest). |
-| **Anti-patterns** | No global state, no blocking in main loop, no `unwrap` in lib, no magic numbers. |
+| **Error Handling** | Typed enums + `std::expected`. No ignored errors. |
+| **Memory** | Fixed-size `std::array` for hot paths. `std::vector` only at init/config-change. |
+| **State Machine** | Explicit enum + exhaustive switch. Pipeline: Safety -> Busy -> State -> Params -> Execute. |
+| **Concurrency** | `std::atomic` for ISR->task. FreeRTOS queues for task->task. **Never block main loop.** `try_lock()`. |
+| **Types** | Strong-typed wrappers for domain units (`Steps`, `Hz`, `Ml`). Named constants -- no magic numbers. |
+| **Testing** | Host units (Catch2) + on-device integration + pytest HIL. |
+| **Anti-patterns** | No global state, no blocking in main loop, no ignored errors, no magic numbers. |
