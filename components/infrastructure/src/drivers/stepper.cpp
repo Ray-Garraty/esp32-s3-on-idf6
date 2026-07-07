@@ -1,6 +1,7 @@
 #include "infrastructure/drivers/stepper.hpp"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
 
 static constexpr auto TAG = "stepper";
 
@@ -13,11 +14,12 @@ RmtChannel::RmtChannel(gpio_num_t stepPin) {
         .resolution_hz = config::RMT_RESOLUTION_HZ,
         .mem_block_symbols = config::RMT_MAX_SYMBOLS,
         .trans_queue_depth = 4,
+        .intr_priority = 0,
         .flags = {
             .invert_out = false,
             .with_dma = false,
-            .io_loop_back = false,
-            .io_od_mode = false,
+            .allow_pd = false,
+            .init_level = 0,
         }
     };
 
@@ -87,12 +89,12 @@ domain::Result<void, domain::StepperError> StepperMotor::moveStepsIntervals(
         .loop_count = 0,
         .flags = {
             .eot_level = 0,
+            .queue_nonblocking = false,
         }
     };
 
     size_t offset = 0;
     while (offset < intervals.size()) {
-        // GR-2: check stop flag between chunks
         if (stopFlag != nullptr &&
             stopFlag->load(std::memory_order_acquire)) {
             std::ignore = emergencyStop();

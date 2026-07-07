@@ -1,16 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include "esp_timer.h"
 
 namespace ecotiter::diag {
 
-// RAII watchdog for main loop iterations.
-// Records TickBegin in constructor, TickEnd in destructor.
-// If iteration exceeds threshold, logs a warning.
 class TickWatchdog {
 public:
-    TickWatchdog() noexcept;
-    ~TickWatchdog() noexcept;
+    inline TickWatchdog() noexcept
+        : startUs_(static_cast<uint64_t>(esp_timer_get_time())) {}
+
+    inline ~TickWatchdog() noexcept = default;
 
     TickWatchdog(const TickWatchdog&) = delete;
     TickWatchdog& operator=(const TickWatchdog&) = delete;

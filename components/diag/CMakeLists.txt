@@ -6,10 +6,11 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         esp_system
+        esp_timer
         freertos
+        soc
         domain
 )
 
 # Panic handler chain MUST be in IRAM (LL-010)
-# Applied via [[gnu::section(".iram1")]] in crash_handler.cpp
 target_compile_options(${COMPONENT_LIB} PRIVATE -ffunction-sections)

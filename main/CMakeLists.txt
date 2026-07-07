@@ -3,11 +3,13 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES
         domain
-        application
         infrastructure
-        interface
-        diag
-        esp_system
         nvs_flash
         freertos
+        esp_system
+        esp_driver_gpio
+        esp_driver_rmt
+        esp_timer
 )
+
+target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")

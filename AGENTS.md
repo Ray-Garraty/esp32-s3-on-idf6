@@ -343,6 +343,22 @@ Default `ESP_COEX_PREFER_BALANCE`. Never prefer BT (GR-4).
 | `clang-format -i -n src/**/*.cpp` | Format check | 15 s |
 | `cd tests && ctest --output-on-failure` | Host unit tests (Catch2) | 60 s |
 
+### 6.1a Windows Environment (IDF)
+
+| Item | Path |
+|------|------|
+| IDF root | `C:\esp\v6.0\esp-idf` |
+| IDF Python venv | `C:\Users\Vovan\.espressif\python_env\idf6.0_py3.14_env\Scripts\python.exe` |
+| idf.py | `C:\esp\v6.0\esp-idf\tools\idf.py` |
+
+`export.bat` exits early when `MSYSTEM` is set (MSYS2/bash). To activate:
+
+```
+# Via CMD (works): set MSYSTEM= && call C:\esp\v6.0\esp-idf\export.bat
+# Direct (no export.bat): %IDF_VENV%\python.exe %IDF_PATH%\tools\idf.py <args>
+# From scripts/monitor.py: handled automatically
+```
+
 Build output: `build/ecotiter.elf`, `build/ecotiter.bin`
 
 Flash verification: Confirmed only by "Flashing has completed!" message

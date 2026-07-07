@@ -17,7 +17,7 @@ using Result = std::expected<T, SerialError>;
 
 class SerialPort {
 public:
-    Result<void, SerialError> init() noexcept;
+    Result<void> init() noexcept;
     void poll() noexcept;
 
     [[nodiscard]] bool isInitialized() const noexcept { return initialized_; }
