@@ -5,11 +5,13 @@ idf_component_register(
         "src/ffi_guard.cpp"
         "src/state_tracer.cpp"
         "src/stack_monitor.cpp"
+        "src/rtc_watchdog.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         esp_common
         esp_system
         esp_timer
+        esp_hal_wdt
         freertos
         soc
         domain

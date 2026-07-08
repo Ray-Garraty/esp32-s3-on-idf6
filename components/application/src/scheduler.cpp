@@ -8,7 +8,7 @@ void TickScheduler::tick() noexcept {
 
 bool TickScheduler::shouldBroadcast() const noexcept {
   uint32_t now = gTick.load(std::memory_order_relaxed);
-  if (now - lastBroadcastTick_ >= 30) {
+  if (now - lastBroadcastTick_ >= BROADCAST_INTERVAL) {
     const_cast<TickScheduler*>(this)->lastBroadcastTick_ = now;
     return true;
   }
@@ -17,7 +17,7 @@ bool TickScheduler::shouldBroadcast() const noexcept {
 
 bool TickScheduler::shouldSample() const noexcept {
   uint32_t now = gTick.load(std::memory_order_relaxed);
-  if (now - lastSampleTick_ >= 10) {
+  if (now - lastSampleTick_ >= SAMPLE_INTERVAL) {
     const_cast<TickScheduler*>(this)->lastSampleTick_ = now;
     return true;
   }
@@ -26,7 +26,7 @@ bool TickScheduler::shouldSample() const noexcept {
 
 bool TickScheduler::shouldCheckWatermarks() const noexcept {
   uint32_t now = gTick.load(std::memory_order_relaxed);
-  if (now - lastWatermarkCheckTick_ >= 100) {
+  if (now - lastWatermarkCheckTick_ >= WATERMARK_INTERVAL) {
     const_cast<TickScheduler*>(this)->lastWatermarkCheckTick_ = now;
     return true;
   }
@@ -35,7 +35,7 @@ bool TickScheduler::shouldCheckWatermarks() const noexcept {
 
 bool TickScheduler::shouldMaintain() const noexcept {
   uint32_t now = gTick.load(std::memory_order_relaxed);
-  if (now - lastMaintainTick_ >= 6000) {
+  if (now - lastMaintainTick_ >= MAINT_INTERVAL) {
     const_cast<TickScheduler*>(this)->lastMaintainTick_ = now;
     return true;
   }

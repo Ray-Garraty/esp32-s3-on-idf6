@@ -1,6 +1,19 @@
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
-CONFIG_ESP_INT_WDT=n
+# IWDT (Interrupt Watchdog Timer) — catches spinlock deadlocks and
+# interrupts-disabled-too-long conditions. Uses MWDT in Timer Group 1.
+# When interrupts are disabled (portENTER_CRITICAL), the tick interrupt
+# can't fire → IWDT timeout → panic with backtrace → stage 2 hard reset.
+# LL-031/LL-032: This is the primary defense against silent GPIO spinlock
+# deadlocks that TWDT cannot detect (interrupts disabled).
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=500
+
+# RWDT (RTC Watchdog) — ultimate protection against complete system hangs
+# where even IWDT's panic handler cannot run. Keep bootloader's RWDT
+# enabled and re-configure in app_main with 6s timeout → RESET_SYSTEM.
+# Fed from main loop every 10ms.
+CONFIG_BOOTLOADER_WDT_DISABLE_IN_USER_CODE=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <compare>
+#include <cstdio>
 
 namespace ecotiter::domain {
 
@@ -81,5 +82,26 @@ inline std::atomic<bool> gStopHome{false};
 inline std::atomic<uint32_t> gDispensedSteps{0};
 inline std::atomic<bool>     gUsbHandshakeReceived{false};
 inline std::atomic<bool>     gBleError{false};
+
+// Boot progress tracking — diagnostic heartbeat for serial monitor
+// Set once at each init step. If the device hangs, the last value is visible
+// on the serial monitor without a working WDT (LL-032: spinlock deadlocks
+// mask TWDT because interrupts are disabled).
+enum class BootProgress : uint8_t {
+    Start,
+    Nvs,
+    BlackBox,
+    StackMonitor,
+    Serial,
+    RtcWdt,
+    BleInit,
+    PhyWait,
+    MotorTask,
+    TempTask,
+    NetOwner,
+    Running
+};
+
+inline std::atomic<BootProgress> gBootProgress{BootProgress::Start};
 
 } // namespace ecotiter::domain

@@ -97,8 +97,9 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
             time.sleep(0.1)
             ser.dtr = False
             ser.rts = False
-            time.sleep(0.5)
-            ser.reset_input_buffer()
+            time.sleep(1.0)
+            # Note: no reset_input_buffer — we want to capture ROM bootloader
+            # output and the BOOT_OK_MARKER from early app_main.
 
         if log_file:
             writeline(f"=== Logging to {log_file} ===")
@@ -118,28 +119,36 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
                     while "\n" in buf:
                         line, buf = buf.split("\n", 1)
                         line = line.strip("\r")
-                        if line:
-                            ts = timestamp()
+                        if not line:
+                            continue
 
-                            if not found_rom_output and "ESP-ROM" in line:
-                                found_rom_output = True
-                            if not found_app_output and ("entry" in line or "BOOT_" in line):
-                                found_app_output = True
+                        # Filter out binary garbage from ROM bootloader preamble:
+                        # very short lines (<5 chars) with no alphabetic chars.
+                        # These are decoded fragments of the binary header.
+                        if len(line) < 5 and not any(c.isalpha() for c in line):
+                            continue
 
-                            if "=== CRASH ===" in line:
-                                crash_state = CRASH_STATE_COLLECTING
-                                crash_buffer = [line]
-                                found_crash = True
-                                writeline(f"[{ts}] {line}")
-                            elif crash_state == CRASH_STATE_COLLECTING:
-                                crash_buffer.append(line)
-                                writeline(f"[{ts}] {line}")
-                                if "Rebooting..." in line or "!!! EXCEPTION END !!!" in line:
-                                    crash_state = CRASH_STATE_IDLE
-                            else:
-                                if "BOOT_OK_MARKER" in line:
-                                    found_boot = True
-                                writeline(f"[{ts}] {line}")
+                        ts = timestamp()
+
+                        if not found_rom_output and "ESP-ROM" in line:
+                            found_rom_output = True
+                        if not found_app_output and ("entry" in line or "BOOT_" in line):
+                            found_app_output = True
+
+                        if "=== CRASH ===" in line:
+                            crash_state = CRASH_STATE_COLLECTING
+                            crash_buffer = [line]
+                            found_crash = True
+                            writeline(f"[{ts}] {line}")
+                        elif crash_state == CRASH_STATE_COLLECTING:
+                            crash_buffer.append(line)
+                            writeline(f"[{ts}] {line}")
+                            if "Rebooting..." in line or "!!! EXCEPTION END !!!" in line:
+                                crash_state = CRASH_STATE_IDLE
+                        else:
+                            if "BOOT_OK_MARKER" in line:
+                                found_boot = True
+                            writeline(f"[{ts}] {line}")
                 else:
                     time.sleep(0.01)
             except serial.SerialException:

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -195,7 +196,18 @@ extern "C" void motorTaskEntry(void* pvParameters) {
 
     puts("DBG: motorEntry START"); fflush(stdout);
 
-    diag::StackMonitor::instance().registerThread("motor", 16384);
+    diag::StackMonitor::instance().registerThread("motor", domain::MOTOR_THREAD_STACK);
+
+    // Fix 2: DRAM pre-check before queue allocation
+    {
+        auto largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        ESP_LOGI(TAG, "motor task DRAM before queue: largest_free=%lu",
+                 (unsigned long)largest);
+        if (largest < 8192) {
+            ESP_LOGW(TAG, "Low DRAM for motor queue! largest_free=%lu",
+                     (unsigned long)largest);
+        }
+    }
 
     gMotorCmdQueue = xQueueCreate(4, sizeof(MotorCommand));
     if (gMotorCmdQueue == nullptr) {
@@ -203,22 +215,31 @@ extern "C" void motorTaskEntry(void* pvParameters) {
         vTaskDelete(nullptr);
         return;
     }
+    puts("DBG: motor queue created"); fflush(stdout);
 
+    // Fix 1: GPIO spinlock deadlock prevention
+    // LL-031: PHY calibration holds gpio_spinlock for 10-200ms after BT init.
+    // The main loop waited 1000ms before creating this task, but there's still
+    // a small chance the motor task starts running before PHY completes.
+    // Additionally, the FIRST gpio_config (in StepperMotor ctor) may retrigger
+    // a short PHY window. We insert a safety delay before the next GPIO.
+    puts("DBG: before StepperMotor ctor (gpio 21,26,27)"); fflush(stdout);
     StepperMotor stepper(config::PIN_STEP, config::PIN_DIR, config::PIN_EN);
     puts("DBG: after StepperMotor ctor"); fflush(stdout);
 
-    puts("DBG: before LimitSwitch homeSwitch ctor"); fflush(stdout);
+    puts("DBG: before LimitSwitch homeSwitch ctor (gpio 35)"); fflush(stdout);
     LimitSwitch homeSwitch(config::PIN_LIMIT_HOME,
                            domain::gStopHome, false);
     puts("DBG: after LimitSwitch homeSwitch ctor"); fflush(stdout);
 
-    // Give PHY calibration time to complete after first gpio_config
-    // triggered it. Without this delay, the second LimitSwitch on GPIO32
-    // deadlocks on gpio_spinlock held by the still-running PHY calibration.
+    // Safety delay between GPIO configs. The StepperMotor ctor's gpio_config
+    // may briefly re-trigger PHY calibration activity. This delay gives
+    // gpio_spinlock time to settle before the next gpio_config (LL-031 belt).
+    puts("DBG: PHY inter-GPIO safety delay start"); fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(500));
-    puts("DBG: after PHY wait"); fflush(stdout);
+    puts("DBG: PHY inter-GPIO safety delay done"); fflush(stdout);
 
-    puts("DBG: before LimitSwitch fullSwitch ctor"); fflush(stdout);
+    puts("DBG: before LimitSwitch fullSwitch ctor (gpio 34)"); fflush(stdout);
     LimitSwitch fullSwitch(config::PIN_LIMIT_FULL,
                            domain::gStopFull, false);
     puts("DBG: after LimitSwitch fullSwitch ctor"); fflush(stdout);

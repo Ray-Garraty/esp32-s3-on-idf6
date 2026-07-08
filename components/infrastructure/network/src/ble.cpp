@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <cstdlib>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
@@ -133,13 +134,16 @@ std::expected<void, domain::AppError> BleManager::init() {
         return std::unexpected(domain::AppError::Resource);
     }
 
+    // Fix 3: Diagnostic markers around PHY-calibration-triggering call
     {
+        puts("DBG: BLE - nimble_port_init (triggers async PHY calibration)"); fflush(stdout);
         diag::FfiGuard guard(60);
         int rc = nimble_port_init();
         if (rc != 0) {
             ESP_LOGE(TAG, "nimble_port_init failed: %d", rc);
             return std::unexpected(domain::AppError::Hardware);
         }
+        puts("DBG: BLE - nimble_port_init done"); fflush(stdout);
     }
 
     ble_hs_cfg.sync_cb = onHostSync;
