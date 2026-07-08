@@ -258,21 +258,52 @@ esp_safe::disableWdt();  // calls esp_task_wdt_deinit() once at boot
 ### 9.3 GPIO Pins
 - TMC2209 EN is active LOW -- call `gpio_set_level(en, 0)` in constructor
 
-### 9.4 Low-Level Operations
-- All MMIO/ISR/raw-pointer functions: `_raw` or `_isr` suffix
-- Preceding `// CONTRACT:` comment explaining invariants
-- RAII wrappers for all ESP-IDF handles
+### 9.4 Low-Level Operations Policy
 
-### 9.5 Thread Stack Sizes
+C++ does not have Rust's `unsafe` keyword. Low-level operations (raw pointers, MMIO, ISR handlers, ESP-IDF C API calls) are controlled via:
 
-| Thread | Stack | Notes |
-|--------|-------|-------|
-| Main loop | 32 KB | CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768 |
-| Motor (RMT stepper) | 16 KB | Increased from 4 KB -- stack overflow on homing |
-| Temperature (DS18B20) | 16 KB | Bitbang call chain |
-| BLE notify | 8 KB | |
-| HTTP server | 12 KB | stack_size: 12288 |
-| std::thread default | 8 KB | CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192 |
+- **Naming convention:** All functions doing MMIO/ISR/raw-pointer work have `_raw` or `_isr` suffix (e.g., `write_register_raw()`, `gpio_isr_handler()`).
+- **`// CONTRACT:` comments:** Every low-level operation MUST have a preceding comment explaining:
+  - The invariant being maintained
+  - The context (ISR, panic handler, boot-time)
+  - The risk if violated
+- **RAII wrappers:** All ESP-IDF handles MUST be wrapped in RAII classes with destructors that call the corresponding `*_del_*` / `*_deinit` function.
+
+**Enforcement:**
+- `clang-tidy` checks for `// CONTRACT:` presence on `_raw` / `_isr` functions
+- New low-level operations require justification in the commit message
+- Prefer ESP-IDF's high-level APIs whenever possible
+
+### 9.5 RAII for ESP-IDF Handles
+
+All ESP-IDF C handles MUST be wrapped in RAII classes — never used naked.
+
+```cpp
+// CORRECT — RAII wrapper
+class RmtChannel {
+    rmt_channel_handle_t handle_ = nullptr;
+public:
+    explicit RmtChannel(const rmt_tx_channel_config_t& config) {
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&config, &handle_));
+    }
+    ~RmtChannel() {
+        if (handle_) rmt_del_channel(handle_);
+    }
+    RmtChannel(const RmtChannel&) = delete;
+    RmtChannel& operator=(const RmtChannel&) = delete;
+    RmtChannel(RmtChannel&& other) noexcept : handle_(other.handle_) {
+        other.handle_ = nullptr;
+    }
+    [[nodiscard]] rmt_channel_handle_t get() const noexcept { return handle_; }
+};
+
+// FORBIDDEN — naked handle
+rmt_channel_handle_t channel = nullptr;  // easy to forget rmt_del_channel()
+```
+
+### 9.6 Thread Stack Sizes
+
+See `docs/refs/project.md §Thread Architecture` — single source of truth for all stack sizes.
 
 ## 10. Testing
 

@@ -26,7 +26,7 @@ timestamp: 2026-07-07
 | EN pin | GPIO27 (Output, active LOW) |
 | Step frequency | 30-3000 Hz (period 33333-333 us) |
 | Acceleration | Trapezoidal pre-computed ramp |
-| Limit FULL | GPIO32 (pull-down, pos-edge interrupt) - syringe bottom, burette full |
+| Limit FULL | GPIO34 (pull-down, pos-edge interrupt) - syringe bottom, burette full (NOT GPIO32 — reserved for PSRAM bus) |
 | Limit EMPTY | GPIO35 (floating, pos-edge interrupt) - syringe top, burette empty |
 
 ### Valve
@@ -60,18 +60,19 @@ timestamp: 2026-07-07
 
 ### ESP32-S3 Pin Assignments
 
-| Signal | GPIO | Driver | Notes |
-|--------|------|--------|-------|
-| TMC2209 STEP | 21 | RMT TX | Pulse train, 1 us HIGH |
+| Signal | GPIO | Driver | Constraint |
+|--------|------|--------|-----------|
+| U0TXD | 1 | Serial | DO NOT TOUCH |
+| U0RXD | 3 | Serial | DO NOT TOUCH |
+| TMC2209 STEP | 21 | RMT TX (channel 0) | Pulse train |
 | TMC2209 DIR | 26 | gpio_set_level | HIGH = CW (fill) |
 | TMC2209 EN | 27 | gpio_set_level | Active LOW |
 | Valve | 14 | gpio_set_level | LOW=input, HIGH=output |
-| Limit FULL | 32 | GPIO ISR | Syringe bottom |
-| Limit EMPTY | 35 | GPIO ISR | Syringe top |
-| pH electrode | 4 | ADC1_CH3 | 0-2900 mV range (S3) |
-| DS18B20 | 33 | OneWire bitbang | 4.7k ohm pull-up |
+| Limit FULL | 34 | GPIO ISR, pos-edge | Syringe bottom; NOT GPIO32 — PSRAM bus |
+| Limit EMPTY | 35 | GPIO ISR, pos-edge | Syringe top |
+| pH electrode | 4 | ADC1_CH3 (oneshot) | 0-2900 mV range (S3) |
+| DS18B20 | 33 | OneWire bitbang | 4.7k pull-up |
 | Status LED | 2 | gpio_set_level | Active HIGH |
-| USB-Serial RX | 3 | DO NOT TOUCH | |
 
 ## Stepper Motor Control
 
@@ -92,6 +93,30 @@ Transmit mode:  rmt_tx_wait_all_done() in dedicated motor thread
 - `RampConfig`: accel_steps, decel_steps, min_interval_us (full speed), max_interval_us (start/stop)
 - `computeRamp()` yields a `std::vector<uint32_t>` of per-step intervals in us
 
+### RMT Stepper API (ESP-IDF v6 C API)
+
+```cpp
+// Creation
+rmt_channel_handle_t channel = nullptr;
+rmt_tx_channel_config_t tx_config = { /* ... */ };
+ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_config, &channel));
+
+rmt_encoder_handle_t encoder = nullptr;
+rmt_copy_encoder_config_t enc_config = {};
+ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc_config, &encoder));
+
+// Blocking transmit (MOTOR THREAD ONLY — never in main loop)
+rmt_transmit_config_t tx_cfg = {};
+ESP_ERROR_CHECK(rmt_transmit(channel, encoder, signal, signal_size, &tx_cfg));
+ESP_ERROR_CHECK(rmt_tx_wait_all_done(channel, portMAX_DELAY));
+
+// Cleanup (RAII destructor)
+rmt_del_channel(channel);
+rmt_del_encoder(encoder);
+
+// EN pin active LOW: call gpio_set_level(en_pin, 0) in constructor.
+```
+
 ### Channel-Based Communication
 
 ```cpp
@@ -108,12 +133,12 @@ Motor thread reads `cmd_queue`, writes atomics. Main loop polls atomics, publish
 ### Thread Architecture
 
 ```
-MOTOR THREAD (prio 20, 16 KB stack):
+MOTOR THREAD (prio 20, 16 KB):
   std::thread. Owns RmtChannel exclusively.
   loop { read atomic target -> rmt_tx_wait_all_done -> write atomic position }
   rmt_tx_wait_all_done() blocks only this task, NOT main loop
 
-MAIN LOOP (prio 10, 32 KB stack):
+MAIN LOOP (prio 10, 32 KB):
   loop {
     cmd_queue.process()           -> set motor target atomics
     wifi_process()                -> DNS poll, reconnect logic
@@ -125,18 +150,31 @@ MAIN LOOP (prio 10, 32 KB stack):
     vTaskDelayUntil(10ms)         -> pacing tick
   }
 
-TEMPERATURE THREAD (prio 15, 16 KB stack):
+NET_OWNER THREAD (prio 15, 16 KB):
+  std::thread. Owns init order: WiFi → HTTP → BLE.
+  init: wifi.init() → wait_for_ip() → HttpServer::create() → ble.init()
+  loop { wifi_process(); http_events(); ble_process(); vTaskDelay(10ms) }
+
+TEMPERATURE THREAD (prio 15, 16 KB):
   loop {
     OneWire bitbang sequence
     store result in std::atomic<int32_t>
     vTaskDelay(1000ms)
   }
 
-BLE NOTIFY THREAD (prio 15, 8 KB stack):
+BLE NOTIFY THREAD (prio 15, 8 KB):
   loop { xQueueReceive -> ble_gatts_notify }
+
+HTTP SERVER (FreeRTOS internal, 12 KB):
+  Created by httpd_start(). Calls registered handler callbacks. Not user-managed.
 ```
 
 **Golden Rule:** The main loop must NEVER execute a blocking operation (`rmt_tx_wait_all_done`, `lock()`, `xQueueReceive`). All blocking calls live in dedicated threads.
+
+**Stack constraints:**
+- Default `std::thread` stack: 8 KB (`CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192`)
+- Forbidden in threads with stack ≤ 8 KB: `std::format()`/`std::print()` in loops, `nlohmann::json::dump()` without pre-allocated buffer, large stack-local arrays (`uint8_t buf[4096]`), deep recursion
+- After moving code between threads, verify with `uxTaskGetStackHighWaterMark()`
 
 ## Communication Protocol
 
@@ -149,6 +187,17 @@ USB alive?        -> switch to USB, disconnect BLE, stop advertising
 BLE alive?        -> switch to BLE, stop advertising
 Neither alive?    -> fallback to USB, start BLE advertising
 ```
+
+### Init Order (DRAM Triangle)
+
+Three-way DRAM conflict — init order MUST be: **WiFi → HTTP → BLE**.
+
+1. WiFi driver init (low DRAM cost, ~3.5 KB)
+2. Wait for IP (`wait_for_ip()`)
+3. HTTP server bind to 0.0.0.0:80
+4. BLE NimBLE host init (needs 12 KB contiguous MALLOC_CAP_INTERNAL)
+
+Forbidden reorderings: HTTP→BLE→WiFi (7+ s latency), BLE→WiFi→HTTP (`ESP_ERR_HTTPD_TASK`), WiFi→BLE→HTTP (timer alloc fail).
 
 ### REST API (HTTP/JSON)
 
@@ -168,6 +217,19 @@ Neither alive?    -> fallback to USB, start BLE advertising
 
 Captive portal probe handlers (302 -> `/wifi`): `/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt`.
 
+#### HTTP Server Implementation
+
+- `stack_size: 12288` mandatory — prevents handler stack overflow
+- Use WebSocket (`httpd_ws_send_frame_async`) for real-time streaming
+- Never store `httpd_req_t*` across handler returns (lifetime is per-request)
+- mDNS requires valid IP — call `mdns_init()` only after `IP_EVENT_STA_GOT_IP`
+
+#### WiFi Implementation
+
+- Custom `esp_netif_t` for AP mode with `esp_netif_destroy_default_wifi()` + custom netif creation before `esp_wifi_start()` — fixes DHCP on 192.168.4.1/24
+- DNS responder: `bind()` UDP socket to AP_IP:53 first, fallback 0.0.0.0:53
+- Coexistence: Default `ESP_COEX_PREFER_BALANCE` — never prefer BT
+
 ### BLE GATT (NUS)
 
 Custom service UUID: based on NUS (Nordic UART Service) pattern.
@@ -176,6 +238,16 @@ Custom service UUID: based on NUS (Nordic UART Service) pattern.
 |---------------|-----------|-------------|
 | TX | Write, WriteWithoutResponse | Receive JSON commands |
 | RX | Notify, Read | Send JSON responses + broadcast |
+
+### BLE Implementation
+
+- Pre-init guard: `bool initialized_` in `BleManager`; `process()`/`is_connected()` early-return if uninitialized
+- Register **all GATT services** before calling `nimble_port_init()` — internal mutex deadlock otherwise
+
+3-level zombie defense:
+- L1: 5 consecutive notify failures -> disconnect
+- L2: `ble_gap_conn_active()` returns 0 but local flag set -> cleanup
+- L3: immediate kill on notify with zero connections but flag set
 
 ### JSON Command Set
 
@@ -247,7 +319,19 @@ NO_ACTIVE -> TRANSPORT_USB (fallback) + BLE advertising
 | Concurrent commands | BUSY response if burette SM is moving |
 | USB takeover | BLE disconnected immediately; in-flight command continues to completion |
 | BLE zombie defence | 5 consecutive notify failures -> disconnect + restart advertising |
-| WDT | Disabled at boot (`esp_task_wdt_deinit()`) - RMT blocks >250 ms |
+| WDT | Disabled at boot — RMT blocks >250 ms |
+
+### WDT & Brownout
+
+WDT must be disabled at boot — `rmt_tx_wait_all_done()` blocks > 250 ms.
+
+```cpp
+// Use safe wrapper only — never call esp_task_wdt_deinit() directly
+#include "esp_safe.hpp"
+esp_safe::disable_wdt();
+```
+
+Brownout detector: Disabled via sdkconfig.defaults (`CONFIG_BROWNOUT_DET=n`), **NOT** via `WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)` at runtime.
 
 ## Error Handling
 
