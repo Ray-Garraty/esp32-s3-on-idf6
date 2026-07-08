@@ -10,6 +10,17 @@ set -euo pipefail
 #   ./scripts/build.sh tidy         # clang-tidy
 #   ./scripts/build.sh clean        # remove build/
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Self-contained ESP-IDF environment setup
+IDF_PATH="${IDF_PATH:-$HOME/.espressif/v6.0.1/esp-idf}"
+if [ -f "$IDF_PATH/export.sh" ]; then
+    export IDF_PATH
+    # shellcheck source=/dev/null
+    source "$IDF_PATH/export.sh" > /dev/null 2>&1
+fi
+
 CMD="${1:-build}"
 
 case "$CMD" in
