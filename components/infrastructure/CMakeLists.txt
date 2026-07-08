@@ -2,14 +2,17 @@ idf_component_register(
     SRCS
         "src/drivers/stepper.cpp"
         "src/drivers/limitswitch.cpp"
-        "src/drivers/led.cpp"
+        "src/drivers/rgb_led.cpp"
         "src/drivers/valve.cpp"
         "src/drivers/adc.cpp"
         "src/drivers/onewire.cpp"
         "src/storage/nvs.cpp"
         "src/motor_task.cpp"
         "src/temp_thread.cpp"
-    INCLUDE_DIRS "include"
+        "network/src/ble.cpp"
+    INCLUDE_DIRS
+        "include"
+        "network/include"
     REQUIRES
         domain
         diag
@@ -20,4 +23,5 @@ idf_component_register(
         esp_timer
         esp_common
         freertos
+        bt
 )

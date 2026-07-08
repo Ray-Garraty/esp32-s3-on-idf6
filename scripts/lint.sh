@@ -63,6 +63,7 @@ else
          components/interface/src \
          components/domain/src \
          components/infrastructure/src \
+         components/infrastructure/network/src \
          components/diag/src \
          main \
          -name '*.cpp' -type f -print0 2>/dev/null

@@ -79,5 +79,7 @@ inline std::atomic<float> gVolumeMl{50.0f};
 inline std::atomic<bool> gStopFull{false};
 inline std::atomic<bool> gStopHome{false};
 inline std::atomic<uint32_t> gDispensedSteps{0};
+inline std::atomic<bool>     gUsbHandshakeReceived{false};
+inline std::atomic<bool>     gBleError{false};
 
 } // namespace ecotiter::domain

@@ -55,6 +55,8 @@ const char* buretteStateName(BuretteState s) {
 }
 
 void run_homing(StepperMotor& stepper, LimitSwitch& homeSwitch) {
+    puts("DBG: run_homing START"); fflush(stdout);
+
     diag::FfiGuard guard(30);
 
     ESP_LOGI(TAG, "Starting homing sequence");
@@ -191,6 +193,8 @@ void execute_move_steps(StepperMotor& stepper, int32_t steps) {
 extern "C" void motorTaskEntry(void* pvParameters) {
     (void)pvParameters;
 
+    puts("DBG: motorEntry START"); fflush(stdout);
+
     diag::StackMonitor::instance().registerThread("motor", 16384);
 
     gMotorCmdQueue = xQueueCreate(4, sizeof(MotorCommand));
@@ -201,11 +205,25 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     }
 
     StepperMotor stepper(config::PIN_STEP, config::PIN_DIR, config::PIN_EN);
+    puts("DBG: after StepperMotor ctor"); fflush(stdout);
+
+    puts("DBG: before LimitSwitch homeSwitch ctor"); fflush(stdout);
     LimitSwitch homeSwitch(config::PIN_LIMIT_HOME,
                            domain::gStopHome, false);
+    puts("DBG: after LimitSwitch homeSwitch ctor"); fflush(stdout);
+
+    // Give PHY calibration time to complete after first gpio_config
+    // triggered it. Without this delay, the second LimitSwitch on GPIO32
+    // deadlocks on gpio_spinlock held by the still-running PHY calibration.
+    vTaskDelay(pdMS_TO_TICKS(500));
+    puts("DBG: after PHY wait"); fflush(stdout);
+
+    puts("DBG: before LimitSwitch fullSwitch ctor"); fflush(stdout);
     LimitSwitch fullSwitch(config::PIN_LIMIT_FULL,
                            domain::gStopFull, false);
+    puts("DBG: after LimitSwitch fullSwitch ctor"); fflush(stdout);
 
+    puts("DBG: before run_homing"); fflush(stdout);
     run_homing(stepper, homeSwitch);
 
     MotorCommand cmd;

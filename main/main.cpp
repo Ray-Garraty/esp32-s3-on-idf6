@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,12 +15,14 @@
 #include "application/command.hpp"
 #include "application/dispatch.hpp"
 #include "application/scheduler.hpp"
-#include "infrastructure/drivers/led.hpp"
+#include "infrastructure/config.hpp"
 #include "infrastructure/drivers/adc.hpp"
 #include "infrastructure/motor_task.hpp"
 #include "infrastructure/temp_thread.hpp"
+#include "infrastructure/network/ble.hpp"
 
 static constexpr auto TAG = "main";
+
 static constexpr auto BOOT_OK_MARKER = "BOOT_OK_MARKER";
 
 extern "C" void app_main(void) {
@@ -40,24 +43,45 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "Serial init failed: %d", static_cast<int>(initResult.error()));
     }
 
-    ecotiter::infrastructure::drivers::Led led(GPIO_NUM_2);
-    (void)led;
+    // DRAM check (pre-BT)
+    {
+        auto freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        ESP_LOGI(TAG, "DRAM before BLE+motors: %zu bytes", freeHeap);
+    }
 
-    xTaskCreate(
+    // Init BLE FIRST — this triggers PHY calibration which needs gpio_spinlock.
+    // Motor task also needs gpio_spinlock, so PHY must complete before motor starts.
+    ecotiter::infrastructure::network::BleManager bleManager;
+    auto bleInitResult = bleManager.init();
+    if (bleInitResult) {
+        ESP_LOGI(TAG, "BLE initialized successfully");
+    } else {
+        ESP_LOGW(TAG, "BLE init skipped (insufficient heap)");
+    }
+    // Wait for asynchronous PHY calibration to complete before touching GPIO
+    // in the motor task. Full calibration can take up to 500ms.
+    vTaskDelay(pdMS_TO_TICKS(800));
+
+    {
+        auto freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        ESP_LOGI(TAG, "DRAM after BLE, before motor: %zu bytes", freeHeap);
+    }
+
+    puts("DBG: xTaskCreate motor..."); fflush(stdout);
+    BaseType_t mt = xTaskCreate(
         motorTaskEntry,
         "motor",
         16384 / sizeof(configSTACK_DEPTH_TYPE),
         nullptr,
-        5,
+        1,
         nullptr);
+    {
+        char dbg[64];
+        std::snprintf(dbg, sizeof(dbg), "DBG: xTaskCreate returned=%d\n", (int)mt);
+        puts(dbg); fflush(stdout);
+    }
 
-    xTaskCreate(
-        tempTaskEntry,
-        "temp",
-        16384 / sizeof(configSTACK_DEPTH_TYPE),
-        nullptr,
-        4,
-        nullptr);
+    // temp task skipped for now
 
     ecotiter::infrastructure::drivers::AdcDriver adc(
         ADC_UNIT_1, ADC_CHANNEL_3);
@@ -75,6 +99,10 @@ extern "C" void app_main(void) {
                 buf[len++] = '\n';
             }
             serial.write({buf.data(), len});
+            // Also send over BLE if connected
+            if (bleManager.isConnected()) {
+                std::ignore = bleManager.sendNotification({buf.data(), len});
+            }
         }
     };
 
@@ -111,12 +139,44 @@ extern "C" void app_main(void) {
             if (!sv.empty()) {
                 serial.write(sv);
                 serial.write({"\n", 1});
+                if (bleManager.isConnected()) {
+                    std::string_view bleSv(sv.data(), sv.size());
+                    std::ignore = bleManager.sendNotification(bleSv);
+                    std::ignore = bleManager.sendNotification({"\n", 1});
+                }
             }
         }
 
+        // Process BLE zombie detection
+        bleManager.process();
+
+        // Drain BLE command queue
+        {
+            ecotiter::infrastructure::network::BleCmdItem bleItem;
+            while (xQueueReceive(bleManager.commandQueue(), &bleItem, 0) == pdTRUE) {
+                ESP_LOGI(TAG, "BLE RX: %s", bleItem.data);
+
+                std::string_view line(bleItem.data);
+                auto cmd = ecotiter::application::parseCommand(line);
+                if (cmd) {
+                    auto rsp = ecotiter::application::dispatch(*cmd);
+                    if (rsp) {
+                        sendResponse(*rsp);
+                    } else {
+                        sendResponse(ecotiter::application::makeErrorResponse("dispatch failed"));
+                    }
+                } else {
+                    sendResponse(ecotiter::application::makeErrorResponse("parse failed"));
+                }
+            }
+        }
+
+        // Process serial commands
         auto line = serial.process();
         if (line.has_value()) {
             ESP_LOGI(TAG, "RX: %.*s", static_cast<int>(line->size()), line->data());
+
+            ecotiter::domain::gUsbHandshakeReceived.store(true, std::memory_order_release);
 
             auto cmd = ecotiter::application::parseCommand(*line);
             if (cmd) {

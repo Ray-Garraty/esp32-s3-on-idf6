@@ -6,13 +6,17 @@
 namespace ecotiter::config {
 
 // GPIO Pinout — from AGENTS.md x3.1
-inline constexpr gpio_num_t PIN_LED        = GPIO_NUM_2;
+// Onboard WS2812 RGB LED (ESP32-S3-DevKitC-1, GPIO 48)
+inline constexpr gpio_num_t PIN_LED_RGB    = GPIO_NUM_48;
+inline constexpr uint32_t   LED_RMT_RES_HZ = 10'000'000;  // 0.1 us per tick for WS2812
+// Number of RGB LEDs on the strip (1 = onboard LED)
+inline constexpr size_t     LED_RGB_COUNT  = 1;
 inline constexpr gpio_num_t PIN_ADC_PH     = GPIO_NUM_4;   // ADC1_CH3
 inline constexpr gpio_num_t PIN_VALVE      = GPIO_NUM_14;
 inline constexpr gpio_num_t PIN_STEP       = GPIO_NUM_21;  // RMT channel
 inline constexpr gpio_num_t PIN_DIR        = GPIO_NUM_26;
 inline constexpr gpio_num_t PIN_EN         = GPIO_NUM_27;  // Active LOW
-inline constexpr gpio_num_t PIN_LIMIT_FULL = GPIO_NUM_32;
+inline constexpr gpio_num_t PIN_LIMIT_FULL = GPIO_NUM_34;
 inline constexpr gpio_num_t PIN_DS18B20    = GPIO_NUM_33;
 inline constexpr gpio_num_t PIN_LIMIT_HOME = GPIO_NUM_35;
 

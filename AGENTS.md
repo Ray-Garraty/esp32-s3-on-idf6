@@ -216,7 +216,7 @@ If you cannot confidently fill this -> stop and ask the user.
 | 21 | TMC2209 STEP | `rmt_new_tx_channel()` — pulse train |
 | 26 | TMC2209 DIR | `gpio_set_level()` — HIGH=CW |
 | 27 | TMC2209 EN | `gpio_set_level()` — Active LOW |
-| 32 | Endstop FULL | `gpio_install_isr_service()` + PosEdge ISR -> `std::atomic<bool>` |
+| 34 | Endstop FULL | `gpio_install_isr_service()` + PosEdge ISR -> `std::atomic<bool>` (NOT GPIO32 — reserved for PSRAM bus) |
 | 33 | DS18B20 | OneWire bitbang — 4.7k pull-up |
 | 35 | Endstop HOME | `gpio_install_isr_service()` + PosEdge ISR -> `std::atomic<bool>` |
 
@@ -336,14 +336,28 @@ Default `ESP_COEX_PREFER_BALANCE`. Never prefer BT (GR-4).
 | Command | Purpose | Timeout |
 |---------|---------|---------|
 | `idf.py set-target esp32s3` | Configure target (run once) | 30 s |
-| `idf.py build` | Build firmware | >= 120 s |
-| `idf.py flash -p /dev/ttyACM0` | Flash firmware | >= 60 s |
-| `timeout 30 idf.py monitor -p /dev/ttyACM0` | Smoke test | 30 s |
-| `clang-tidy -p build/ src/**/*.cpp` | Linter — 0 warnings | 60 s |
-| `clang-format -i -n src/**/*.cpp` | Format check | 15 s |
-| `cd tests && ctest --output-on-failure` | Host unit tests (Catch2) | 60 s |
+| `scripts/build.sh build` | Build firmware | >= 120 s |
+| `scripts/build.sh flash` | Flash firmware | >= 60 s |
+| `scripts/build.sh monitor` | Smoke test (30s timeout) | 30 s |
+| `scripts/build.sh uart` | UART command test | 60 s |
+| `scripts/build.sh test` | Host unit tests (Catch2) | 60 s |
+| `scripts/build.sh tidy` | clang-tidy linter | 60 s |
+| `scripts/build.sh clean` | Remove build dirs | 15 s |
 
-### 6.1a Windows Environment (IDF)
+### 6.1a BUILD SCRIPT MANDATORY
+
+**NEVER call `idf.py build`, `idf.py flash`, `idf.py monitor` directly.**
+Always use `scripts/build.sh` — it wraps all common operations, handles
+the ESP-IDF environment, and provides consistent error handling.
+
+Before running any build/flash/monitor command, check `scripts/build.sh`
+first. All project operations are defined there. If a needed operation is
+missing, extend `build.sh` — do not create ad-hoc `idf.py` invocations.
+
+Rationale (2026-07-08): Multiple agent sessions wasted time debugging
+`idf.py` environment issues when `scripts/build.sh` already handled them.
+
+### 6.1b Windows Environment (IDF)
 
 | Item | Path |
 |------|------|

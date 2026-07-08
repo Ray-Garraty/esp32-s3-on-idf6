@@ -23,7 +23,7 @@ hardening.
 Each step produces a buildable, flashable binary verified by a 30-second serial
 smoke test. No step moves forward unless the smoke test passes.
 
-### Current State (2026-07-08, updated after Step 5)
+### Current State (2026-07-08, updated after session end)
 
 | Layer | Status | Notes |
 |-------|--------|-------|
@@ -32,15 +32,17 @@ smoke test. No step moves forward unless the smoke test passes.
 | `infrastructure/drivers/stepper` | ✅ Done | RMT RAII + StepperMotor |
 | `infrastructure/drivers/adc` | ✅ Done | ADC1_CH3, rolling avg, calibration |
 | `infrastructure/drivers/onewire` | ✅ Done | DS18B20 bitbang, atomic temp |
-| `infrastructure/drivers/limitswitch` | ✅ Done | GPIO32/35 ISR, IRAM-safe |
+| `infrastructure/drivers/limitswitch` | ✅ Fixed | GPIO changed 32(FULL)→34 (GPIO32 reserved for PSRAM bus on S3 DevKitC) |
 | `infrastructure/drivers/valve` | ✅ Done | GPIO14, global atomic position |
-| `infrastructure/drivers/led` | ✅ Done | Blink SM (3 transport modes) |
+| `infrastructure/drivers/rgb_led` | ✅ Done | WS2812 driver, setColor(r,g,b), setTransportMode() with color mapping |
 | `infrastructure/storage/nvs` | ✅ Done | RAII NvsHandle, f32 bit-cast |
 | `application/` | ✅ Done | 10 .cpp, 8 headers, 35 Command variants, 6 handlers |
 | `interface/` | ✅ Done | SerialReader (UART), BroadcastEvent, REST API handlers |
-| `infrastructure/network/` | ⬜ Missing | WiFi, HTTP, BLE not started |
-| `infrastructure/motor_task` | ✅ Done | 16 KB FreeRTOS task, StepperMotor, homing, stop flags |
-| Thread model / `main.cpp` | ✅ Partial | UART cmd + motor task + temp thread + ADC + broadcast, no WiFi/BLE |
+| `infrastructure/network/` | 🔴 Wired but not working | BLE code compiled and wired into main.cpp. Advertising not visible — PHY calibration gpio_spinlock deadlock with motor task still unresolved |
+| `infrastructure/motor_task` | 🔴 Hangs in gpio_config(GPIO32) | GPIO32 PSRAM conflict causes gpio_config to hang. Fixed by switching FULL endstop to GPIO34 |
+| Thread model / `main.cpp` | 🔴 Still broken | Deadlock between PHY calibration (async, from BLE init) and motor task GPIO operations. BLE init moved before motor task, vTaskDelay(800ms) added, but gpio_config(GPIO32) still deadlocks. Fixed: GPIO32→34 |
+| Diagnostics infra | ✅ Enhanced | `scripts/monitor.py` now reports "firmware likely hung" instead of "possibly OK". TWDT enabled (10s, panic) for development |
+| AGENTS.md | ✅ Updated | §6.1a mandates scripts/build.sh. §3.1 pinout fixed GPIO32→34 |
 | Tests (Catch2 + uart_test.py) | ✅ Partial | 12 Catch2 files (166 tests) + 5 Python UART tests |
 
 ### Remaining Work
@@ -50,12 +52,21 @@ smoke test. No step moves forward unless the smoke test passes.
 | **2** | Application Layer | ~12 new files | ✅ Done (19 new files, 133/133 tests) |
 | **3** | Interface Layer (Serial + Broadcast + REST) | ~4 new files | ✅ Done (6 new files, 159/159 tests) |
 | **3.5** | UART Command Test | main.cpp rewrite + uart_test.py | ✅ Done (5/5 UART tests, BOOT OK) |
-| **4** | Stepper via UART (motor task + homing + stop flags) | motor_task.cpp, burette_ops wiring | ✅ Done (BOOT OK, 159/159 tests, lint clean) |
+| **4** | Stepper via UART (motor task + homing + stop flags) | motor_task.cpp, burette_ops wiring | ⛔ BROKEN — GPIO32 PSRAM conflict fixed (switched to GPIO34), need rebuild+test |
 | **5** | Sensors + Broadcast (ADC temp thread, broadcast via serial) | temp_thread.cpp, broadcast wiring | ✅ Done (3 new files, 166/166 tests, BOOT OK) |
-| **6** | BLE Layer (NimBLE NUS GATT) | ~2 new files | Build + flash + BLE advertising visible |
+| **5a** | RGB LED (WS2812 GPIO 48) | rgb_led.hpp/.cpp, config.hpp, CMakeLists | ⛔ BLOCKED by motor+BLE init deadlock |
+| **6** | BLE Layer (NimBLE NUS GATT) | ble.hpp/.cpp wired into main.cpp | ⛔ BLOCKED — advertising not visible. Code written+compiled, PHY calibration deadlock must be resolved first |
+| **6a** | BLE diagnostic | scripts/ble_test.py | ⛔ Fails — "EcoTiter-XXXX" not found. Need to fix init order and verify advertising |
 | **7** | Network Layer (WiFi AP/STA + HTTP + WebUI) | ~6 new files + WebUI assets | Build + flash + AP visible on phone |
 | **8** | Thread Model + Main Loop Integration | modify main.cpp + ~3 new files | Build + flash + all features concurrently |
 | **9** | Tests & Hardening | ~6 test files + config changes | Build + flash + 60s stability test |
+
+### Critical Blockers
+
+| # | Issue | Status | Root Cause |
+|---|-------|--------|------------|
+| BL-001 | Motor task `xTaskCreate` hang after adding BT (NOT RGB LED) | 🔴 Diagnosed — fix pending | `CONFIG_BT_ENABLED=y` reserves BT controller memory at boot before app_main, fragmenting DRAM. Motor task 16 KB stack allocation can fail under pressure. Fix: reduce BT buffers and/or reorder init. Further: `gpio_config(GPIO32)` deadlock on gpio_spinlock because GPIO32 is reserved for PSRAM bus. Fix: use GPIO34 instead. |
+| BL-002 | BLE advertising not visible | 🔴 Open | BLE code compiled and integrated but never reaches advertising due to motor task hang (BL-001). After BL-001 fix, verify NimBLE init and advertising setup. |
 
 ---
 
@@ -530,9 +541,91 @@ every 300ms using `TickScheduler::shouldBroadcast()`.
 
 ---
 
-## Step 6 — BLE Layer (NimBLE GATT NUS)
+## Step 5a — RGB LED Driver (WS2812 GPIO 48)
 
-**Status: ⬜ Pending**
+**Status: ⛔ CODE WRITTEN, BLOCKED by BL-001 — motor task hang on boot**
+
+### Objective
+
+Replace the old single-color `Led` (GPIO 2, unused on standard ESP32-S3-DevKitC-1)
+with a WS2812/SK68XX RGB LED driver on GPIO 48. Implement color state mapping:
+- BLE advertising → solid blue
+- BLE connected → solid green
+- BLE error → solid red (via `gBleError` atomic)
+- USB handshake received → off (via `gUsbHandshakeReceived` atomic)
+
+### Pre-Flight Checklist
+
+1.  **Thread:** Main loop — `RgbLed::setTransportMode()` calls `rmt_transmit()` +
+    `rmt_tx_wait_all_done(10ms)` which blocks < 10ms → passes GR-1
+2.  **Blocking >10ms?** LED transmit = ~29 us for 1 WS2812 pixel → well under 10ms
+3.  **Stack impact:** 25 RMT symbols (24 data + 1 reset) on stack, ~100 bytes
+4.  **Init order dep:** None
+5.  **FFI boundary:** RMT C API wrapped in constructor/destructor. No stored pointers.
+6.  **Stop flag:** N/A
+7.  **DRAM:** RMT channel + encoder (~few hundred bytes). Shared RMT memory: 64 symbols.
+
+### Detailed Tasks
+
+#### 5a.1 Create RgbLed class
+
+- `infrastructure/include/infrastructure/drivers/rgb_led.hpp`
+- `infrastructure/src/drivers/rgb_led.cpp`
+- RMT TX channel at 10 MHz resolution for precise WS2812 bit timing
+- Bit encoding: T0H=0.3us, T0L=0.9us, T1H=0.7us, T1L=0.5us
+- GRB byte order per WS2812 protocol
+- Reset pulse: 60 us low after data
+
+#### 5a.2 Update config
+
+- `config.hpp`: `PIN_LED_RGB = GPIO_NUM_48`, `LED_RMT_RES_HZ = 10'000'000`
+
+#### 5a.3 Wire into main loop
+
+- `RgbLed` replaces old `Led` in `main/main.cpp`
+- LED state derived from `gUsbHandshakeReceived`, `gBleError`, `BleManager::isConnected()`
+- State compared on each 10ms tick; RMT refresh only on change
+
+#### 5a.4 Add domain atoms
+
+- `domain/types.hpp`: `gUsbHandshakeReceived` (bool), `gBleError` (bool)
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `components/infrastructure/include/infrastructure/drivers/rgb_led.hpp` | RgbLed class (setColor, setTransportMode, refresh) |
+| `components/infrastructure/src/drivers/rgb_led.cpp` | WS2812 RMT implementation |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `components/infrastructure/include/infrastructure/config.hpp` | Added `PIN_LED_RGB=GPIO_NUM_48`, `LED_RMT_RES_HZ=10MHz` |
+| `components/domain/include/domain/types.hpp` | Added `gUsbHandshakeReceived`, `gBleError` |
+| `components/infrastructure/CMakeLists.txt` | Replaced `led.cpp` with `rgb_led.cpp` |
+| `main/main.cpp` | RgbLed creation + state-driven color updates |
+
+### Known Issues
+
+1. **BL-001**: Adding the WS2812 RMT channel on GPIO 48 causes `xTaskCreate(motorTaskEntry, ...)`
+   to hang (never returns). Motor task stack = 16384 bytes. RMT has 2 TX channels on ESP32-S3:
+   one is taken by stepper (RMT_CHUNK_SYMBOLS=128, RMT_MAX_SYMBOLS=192), the other by LED
+   (mem_block_symbols=64). Combined RMT memory: 256 out of 384 words. Works when LED is
+   removed.
+2. **Hypothesis**: FreeRTOS heap exhaustion due to DRAM fragmentation (NimBLE buffers + RMT
+   channels + task stacks). Need to measure `heap_caps_get_largest_free_block()` before
+   `xTaskCreate`.
+
+### Acceptance Criteria (not met)
+
+- `idf.py build` — 0 errors, 0 warnings
+- BOOT OK with motor task + RGB LED simultaneously
+- Blue LED during BLE advertising, green on connect, red on error, off on USB handshake
+
+---
+
+**Status: ⛔ CODE WRITTEN, NOT TESTED — blocked by BL-001**
 
 ### Objective
 
@@ -563,7 +656,7 @@ notify thread (8 KB stack, GR-6), and 3-level zombie defense.
 - `infrastructure/network/include/infrastructure/network/ble.hpp`
 - `infrastructure/network/src/ble.cpp`
 - NUS GATT service with RX (write) and TX (notify) characteristics
-- Bounded command queue: `xQueueCreate(8, sizeof(CommandEnvelope))`
+- Bounded command queue: `xQueueCreate(8, sizeof(BleCmdItem))`
 - Pre-init guard: `bool initialized_` — `process()` / `isConnected()`
   return immediately if false
 - 3-level zombie defense:
@@ -574,8 +667,7 @@ notify thread (8 KB stack, GR-6), and 3-level zombie defense.
 #### 6.2 Implement BLE notify thread
 
 - Dedicated `std::thread` with 8 KB stack (`BLE_NOTIFY_STACK`)
-- Receives `StatusUpdate` messages from queue, serializes to JSON,
-  calls `ble_gattc_notify()` / `esp_ble_gatts_send_indicate()`
+- Receives `BleNotifyItem` from queue, calls `ble_gatts_notify_custom()`
 - No `std::format`/`nlohmann::json::dump()` in hot path — use
   `std::format_to` into fixed buffer
 
@@ -596,7 +688,13 @@ notify thread (8 KB stack, GR-6), and 3-level zombie defense.
   - `CONFIG_BT_NIMBLE_ACL_BUF_COUNT=12`
   - `CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=12`
   - `CONFIG_BT_NIMBLE_MAX_CCCD=4`
-- `idf.py reconfigure` after changes
+
+### Issues Encountered
+
+1. **Not tested on HW** — blocked by BL-001 (motor task hang after RGB LED RMT init)
+2. **BLE scan finds no EcoTiter** — `scripts/ble_test.py --scan-only` sees other BLE devices
+   but not the ESP32-S3. Possible causes: advertising not started, NimBLE init fails silently,
+   or controller init issue.
 
 ### Acceptance Criteria
 
@@ -951,6 +1049,19 @@ Pass criteria:
 - All 7 steps produce green checkmarks on the commit checklist (AGENTS.md §10)
 - Firmware binary: `build/ecotiter.bin`
 - Version: `PROJECT_VER` from `CMakeLists.txt`
+
+## Lessons Learned (2026-07-08)
+
+| ID | Finding |
+|----|---------|
+| LL-026 | `xTaskCreate` with 16 KB stack can hang (never return) under DRAM pressure. Suspect FreeRTOS heap fragmentation after `CONFIG_BT_ENABLED=y` + NimBLE buffer allocs + RMT channel allocation. Test: measure `heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)` before each task creation. |
+| LL-027 | ESP32-S3 has exactly 2 RMT TX channels (`SOC_RMT_TX_CANDIDATES_PER_GROUP=2`). Stepper uses 1, WS2812 LED uses 1 — both channels consumed. No third channel for fallback. |
+| LL-028 | `led_strip` component is NOT bundled in ESP-IDF v6.0.1 — must implement WS2812 manually via RMT copy encoder or add via IDF component registry. |
+| LL-029 | BLE advertising as "EcoTiter-XXXX" did not appear in scans during initial test. Untriaged due to BL-001. Potential causes: NimBLE init order, controller init missing, advertising params. |
+| LL-030 | **GPIO32 on ESP32-S3-DevKitC-1 is reserved for PSRAM/Flash bus.** `gpio_config(GPIO32)` hangs because the IOMUX for pins 26-32 is owned by the internal PSRAM/flash controller. Full endstop must use a different pin (GPIO34, input-only). |
+| LL-031 | **GPIO spinlock deadlock with PHY calibration.** Enabling BT (`CONFIG_BT_ENABLED=y`) triggers asynchronous PHY RF calibration. PHY calibration runs in a background context and holds `gpio_spinlock` for extended periods (10-200ms). Any `gpio_config()`, `gpio_set_direction()`, or `gpio_set_level()` call during this period deadlocks. **Fix**: ensure all GPIO configuration completes before BT init, or add `vTaskDelay(>=500ms)` between BT init and GPIO ops. |
+| LL-032 | **TWDT cannot catch spinlock deadlocks.** The ESP-IDF Task Watchdog relies on interrupt delivery to check task timestamps. When a task enters a critical section (spinlock with interrupts disabled), the TWDT interrupt cannot fire. Spinlock deadlocks appear as silent hangs that only timeout via serial monitor. Use manual diagnostic markers (`puts("DBG: ...")`) to bisect. |
+| LL-033 | **`scripts/build.sh` must be used instead of ad-hoc `idf.py`.** Multiple agent sessions wasted time debugging ESP-IDF environment sourcing when `scripts/build.sh` already handles it. Recorded as AGENTS.md §6.1a. |
 
 ## Related Documentation
 

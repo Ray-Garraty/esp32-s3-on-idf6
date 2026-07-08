@@ -23,6 +23,7 @@ constexpr CmdName kCmdNames[] = {
   {"stop",              CommandType::Stop},
   {"emergencyStop",     CommandType::EmergencyStop},
   {"getStatus",         CommandType::GetStatus},
+  {"status",            CommandType::GetStatus},
   {"moveSteps",         CommandType::MoveSteps},
   {"setDirection",      CommandType::SetDirection},
   {"setSpeed",          CommandType::SetSpeed},
@@ -51,6 +52,7 @@ constexpr CmdName kCmdNames[] = {
   {"system.reboot",     CommandType::SystemReboot},
   {"system.firmwareVersion", CommandType::SystemFirmwareVersion},
   {"serial.ping",       CommandType::SerialPing},
+  {"ping",              CommandType::SerialPing},
 };
 
 constexpr CommandType lookupCmdType(std::string_view name) {

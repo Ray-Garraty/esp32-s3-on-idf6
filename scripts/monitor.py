@@ -105,6 +105,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
 
         found_crash = False
         found_boot = False
+        found_rom_output = False
+        found_app_output = False
         deadline = time.time() + timeout
         buf = ""
 
@@ -118,6 +120,11 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
                         line = line.strip("\r")
                         if line:
                             ts = timestamp()
+
+                            if not found_rom_output and "ESP-ROM" in line:
+                                found_rom_output = True
+                            if not found_app_output and ("entry" in line or "BOOT_" in line):
+                                found_app_output = True
 
                             if "=== CRASH ===" in line:
                                 crash_state = CRASH_STATE_COLLECTING
@@ -163,9 +170,23 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
     elif found_boot:
         print("RESULT: BOOT OK", flush=True)
         return 0
+    elif found_rom_output:
+        msg = "RESULT: ROM OUTPUT SEEN BUT NO BOOT MARKER — firmware likely hung"
+        if found_app_output:
+            msg += " (app code reached, hang after entry)"
+        else:
+            msg += " (hang before app_main, possibly DRAM or PHY init)"
+        print(msg, flush=True)
+        return 3
+    elif found_app_output:
+        print("RESULT: APP OUTPUT SEEN BUT NO BOOT/ROM — firmware likely hung", flush=True)
+        return 3
     else:
-        print("RESULT: No boot marker (possibly OK)", flush=True)
-        return 0
+        msg = "RESULT: NO SERIAL OUTPUT AT ALL — possible causes:"
+        msg += " wrong port, ESP32 not powered, serial adapter disconnected,"
+        msg += " or severe early boot crash before ROM output"
+        print(msg, flush=True)
+        return 4
 
 
 def main():

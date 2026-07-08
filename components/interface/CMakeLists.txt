@@ -11,3 +11,5 @@ idf_component_register(
         esp_http_server
         esp_driver_uart
 )
+
+target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-deprecated-declarations")

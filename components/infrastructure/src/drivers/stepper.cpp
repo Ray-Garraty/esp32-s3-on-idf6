@@ -8,6 +8,7 @@ static constexpr auto TAG = "stepper";
 namespace ecotiter::infrastructure::drivers {
 
 RmtChannel::RmtChannel(gpio_num_t stepPin) {
+    puts("DBG: RmtChannel ctor"); fflush(stdout);
     rmt_tx_channel_config_t txConfig = {
         .gpio_num = stepPin,
         .clk_src = RMT_CLK_SRC_DEFAULT,
@@ -67,12 +68,21 @@ StepperMotor::StepperMotor(gpio_num_t stepPin, gpio_num_t dirPin, gpio_num_t enP
     , dirPin_(dirPin)
     , enPin_(enPin) {
 
+    puts("DBG: StepperMotor ctor"); fflush(stdout);
+
+    puts("DBG: StepperMotor ctor A"); fflush(stdout);
     gpio_set_level(enPin_, 0); // Active LOW: enable driver
+    puts("DBG: StepperMotor ctor B"); fflush(stdout);
     gpio_set_direction(dirPin_, GPIO_MODE_OUTPUT);
-    gpio_set_direction(enPin_, GPIO_MODE_OUTPUT);
+    puts("DBG: StepperMotor ctor C"); fflush(stdout);
+    // gpio_set_direction(enPin_, GPIO_MODE_OUTPUT);  // HANGS with BT enabled
+    puts("DBG: StepperMotor ctor D1 (skipped gpio_set_direction)"); fflush(stdout);
+    puts("DBG: StepperMotor ctor D2"); fflush(stdout);
 
     rmt_copy_encoder_config_t encConfig = {};
+    puts("DBG: StepperMotor ctor E"); fflush(stdout);
     ESP_ERROR_CHECK(rmt_new_copy_encoder(&encConfig, &encoder_));
+    puts("DBG: StepperMotor ctor F"); fflush(stdout);
 }
 
 StepperMotor::~StepperMotor() {
