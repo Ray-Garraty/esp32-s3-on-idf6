@@ -124,12 +124,34 @@ TEST_CASE("serializeBroadcast: all burette states round-trip", "[broadcast]") {
 }
 
 TEST_CASE("serializeBroadcast: empty buffer returns empty view", "[broadcast]") {
-    // Use a tiny buffer that can't hold the full JSON
-    std::array<char, 4> tinyBuf{};
+    memory::ResponseBuffer buf{};
     BroadcastEvent evt{};
-    // We can't call serializeBroadcast with a non-ResponseBuffer easily,
-    // so just verify the normal path with ResponseBuffer works.
+    auto sv = serializeBroadcast(evt, buf);
+    REQUIRE_FALSE(sv.empty());
+}
+
+TEST_CASE("serializeBroadcast: reads from domain atoms produce valid JSON", "[broadcast]") {
+    gTempCX100.store(2500, std::memory_order_release);
+    gLastMv.store(1800, std::memory_order_release);
+
+    BroadcastEvent evt{
+        .tick = 1,
+        .tempCX100 = gTempCX100.load(std::memory_order_acquire),
+        .mv = gLastMv.load(std::memory_order_acquire),
+        .vlv = gValvePosition.load(std::memory_order_acquire),
+        .brt = gBuretteState.load(std::memory_order_acquire),
+        .dir = gDirection.load(std::memory_order_acquire),
+        .speed = gSpeed.load(std::memory_order_acquire),
+        .accel = gAccel.load(std::memory_order_acquire),
+        .volumeMl = gVolumeMl.load(std::memory_order_acquire),
+        .dispensedSteps = gDispensedSteps.load(std::memory_order_acquire)
+    };
+
     memory::ResponseBuffer buf{};
     auto sv = serializeBroadcast(evt, buf);
     REQUIRE_FALSE(sv.empty());
+
+    auto j = json::parse(sv);
+    REQUIRE(j["temp"] == 2500);
+    REQUIRE(j["mv"] == 1800);
 }

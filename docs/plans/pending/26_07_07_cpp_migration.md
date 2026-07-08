@@ -23,7 +23,7 @@ hardening.
 Each step produces a buildable, flashable binary verified by a 30-second serial
 smoke test. No step moves forward unless the smoke test passes.
 
-### Current State (2026-07-07, updated after Step 4)
+### Current State (2026-07-08, updated after Step 5)
 
 | Layer | Status | Notes |
 |-------|--------|-------|
@@ -40,8 +40,8 @@ smoke test. No step moves forward unless the smoke test passes.
 | `interface/` | ✅ Done | SerialReader (UART), BroadcastEvent, REST API handlers |
 | `infrastructure/network/` | ⬜ Missing | WiFi, HTTP, BLE not started |
 | `infrastructure/motor_task` | ✅ Done | 16 KB FreeRTOS task, StepperMotor, homing, stop flags |
-| Thread model / `main.cpp` | ✅ Partial | UART cmd + motor task, no WiFi/BLE/temp |
-| Tests (Catch2 + uart_test.py) | ✅ Partial | 11 Catch2 files (159 tests) + 5 Python UART tests |
+| Thread model / `main.cpp` | ✅ Partial | UART cmd + motor task + temp thread + ADC + broadcast, no WiFi/BLE |
+| Tests (Catch2 + uart_test.py) | ✅ Partial | 12 Catch2 files (166 tests) + 5 Python UART tests |
 
 ### Remaining Work
 
@@ -51,7 +51,7 @@ smoke test. No step moves forward unless the smoke test passes.
 | **3** | Interface Layer (Serial + Broadcast + REST) | ~4 new files | ✅ Done (6 new files, 159/159 tests) |
 | **3.5** | UART Command Test | main.cpp rewrite + uart_test.py | ✅ Done (5/5 UART tests, BOOT OK) |
 | **4** | Stepper via UART (motor task + homing + stop flags) | motor_task.cpp, burette_ops wiring | ✅ Done (BOOT OK, 159/159 tests, lint clean) |
-| **5** | Sensors + Broadcast (ADC temp thread, broadcast via serial) | temp_thread.cpp, broadcast wiring | Build + flash + broadcast JSON по UART каждые 300ms |
+| **5** | Sensors + Broadcast (ADC temp thread, broadcast via serial) | temp_thread.cpp, broadcast wiring | ✅ Done (3 new files, 166/166 tests, BOOT OK) |
 | **6** | BLE Layer (NimBLE NUS GATT) | ~2 new files | Build + flash + BLE advertising visible |
 | **7** | Network Layer (WiFi AP/STA + HTTP + WebUI) | ~6 new files + WebUI assets | Build + flash + AP visible on phone |
 | **8** | Thread Model + Main Loop Integration | modify main.cpp + ~3 new files | Build + flash + all features concurrently |
@@ -442,7 +442,7 @@ and limit switch integration.
 
 ## Step 5 — Sensors + Broadcast (ADC, Temperature, Periodic Broadcast)
 
-**Status: ⬜ Pending**
+**Status: ✅ COMPLETED (2026-07-08)**
 
 ### Objective
 
@@ -477,6 +477,7 @@ every 300ms using `TickScheduler::shouldBroadcast()`.
 - Every 1 second: call `readSensor()`, store result in `gTempCX100`
 - On read failure: store sentinel `-99999`, log warning
 - Blocking: `vTaskDelay(pdMS_TO_TICKS(1000))`
+- Diagnostics: `StackMonitor::registerThread("temp")`, `FfiGuard(40)`
 
 #### 5.2 Wire ADC periodic sampling
 
@@ -494,9 +495,10 @@ every 300ms using `TickScheduler::shouldBroadcast()`.
 
 #### 5.4 Add host tests
 
-- `tests/src/test_broadcast.cpp` — already exists from Step 3, expand with
-  real atom reads (mockable wrapper or use test values)
-- `tests/src/test_scheduler.cpp` — tick wrapping, broadcast interval
+- `tests/src/test_broadcast.cpp` — expanded with domain-atom JSON serialization test
+- `tests/src/test_scheduler.cpp` — 6 tests: tick increment, 30-tick broadcast interval,
+  10-tick sample interval, 100-tick watermark interval, 6000-tick maintenance interval,
+  32-bit unsigned tick wrapping
 
 #### 5.5 Update CMakeLists.txt
 
@@ -504,11 +506,27 @@ every 300ms using `TickScheduler::shouldBroadcast()`.
 
 ### Acceptance Criteria
 
-- `idf.py build` — 0 errors, 0 warnings
-- Flash + UART: every ~300ms a JSON broadcast line appears on serial
-- `{"cmd":"temperature.read"}` returns current temperature
-- `{"cmd":"adc.cal.get"}` returns ADC calibration
-- 30-second smoke test: BOOT OK, no Guru/WDT/panic
+- ✅ `idf.py build` — 0 errors, 0 warnings
+- ✅ Flash + UART: every ~300ms a JSON broadcast line appears on serial
+- ✅ `{"cmd":"temperature.read"}` returns current temperature
+- ✅ `{"cmd":"adc.cal.get"}` returns ADC calibration
+- ✅ 30-second smoke test: BOOT OK, no Guru/WDT/panic
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| New files | 3 (`temp_thread.hpp`, `temp_thread.cpp`, `test_scheduler.cpp`) |
+| Modified files | 5 (`main/main.cpp`, `infrastructure/CMakeLists.txt`, `tests/CMakeLists.txt`, `test_broadcast.cpp`, `test_scheduler.cpp`) |
+| Temp thread stack | 16384 bytes (16 KB, GR-6) |
+| FfiGuard boundaries | 40 (OneWire in temp thread), 50 (ADC read in main loop) |
+| Host tests | 166/166 pass (6632 assertions) |
+| Lint | Clean (0 warnings, 0 errors) |
+| Smoke test | BOOT OK, no Guru/WDT/panic |
+| ADC clip | Negative mV values clamped to 0 for `uint16_t gLastMv` |
+| Broadcast rate | Every 300ms via `TickScheduler::shouldBroadcast()` |
+| ADC sample rate | Every 100ms via `TickScheduler::shouldSample()` |
+| Temp read rate | Every 1s via `vTaskDelay(1000ms)` in temp thread |
 
 ---
 

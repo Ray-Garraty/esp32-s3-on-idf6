@@ -8,6 +8,7 @@ idf_component_register(
         "src/drivers/onewire.cpp"
         "src/storage/nvs.cpp"
         "src/motor_task.cpp"
+        "src/temp_thread.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         domain
