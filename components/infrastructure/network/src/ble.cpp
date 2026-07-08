@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -19,6 +20,7 @@
 #include "host/util/util.h"
 #include "os/os_mbuf.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
 
 #include "domain/types.hpp"
 #include "diag/ffi_guard.hpp"
@@ -146,6 +148,9 @@ std::expected<void, domain::AppError> BleManager::init() {
         puts("DBG: BLE - nimble_port_init done"); fflush(stdout);
     }
 
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
     ble_hs_cfg.sync_cb = onHostSync;
     ble_hs_cfg.reset_cb = onHostReset;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
@@ -154,8 +159,16 @@ std::expected<void, domain::AppError> BleManager::init() {
 
     {
         diag::FfiGuard guard(61);
-        ble_gatts_count_cfg(GATT_SVCS);
-        ble_gatts_add_svcs(GATT_SVCS);
+        int rc = ble_gatts_count_cfg(GATT_SVCS);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "ble_gatts_count_cfg failed: %d", rc);
+            return std::unexpected(domain::AppError::Hardware);
+        }
+        rc = ble_gatts_add_svcs(GATT_SVCS);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "ble_gatts_add_svcs failed: %d", rc);
+            return std::unexpected(domain::AppError::Hardware);
+        }
     }
 
     ble_store_config_init();
@@ -176,12 +189,21 @@ void BleManager::process() {
     {
         diag::FfiGuard guard(64);
 
-        if (connected_ && ble_gap_conn_active() == 0) {
-            ESP_LOGW(TAG, "Zombie connection detected (L2)");
-            connected_ = false;
-            connHandle_ = 0;
-            consecutiveFailures_ = 0;
-            domain::gBleError.store(true, std::memory_order_release);
+        if (connected_) {
+            int64_t now = esp_timer_get_time();
+            int64_t elapsed = now - connectUs_;
+            struct ble_gap_conn_desc desc;
+            int rc = ble_gap_conn_find(connHandle_, &desc);
+            if (rc != 0 && elapsed > 500000) {
+                ESP_LOGW(TAG, "Zombie connection detected (L2)");
+                connected_ = false;
+                connHandle_ = 0;
+                consecutiveFailures_ = 0;
+                // Restart advertising so device becomes visible again
+                ble_gap_adv_start(ownAddrType_, nullptr, BLE_HS_FOREVER,
+                                  &ADV_PARAMS, gapEventCallback, nullptr);
+                domain::gBleError.store(false, std::memory_order_release);
+            }
         }
 
         if (connected_ && consecutiveFailures_ >= 5) {
@@ -209,11 +231,11 @@ bool BleManager::sendNotification(std::string_view data) {
     {
         diag::FfiGuard guard(63);
 
-        if (ble_gap_conn_active() == 0) {
-            connected_ = false;
-            connHandle_ = 0;
-            consecutiveFailures_ = 0;
-            return false;
+        {
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(connHandle_, &desc) != 0) {
+                return false;
+            }
         }
 
         struct os_mbuf* om = ble_hs_mbuf_from_flat(
@@ -298,6 +320,21 @@ void BleManager::onHostSync() {
             }
         }
 
+        // Set scan response data with NUS service UUID so scanners can find
+        // the device by service UUID (ble_test.py checks SERVICE_UUID in svc_uuids)
+        {
+            struct ble_hs_adv_fields rsp_fields;
+            std::memset(&rsp_fields, 0, sizeof(rsp_fields));
+            rsp_fields.uuids128 = const_cast<ble_uuid128_t*>(&NUS_SVC_UUID);
+            rsp_fields.num_uuids128 = 1;
+            rsp_fields.uuids128_is_complete = 1;
+            rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+            if (rc != 0) {
+                ESP_LOGE(TAG, "adv rsp set fields failed: %d", rc);
+                return;
+            }
+        }
+
         rc = ble_gap_adv_start(ownAddrType, nullptr, BLE_HS_FOREVER,
                                &ADV_PARAMS, gapEventCallback, nullptr);
         if (rc != 0) {
@@ -331,10 +368,11 @@ int BleManager::gapEventCallback(struct ble_gap_event* event, void* arg) {
             s_instance->connected_ = true;
             s_instance->connHandle_ = event->connect.conn_handle;
             s_instance->consecutiveFailures_ = 0;
+            s_instance->connectUs_ = esp_timer_get_time();
             domain::gBleError.store(false, std::memory_order_release);
-            ESP_LOGI(TAG, "Connected, conn_handle=%d", event->connect.conn_handle);
+            puts("DBG: BLE CONNECTED"); fflush(stdout);
         } else {
-            ESP_LOGW(TAG, "Connect failed, status=%d", event->connect.status);
+            puts("DBG: BLE CONNECT FAILED"); fflush(stdout);
         }
         return 0;
     }
@@ -343,7 +381,8 @@ int BleManager::gapEventCallback(struct ble_gap_event* event, void* arg) {
         s_instance->connected_ = false;
         s_instance->connHandle_ = 0;
         s_instance->consecutiveFailures_ = 0;
-        ESP_LOGI(TAG, "Disconnected, reason=%d", event->disconnect.reason);
+        domain::gBleError.store(false, std::memory_order_release);
+        puts("DBG: BLE DISCONNECTED"); fflush(stdout);
 
         diag::FfiGuard guard(65);
         ble_gap_adv_start(s_instance->ownAddrType_, nullptr, BLE_HS_FOREVER,

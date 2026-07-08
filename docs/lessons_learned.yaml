@@ -1186,3 +1186,131 @@ lessons:
       - components/diag/CMakeLists.txt (comment about IRAM)
       - docs/lessons_learned.yaml (LL-010, LL-023, LL-024)
       - AGENTS.md §3.3 (IRAM considerations for WDT/Brownout)
+
+  - id: LL-026
+    date: 2026-07-08
+    crash_signature: "EcoTiter-FFEC not visible in BLE scans — no panic — NimBLE host sync callback onHostSync() returns early without starting advertising"
+    category: api_misuse
+    trigger_patterns:
+      - "EcoTiter-FFEC not visible"
+      - "BLE device not found"
+      - "find TX chr failed"
+      - "adv start failed"
+      - "Zombie connection detected"
+      - "ble_gap_conn_active"
+    lesson: >
+      Two independent bugs caused BLE to appear non-functional:
+
+      BUG 1 — Advertising never starts (primary).
+      The NimBLE init sequence in BleManager::init() was missing two mandatory
+      calls: ble_svc_gap_init() and ble_svc_gatt_init(). Without these, the GAP
+      and GATT services were not registered in NimBLE's internal state, causing
+      ble_gatts_count_cfg() and ble_gatts_add_svcs() to fail silently (their
+      return values were discarded). The host sync callback onHostSync() then
+      failed at ble_gatts_find_chr() and returned without starting advertising.
+
+      The correct init order (from official ESP-IDF NimBLE_GATT_Server example):
+        1. nimble_port_init()
+        2. ble_svc_gap_init()     ← WAS MISSING
+        3. ble_svc_gatt_init()    ← WAS MISSING
+        4. ble_svc_gap_device_name_set()
+        5. ble_gatts_count_cfg()  ← RETURN VALUE WAS IGNORED
+        6. ble_gatts_add_svcs()   ← RETURN VALUE WAS IGNORED
+        7. ble_hs_cfg.sync_cb / reset_cb
+        8. ble_store_config_init()
+        9. nimble_port_freertos_init()
+
+      Also, the sdkconfig.defaults had a misspelled Kconfig name:
+      CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT instead of the correct
+      CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT, so the memory pool config
+      was silently ignored by the build system.
+
+      BUG 2 — Green LED never lights (secondary zombie race).
+      The L2 zombie detection in BleManager::process() used
+      ble_gap_conn_active() to check if connections exist. This function
+      ALWAYS returns 0 on ESP32-S3 with this NimBLE version, even for
+      valid active connections. Combined with immediate clearing of
+      connected_ on inconsistency, every connect was classified as zombie.
+      The connect event fires (connected_=true), but by the next main loop
+      tick the zombie detector clears it and restarts advertising.
+
+      Fix for BUG 2:
+        a) Use ble_gap_conn_find(connHandle_, &desc) instead of
+           ble_gap_conn_active() — this correctly finds connections by
+           handle and returns 0 on success.
+        b) Add 500ms debounce: only declare zombie if connected_ has been
+           true for >500ms but ble_gap_conn_find() still reports no
+           connection.
+        c) Also clear gBleError in BLE_GAP_EVENT_DISCONNECT handler so
+           that red state persists only during the zombie detection window,
+           not forever.
+
+      Additional operational issues noted during this session:
+        - On Linux with CP210x, opening /dev/ttyUSB0 via pyserial always
+          toggles DTR, resetting the ESP32 even with dsrdtr=False and
+          setDTR(False). Use stty + cat instead for non-resetting reads:
+            stty -F /dev/ttyUSB0 115200 raw -echo clocal -crtscts
+            timeout N cat /dev/ttyUSB0
+        - The scripts/build.sh defaulted to /dev/ttyACM0 but hardware uses
+          /dev/ttyUSB0 on this system.
+        - ESP_LOGI messages are invisible at default WARN log level.
+          For critical BLE diagnostics, use puts() instead.
+    diagnostic: >
+      1. If BLE device not visible in scans: check onHostSync() logs for
+         "find TX chr failed" or "adv start failed".
+      2. Verify ble_svc_gap_init() + ble_svc_gatt_init() are called in
+         BleManager::init().
+      3. For green LED not lighting: look for "Zombie connection detected"
+         immediately after a BLE connect. Check if ble_gap_conn_find() is
+         used instead of ble_gap_conn_active().
+      4. Add DBG: LED puts() to the state machine to trace transitions.
+    fix: >
+      BUG 1 (ble.cpp):
+        // After nimble_port_init() success, BEFORE ble_hs_cfg.sync_cb:
+        ble_svc_gap_init();
+        ble_svc_gatt_init();
+        // Replace unchecked calls:
+        int rc = ble_gatts_count_cfg(GATT_SVCS);
+        if (rc != 0) return AppError::Hardware;
+        rc = ble_gatts_add_svcs(GATT_SVCS);
+        if (rc != 0) return AppError::Hardware;
+
+      BUG 2 (ble.cpp):
+        // Add connectTick_ member to BleManager header.
+        // In BLE_GAP_EVENT_CONNECT handler:
+        s_instance->connectTick_ = xTaskGetTickCount();
+        // Replace zombie detection logic:
+        if (connected_) {
+            struct ble_gap_conn_desc desc;
+            int found = ble_gap_conn_find(connHandle_, &desc);
+            if (found != 0) {  // no active connection
+                TickType_t elapsed = xTaskGetTickCount() - connectTick_;
+                if (elapsed > pdMS_TO_TICKS(500)) {
+                    ESP_LOGW(TAG, "Zombie connection detected (L2)");
+                    connected_ = false;
+                    connHandle_ = 0;
+                    ble_gap_adv_start(...);
+                    domain::gBleError.store(false, ...);
+                }
+            }
+        }
+        // In BLE_GAP_EVENT_DISCONNECT handler:
+        domain::gBleError.store(false, std::memory_order_release);
+
+      Kconfig (sdkconfig.defaults):
+        CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=12
+
+      build.sh:
+        Change default port from /dev/ttyACM0 to /dev/ttyUSB0.
+
+      AGENTS.md:
+        Added GR-10: AI agent MUST NEVER claim physical-world observations.
+        Only the user can perceive hardware behavior.
+    refs:
+      - components/infrastructure/network/src/ble.cpp
+      - components/infrastructure/network/include/infrastructure/network/ble.hpp
+      - main/main.cpp
+      - sdkconfig.defaults
+      - scripts/build.sh
+      - AGENTS.md (GR-10)
+      - docs/plans/pending/26_07_07_cpp_migration.md

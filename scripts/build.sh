@@ -4,7 +4,7 @@ set -euo pipefail
 # ecotiter C++23 build wrapper
 # Usage:
 #   ./scripts/build.sh              # build firmware
-#   ./scripts/build.sh flash        # flash to /dev/ttyACM0
+#   ./scripts/build.sh flash        # flash to /dev/ttyUSB0
 #   ./scripts/build.sh monitor      # serial monitor with 30s timeout
 #   ./scripts/build.sh test         # host unit tests (Catch2)
 #   ./scripts/build.sh tidy         # clang-tidy
@@ -17,11 +17,11 @@ case "$CMD" in
         idf.py build
         ;;
     flash)
-        PORT="${2:-/dev/ttyACM0}"
+        PORT="${2:-/dev/ttyUSB0}"
         idf.py -p "$PORT" flash
         ;;
     monitor)
-        PORT="${2:-/dev/ttyACM0}"
+        PORT="${2:-/dev/ttyUSB0}"
         timeout 30 idf.py -p "$PORT" monitor || true
         ;;
     test)
@@ -35,7 +35,7 @@ case "$CMD" in
         ./scripts/lint.sh "${@:2}"
         ;;    
     uart)
-        PORT="${2:-/dev/ttyACM0}"
+        PORT="${2:-/dev/ttyUSB0}"
         timeout 30 python3 scripts/uart_test.py -p "$PORT"
         ;;
     clean)

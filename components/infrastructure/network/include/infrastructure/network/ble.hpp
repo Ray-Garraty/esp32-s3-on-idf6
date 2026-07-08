@@ -70,6 +70,7 @@ private:
     uint16_t txAttrHandle_{0};
     uint8_t ownAddrType_{0};
     uint8_t consecutiveFailures_{0};
+    int64_t connectUs_{0};
     QueueHandle_t cmdQueue_{nullptr};
     QueueHandle_t notifyQueue_{nullptr};
 };

@@ -16,18 +16,18 @@ TEST_CASE("TickScheduler: tick increments global tick", "[scheduler]") {
     REQUIRE(after == before + 1);
 }
 
-TEST_CASE("TickScheduler: shouldBroadcast returns true every 30 ticks", "[scheduler]") {
+TEST_CASE("TickScheduler: shouldBroadcast returns true every 200 ticks", "[scheduler]") {
     gTick.store(0, std::memory_order_relaxed);
     TickScheduler sched;
-    // First broadcast fires at tick 30 (gap from 0)
-    for (int i = 0; i < 30; ++i) {
+    // First broadcast fires at tick BROADCAST_INTERVAL (200) from 0
+    for (int i = 0; i < 200; ++i) {
         REQUIRE(sched.shouldBroadcast() == false);
         sched.tick();
     }
     REQUIRE(sched.shouldBroadcast() == true);
 
-    // Next broadcast at tick 60: 29 ticks false, then 30th tick true
-    for (int i = 0; i < 29; ++i) {
+    // Next broadcast at tick 400: 199 ticks false, then 200th tick true
+    for (int i = 0; i < 199; ++i) {
         sched.tick();
         REQUIRE(sched.shouldBroadcast() == false);
     }
@@ -77,13 +77,13 @@ TEST_CASE("TickScheduler: handles 32-bit tick wrapping", "[scheduler]") {
                 std::memory_order_relaxed);
 
     TickScheduler sched;
-    // Advance past wrap (5 ticks to overflow, 30 to trigger broadcast)
-    for (int i = 0; i < 35; ++i) {
+    // Advance past wrap (5 ticks to overflow, BROADCAST_INTERVAL to trigger)
+    for (int i = 0; i < 205; ++i) {
         sched.tick();
     }
-    // gTick ~= 29, shouldBroadcast needs 30
+    // gTick ~= 199, shouldBroadcast needs BROADCAST_INTERVAL (200)
     REQUIRE(sched.shouldBroadcast() == false);
 
-    sched.tick(); // gTick = 30
+    sched.tick(); // gTick = 200
     REQUIRE(sched.shouldBroadcast() == true);
 }

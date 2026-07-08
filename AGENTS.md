@@ -123,6 +123,31 @@ Rationale: Every past crash was detectible pre-mortem by a diagnostic event.
 
 ---
 
+### GR-10: ONLY THE USER ASSESSES PHYSICAL STATE
+
+The AI agent MUST NEVER make claims about physical-world observations
+(LED color, motor movement, relay clicks, sensor readings, device
+visibility on scanners, or any other observable phenomenon). Only the
+user can see, hear, or otherwise perceive hardware behavior.
+
+**Forbidden:**
+- "LED turned green" (you didn't see it — the user did)
+- "Device appears in scan" (you don't have a BLE scanner)
+- "Motor moved successfully" (you can't observe it)
+- "The board is powered on" (you don't know)
+
+**Required:**
+- Present raw data (serial logs, script output, terminal text)
+- Ask the user what they observe via the `question` tool
+- Record the user's exact words as evidence
+- Use user-reported observations as ground truth
+
+Failure (2026-07-08): Agent claimed "LED turned green ✅" based on serial
+log interpretation. The physical LED had not yet changed because the fix
+wasn't fully applied.
+
+---
+
 ## 2. PRE-FLIGHT CHECKLIST (Copy Before Codegen)
 
 Before generating code touching: threads, network, RMT, FFI, mutexes, queues,

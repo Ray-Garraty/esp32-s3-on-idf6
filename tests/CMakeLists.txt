@@ -83,6 +83,7 @@ add_executable(unit_tests
     src/test_broadcast.cpp
     src/test_rest_api.cpp
     src/test_scheduler.cpp
+    src/test_ble_init.cpp
 )
 
 target_include_directories(unit_tests PRIVATE
