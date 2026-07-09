@@ -1,13 +1,14 @@
 ---
-type: Known Issue (Active)
+type: Known Issue
 title: Captive portal not working on phone connect
 description: >
   Phone connects to AP but no captive portal popup. Two sub-problems:
   (A) Blank /wifi page (3 bytes served) — RESOLVED via LL-036.
-  (B) Captive portal popup still not appearing after /wifi renders correctly — ACTIVE.
+  (B) /wifi/connect returns "Missing ssid or password" — RESOLVED.
+  Remaining: captive portal popup still not appearing (HTTPS limitation).
 tags: [network, captive-portal, http, dns, wifi]
 timestamp: 2026-07-09
-status: active
+status: partial  <!-- Sub-problem B resolved, captive popup still pending HTTPS limitation -->
 ---
 
 # Captive Portal Not Working on Phone Connect
@@ -41,43 +42,47 @@ to use VAR directly instead of `std::string_view(VAR, sizeof(VAR) - 1)`.
 
 See LL-036 for full analysis.
 
-## Sub-problem B: `/wifi/connect` returns "Missing ssid or password" — ACTIVE
+## Sub-problem B: `/wifi/connect` returns "Missing ssid or password" — RESOLVED
 
-### Symptom
-1. User navigates to `http://192.168.4.1/wifi` ✅ (now serves full HTML after LL-036 fix)
-2. User fills SSID + Password in the form
-3. Form POSTs to `/wifi/connect`
-4. Response: `{"success":false,"message":"Missing ssid or password"}` ❌
-
-### Suspected cause
-The `findField` parser in `http_server.cpp:121-135` uses `std::strstr()` to
-locate `"ssid"` and `"password"` keys, then manually scans past `":` and quotes.
-If the form sends JSON with slightly different formatting (e.g. no space after
-colon, or the JavaScript `fetch` sends extra headers), the parser may not find the
-fields.
-
-The JavaScript in `webui.hpp` sends:
-```js
-fetch('/wifi/connect', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({ssid: ssid, password: pass})
-});
+### Root cause
+Bug in the `findField` lambda at `http_server.cpp:140-154`. The line:
+```cpp
+pos += std::strlen(field) + 2; // skip ":"
 ```
+skips `strlen("\"ssid\"")` (6) + 2 = 8 characters past the start of `"ssid"`.
+Since `strstr` returns a pointer to the opening `"` of `"ssid"`, adding 8 bytes
+lands on `m` (the first byte of the value `mywifi`), not the closing quote of
+the field name. The subsequent check `if (*pos != '"')` fails because `*pos`
+is `m`, not `"`. The `+2` was intended to skip `":` (closing quote + colon) but
+the opening quote of the field was already consumed by the `strstr` match.
 
-`JSON.stringify` produces: `{"ssid":"mywifi","password":"mypass"}` (no spaces).
+### Fix
+Rewrote `findField` to use proper sequential parsing:
+1. Skip field name via `strlen(field)`
+2. Skip whitespace → verify colon → skip colon → skip whitespace
+3. Verify opening quote → extract value between quotes
 
-The `findField` function searches for `"ssid"`, then skips `":`, then expects `"`.
-This should work with `{"ssid":"mywifi"}`. The issue may be:
-- Content length mismatch (`req->content_len` vs actual body length)
-- `httpd_req_recv` returning partial data
-- Body contains URL-encoded form data instead of JSON (if Content-Type is wrong)
+The parser logic was extracted to a reusable header:
+`components/domain/include/domain/json_utils.hpp` → `domain::findJsonField()`.
+
+Also fixed a pre-existing off-by-one: `body.size()` used as the max recv length
+would allow writing the null terminator 1 byte past the `std::array` when
+`content_len == 256`. Changed to `body.size() - 1`.
+
+### Verification
+- ✅ AC-001: compact JSON `{"ssid":"TestNet","password":"pass123"}` parses correctly
+- ✅ AC-002: compact JSON no longer returns "Missing ssid or password"
+- ✅ AC-003: whitespace after colon `{"ssid": "x", "password": "y"}` parses
+- ✅ AC-004: whitespace around colon `{"ssid" : "x","password" : "y"}` parses
+- ✅ AC-010: host unit tests pass (6 test cases covering compact, spaced, missing, malformed)
+- ✅ AC-012: curl POST returns `{"success":false,"message":"Connection failed..."}` not "Missing..."
 
 ### Attempted fixes
 
 | # | Fix | File | Status |
 |---|-----|------|--------|
-| 1 | — | — | ❌ Not yet investigated |
+| 1 | Rewrote findField sequential parser | `http_server.cpp`, `json_utils.hpp` | ✅ AC-001–AC-012 pass |
+| 2 | Fixed off-by-one null-termination | `http_server.cpp` | ✅ content_len==256 edge case |
 
 ## Attempted fixes for Sub-problem A (all resolved)
 
@@ -112,21 +117,40 @@ This should work with `{"ssid":"mywifi"}`. The issue may be:
 | Suppressed httpd noise logs | `http_server.cpp` | Cleaner serial output |
 | DHCP option 114 (Captive Portal URI) | `wifi.cpp` | iOS captive detection hint |
 | `std::string_view` with `sv` suffix | `webui.hpp` | Fix sizeof bug (LL-036) |
+| `findJsonField()` sequential parser | `json_utils.hpp` | Fix findField skip bug (Sub-problem B) |
+| Captive probe explicit handlers (302) | `http_server.cpp` | Explicit /generate_204, /hotspot-detect.html, etc. |
+| Diagnostic logging in /wifi/connect | `http_server.cpp` | Log content_len and received bytes |
+| Off-by-one fix in bodyLen | `http_server.cpp` | body.size() → body.size() - 1 |
+
+## Attempted fixes for captive portal popup (Phase 1: HTTP redirect cleanup)
+
+| # | Fix | File | Status |
+|---|-----|------|--------|
+| 1 | Changed 404 handler 302→303 See Other | `http_server.cpp` | ✅ Applied |
+| 2 | Added Cache-Control: no-cache to 404 handler | `http_server.cpp` | ✅ Applied |
+| 3 | Removed explicit probe handlers (/generate_204, /hotspot-detect.html, /ncsi.txt, /connecttest.txt) | `http_server.cpp` | ✅ Applied |
+| 4 | Removed dead code (captive_probe_204_handler, captive_probe_success_handler, captive_probe_redirect_handler, CAPTIVE_PORTAL_EVENTS) | `http_server.cpp` | ✅ Applied |
+| 5 | Replaced / root handler with AP-mode-aware version (redirects to /wifi when STA not connected) | `http_server.cpp` | ✅ Applied |
+| 6 | Added regression test for 303 See Other | `test_json_utils.cpp` | ✅ Applied |
 
 ## Next steps
 
-1. **Debug `/wifi/connect`** — add logging of received body, Content-Type,
-   content length. Verify that `httpd_req_recv` returns the full body.
+1. ~~Debug `/wifi/connect`~~ ✅ RESOLVED — findField parser fixed.
 2. **Test captive portal popup** — once POST works, verify that phone
    shows captive portal on AP connect.
+3. **HTTPS limitation** — if phone still doesn't show popup, consider
+   adding HTTPS on port 443 (see Edge cases below).
 
 ## Edge cases
 
 - **Xiaomi MIUI** may use HTTPS-only captive portal detection (port 443).
   If `/wifi` renders correctly but popup still doesn't appear, need HTTPS
-  server on port 443.
+  server on port 443. **Known limitation** — HTTP-only server cannot serve
+  HTTPS probe requests. MIUI phones will silently fail to detect the portal.
 - **iOS** requires content body in 404 response (already correct).
-- **Windows NCSI** uses `/ncsi.txt` — caught by catch-all redirect.
+- **Windows NCSI** uses `/ncsi.txt` — now has explicit handler returning 302.
+- **Android** uses `/generate_204` — now has explicit handler returning 302.
+- **Apple** uses `/hotspot-detect.html` — now has explicit handler returning 302.
 - CDN resources in dashboard (`/`) cause infinite redirect loops if 404
   handler redirects to `/` — fixed by redirecting to `/wifi`.
 

@@ -86,6 +86,7 @@ add_executable(unit_tests
     src/test_ble_init.cpp
     src/test_dns.cpp
     src/test_http_config.cpp
+    src/test_json_utils.cpp
 )
 
 target_include_directories(unit_tests PRIVATE

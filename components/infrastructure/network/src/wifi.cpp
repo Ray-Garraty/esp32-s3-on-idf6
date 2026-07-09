@@ -129,9 +129,9 @@ void WifiManager::startAP() {
     esp_netif_set_dns_info(apNetif_, ESP_NETIF_DNS_MAIN, &dnsInfo);
 
     // DHCP option 114 (Captive Portal URI): required by iOS/Android detection
-    static constexpr char captivePortalUri[] = "http://192.168.4.1/wifi";
+    char captivePortalUri[] = "http://192.168.4.1/wifi";
     esp_netif_dhcps_option(apNetif_, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
-                           const_cast<char*>(captivePortalUri),
+                           captivePortalUri,
                            strlen(captivePortalUri) + 1);
 
     esp_netif_dhcps_start(apNetif_);
@@ -183,6 +183,16 @@ bool WifiManager::connectSTA(const char* ssid, const char* password,
     }
     xEventGroupClearBits(staEventGroup_, STA_CONNECTED_BIT | STA_DISCONNECTED_BIT);
 
+    // If already connected to the same SSID, skip reconnection
+    if (staConnected_.load(std::memory_order_acquire) && 
+        std::strcmp(staSsid_, ssid) == 0) {
+        ESP_LOGI(TAG, "connectSTA: already connected to %s", ssid);
+        return true;
+    }
+
+    ESP_LOGI(TAG, "connectSTA: ssid='%s' (len=%zu), password_len=%zu",
+             ssid, strlen(ssid), strlen(password));
+
     wifi_config_t staConfig{};
     std::strncpy(reinterpret_cast<char*>(staConfig.sta.ssid),
                  ssid, sizeof(staConfig.sta.ssid) - 1);
@@ -191,14 +201,18 @@ bool WifiManager::connectSTA(const char* ssid, const char* password,
     staConfig.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
+    ESP_LOGI(TAG, "connectSTA: set_config result=%s", esp_err_to_name(err));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "set STA config: %s", esp_err_to_name(err));
         return false;
     }
 
+    staConnecting_ = true;
     err = esp_wifi_connect();
+    ESP_LOGI(TAG, "connectSTA: connect result=%s", esp_err_to_name(err));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "wifi connect: %s", esp_err_to_name(err));
+        staConnecting_ = false;
         return false;
     }
 
@@ -210,6 +224,11 @@ bool WifiManager::connectSTA(const char* ssid, const char* password,
         STA_CONNECTED_BIT | STA_DISCONNECTED_BIT,
         pdTRUE, pdFALSE,
         pdMS_TO_TICKS(timeoutMs));
+    ESP_LOGI(TAG, "connectSTA: event_bits=0x%x (CONNECTED=%d, DISCONNECTED=%d, TIMEOUT=%d)",
+             bits,
+             (bits & STA_CONNECTED_BIT) != 0,
+             (bits & STA_DISCONNECTED_BIT) != 0,
+             bits == 0);
 
     if (bits & STA_CONNECTED_BIT) {
         // Save credentials on success
@@ -220,6 +239,7 @@ bool WifiManager::connectSTA(const char* ssid, const char* password,
     }
 
     ESP_LOGW(TAG, "STA connection timeout/failure for: %s", ssid);
+    staConnecting_ = false;
     esp_wifi_disconnect();
     return false;
 }
@@ -487,6 +507,14 @@ void WifiManager::handleEvent(esp_event_base_t base, int32_t id, void* data) {
             ESP_LOGI(TAG, "STA got IP: %s", ipStr);
 
             startMdns();
+
+            // STA connected — stop AP to save power and avoid confusion
+            if (apActive_) {
+                stopDnsServer();
+                esp_wifi_set_mode(WIFI_MODE_STA);
+                apActive_ = false;
+                ESP_LOGI(TAG, "AP stopped (STA connected)");
+            }
         }
     }
 }

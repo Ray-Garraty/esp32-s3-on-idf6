@@ -1,0 +1,39 @@
+id: LL-038
+date: 2026-07-09
+crash_signature: "GET / returns 303 redirect to /wifi instead of dashboard (root_handler not called)"
+category: httpd_max_uri_handlers
+trigger_patterns:
+  - "max_uri_handlers"
+  - "root_handler.*not called"
+  - "URI handler registration.*silently dropped"
+lesson: >
+  ESP-IDF httpd has a default limit of max_uri_handlers = 8 (set by
+  HTTPD_DEFAULT_CONFIG()). When more than 8 URI handlers are registered
+  via httpd_register_uri_handler(), the EXCEEDING handlers are SILENTLY
+  DROPPED — no error is returned, no log message is printed.
+
+  In this project, 18+ URI handlers are registered (captive portal, REST
+  API, WebSocket, static files). The root handler for "/" was the 12th
+  registration, so it was silently dropped. Requests to "/" fell through
+  to the 404 error handler, which redirected to /wifi.
+
+  The fix: explicitly set config.max_uri_handlers to a value large enough
+  for all handlers (24 in this case).
+
+  ALWAYS count the number of httpd_register_uri_handler() calls and ensure
+  max_uri_handlers >= that count. A good practice is to add a compile-time
+  assertion or a startup log that prints the number of registered handlers.
+
+  ESP-IDF v6 HTTPD_DEFAULT_CONFIG() values:
+    max_uri_handlers   = 8   ← too low for complex apps
+    max_open_sockets   = 7   ← too low for captive portal
+    stack_size         = 4096 ← too low for JSON parsing
+diagnostic: >
+  Count the number of reg() calls in registerRoutes(). If > 8, set
+  config.max_uri_handlers accordingly. Add ESP_LOGI to log the count.
+fix: >
+  In http_server.cpp init(), after HTTPD_DEFAULT_CONFIG():
+    config.max_uri_handlers = 24;  // must be >= number of registered handlers
+refs:
+  - components/infrastructure/network/src/http_server.cpp
+  - /home/vlabe/Downloads/esp-idf-master/components/esp_http_server/include/esp_http_server.h

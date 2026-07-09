@@ -13,12 +13,18 @@
 #include "interface/webui.hpp"
 #include "domain/types.hpp"
 #include "domain/memory.hpp"
+#include "domain/json_utils.hpp"
 #include "diag/ffi_guard.hpp"
 #include "infrastructure/network/wifi.hpp"
 #include "infrastructure/storage/nvs.hpp"
 #include "infrastructure/config.hpp"
 
 #pragma GCC diagnostic push
+// HTTPD_DEFAULT_CONFIG() uses designated initializers that leave some fields
+// at default — this is safe because we override the ones we need (stack_size,
+// lru_purge_enable, max_open_sockets, max_uri_handlers) after the macro.
+// CONTRACT: this suppression must be removed if ESP-IDF ever provides a
+// fully-specified default macro.
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
 static constexpr auto TAG = "http_srv";
@@ -62,6 +68,7 @@ std::expected<void, domain::AppError> HttpServer::init() {
     // max_open_sockets=13 as in official ESP-IDF captive portal example.
     // HTTPD_MAX_SOCKETS = max(CONFIG_LWIP_MAX_SOCKETS, 16) → 13+3=16 ≤ 16 ✓
     config.max_open_sockets = 13;
+    config.max_uri_handlers = 24;
 
     esp_err_t err = httpd_start(&handle_, &config);
     if (err != ESP_OK) {
@@ -88,25 +95,10 @@ esp_err_t serve_wifi_page(httpd_req_t* req) {
     return ESP_OK;
 }
 
-ESP_EVENT_DEFINE_BASE(CAPTIVE_PORTAL_EVENTS);
 esp_err_t captive_wifi_page_handler(httpd_req_t* req) {
     diag::FfiGuard guard(81);
     ESP_LOGI(TAG, "Serving /wifi: %zu bytes",
              interface::webui::getFile("/wifi").size());
-    return serve_wifi_page(req);
-}
-
-esp_err_t captive_probe_204_handler(httpd_req_t* req) {
-    diag::FfiGuard guard(81);
-    ESP_LOGI(TAG, "Captive probe (204)");
-    httpd_resp_set_status(req, "204 No Content");
-    httpd_resp_send(req, nullptr, 0);
-    return ESP_OK;
-}
-
-esp_err_t captive_probe_success_handler(httpd_req_t* req) {
-    diag::FfiGuard guard(81);
-    ESP_LOGI(TAG, "Captive probe (200 + captive page)");
     return serve_wifi_page(req);
 }
 
@@ -123,7 +115,7 @@ esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
     domain::memory::CommandBuffer body{};
     size_t bodyLen = std::min(
         static_cast<size_t>(req->content_len),
-        body.size());
+        body.size() - 1);  // reserve 1 byte for null terminator
     int ret = httpd_req_recv(req, body.data(), bodyLen);
     if (ret <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request");
@@ -134,27 +126,12 @@ esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
     // Null-terminate and parse as simple JSON
     body[bodyLen] = '\0';
     auto* bodyStr = reinterpret_cast<const char*>(body.data());
-    ESP_LOGI(TAG, "WiFi connect request: %s", bodyStr);
+    ESP_LOGI(TAG, "WiFi connect request: content_len=%d, received=%zu bytes, body=%s",
+             req->content_len, bodyLen, bodyStr);
 
-    // Parse SSID and password (simple scan — no json lib dependency needed in handler)
-    auto findField = [](const char* json, const char* field) -> const char* {
-        auto* pos = std::strstr(json, field);
-        if (!pos) return nullptr;
-        pos += std::strlen(field) + 2; // skip ":"
-        while (*pos == ' ') ++pos;
-        if (*pos != '"') return nullptr;
-        ++pos;
-        auto* end = std::strchr(pos, '"');
-        if (!end) return nullptr;
-        auto* val = static_cast<char*>(malloc(static_cast<size_t>(end - pos) + 1));
-        if (!val) return nullptr;
-        std::memcpy(val, pos, static_cast<size_t>(end - pos));
-        val[end - pos] = '\0';
-        return val;
-    };
-
-    auto* ssid = findField(bodyStr, "\"ssid\"");
-    auto* password = findField(bodyStr, "\"password\"");
+    // Parse SSID and password using domain-layer JSON utility
+    auto* ssid = domain::findJsonField(bodyStr, "\"ssid\"");
+    auto* password = domain::findJsonField(bodyStr, "\"password\"");
 
     if (!ssid || !password) {
         free(const_cast<char*>(ssid));
@@ -306,6 +283,29 @@ esp_err_t webui_file_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t root_handler(httpd_req_t* req) {
+    diag::FfiGuard guard(81);
+
+    ESP_LOGI(TAG, "Root handler called for /");
+    auto* server = static_cast<HttpServer*>(req->user_ctx);
+    bool connected = server && server->wifiManager() && server->wifiManager()->isConnected();
+    ESP_LOGI(TAG, "Root handler: server=%p, wifiManager=%p, isConnected=%d",
+             (void*)server, server ? (void*)server->wifiManager() : nullptr, connected);
+    if (server && server->wifiManager() && !connected) {
+        // AP-only mode: redirect to captive portal page
+        httpd_resp_set_status(req, "303 See Other");
+        httpd_resp_set_hdr(req, "Location", "/wifi");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+        httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
+        ESP_LOGI(TAG, "Root: redirecting to /wifi (AP-only mode)");
+        return ESP_OK;
+    }
+
+    // STA connected: serve the normal dashboard
+    ESP_LOGI(TAG, "Root handler: serving dashboard");
+    return webui_file_handler(req);
+}
+
 } // anonymous namespace
 
 void HttpServer::registerRoutes() {
@@ -343,7 +343,7 @@ void HttpServer::registerRoutes() {
     });
 
     // WebUI static files
-    reg({ .uri = "/", .method = HTTP_GET, .handler = webui_file_handler });
+    reg({ .uri = "/", .method = HTTP_GET, .handler = root_handler, .user_ctx = this });
     reg({ .uri = "/style.css", .method = HTTP_GET, .handler = webui_file_handler });
     reg({ .uri = "/js/state.js", .method = HTTP_GET, .handler = webui_file_handler });
     reg({ .uri = "/js/ws.js", .method = HTTP_GET, .handler = webui_file_handler });
@@ -360,10 +360,11 @@ void HttpServer::registerRoutes() {
     // (simply redirecting is not sufficient — official ESP-IDF note).
     httpd_register_err_handler(handle_, HTTPD_404_NOT_FOUND,
         [](httpd_req_t* req, httpd_err_code_t err) -> esp_err_t {
-            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_status(req, "303 See Other");
             httpd_resp_set_hdr(req, "Location", "/wifi");
+            httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
             httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
-            ESP_LOGI(TAG, "Redirecting to /wifi");
+            ESP_LOGI(TAG, "Redirecting unknown URI to /wifi");
             return ESP_OK;
         });
 

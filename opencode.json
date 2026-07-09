@@ -19,6 +19,11 @@
       "path": "/home/vlabe/.rustup",
       "description": "Rust toolchains — check installed targets and toolchain versions",
       "hidden": true
+    },
+    "esp_idf_v6": {
+      "path": "/home/vlabe/Downloads/esp-idf-master",
+      "description": "ESP-IDF v6 Github repository clone",
+      "hidden": true
     }
   },
   "permission": {

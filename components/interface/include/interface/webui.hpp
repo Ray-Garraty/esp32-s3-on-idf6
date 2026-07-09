@@ -85,8 +85,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 h1{color:#333;margin-bottom:10px}
 .form-group{margin-bottom:20px}
 label{display:block;margin-bottom:8px;color:#555;font-weight:500}
-input{width:100%;padding:12px 16px;border:2px solid #e0e0e0;border-radius:8px;font-size:16px}
-input:focus{outline:none;border-color:#667eea}
+.input-wrap{position:relative;display:flex;align-items:center}
+.input-wrap input{width:100%;padding:12px 16px;border:2px solid #e0e0e0;border-radius:8px;font-size:16px;padding-right:44px}
+.input-wrap input:focus{outline:none;border-color:#667eea}
+.toggle-pass{position:absolute;right:12px;background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:4px;line-height:1;width:auto;border-radius:0}
+.toggle-pass:hover{color:#667eea;opacity:1;background:none}
 button{width:100%;padding:14px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer}
 button:hover{opacity:0.9}
 .status{margin-top:20px;padding:12px;border-radius:8px;display:none}
@@ -101,12 +104,18 @@ button:hover{opacity:0.9}
 <p style="color:#666;margin-bottom:20px">WiFi Configuration</p>
 <form id="wifi-form">
 <div class="form-group"><label for="ssid">Network (SSID)</label><input type="text" id="ssid" required placeholder="Enter WiFi SSID"></div>
-<div class="form-group"><label for="password">Password</label><input type="password" id="password" placeholder="Enter password"></div>
+<div class="form-group"><label for="password">Password</label><div class="input-wrap"><input type="password" id="password" placeholder="Enter password"><button type="button" class="toggle-pass" id="toggle-pass" onclick="togglePass()" aria-label="Show password">👁</button></div></div>
 <button type="submit">Connect</button>
 </form>
 <div id="status" class="status"></div>
 </div>
 <script>
+function togglePass(){
+var p=document.getElementById('password');
+var b=document.getElementById('toggle-pass');
+if(p.type==='password'){p.type='text';b.textContent='🙈';b.setAttribute('aria-label','Hide password');}
+else{p.type='password';b.textContent='👁';b.setAttribute('aria-label','Show password');}
+}
 document.getElementById('wifi-form').addEventListener('submit', async function(e){
 e.preventDefault();
 var ssid=document.getElementById('ssid').value;

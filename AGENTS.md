@@ -134,8 +134,8 @@ signatures, struct definitions, enum values, and header locations here.
 Online docs may be out of date or mismatch the local build.
 
 **Secondary — `/home/vlabe/Downloads/legacy/arduino`:**
-Legacy Arduino-based firmware — **SOURCE OF BUSINESS LOGIC ONLY** (titration
-algorithms, dosing math, calibration formulas). Study when porting algorithms
+Legacy Arduino-based firmware — **SOURCE OF BUSINESS LOGIC ONLY** (dosing
+algorithms and math, calibration formulas). Study when porting algorithms
 or maintaining compatibility with existing protocol expectations. Do NOT copy
 Arduino syntax (digitalWrite, Serial.println, etc.) into ESP-IDF code.
 
