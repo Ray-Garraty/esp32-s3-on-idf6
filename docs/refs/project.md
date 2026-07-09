@@ -8,6 +8,9 @@ timestamp: 2026-07-07
 
 # Project Specification (C++23)
 
+> **Local ESP-IDF Master:** `/home/vlabe/Downloads/esp-idf-master` — authoritative header source for ESP-IDF v6 (dev branch). Study before any ESP-IDF API call.
+> **Legacy Arduino Reference:** `/home/vlabe/Downloads/legacy/arduino` — source of business logic (titration, dosing, calibration). Study when porting algorithms. Do NOT copy Arduino syntax into ESP-IDF code.
+>
 > **Single source of truth** for hardware pinout, architecture, protocol, state machines, NVS layout, thread model, and error hierarchy.
 >
 > Firmware for a laboratory burette titrator. ESP32-S3 microcontroller, C++23 (`-std=c++23`), ESP-IDF v6.0.1. Precision stepper-driven syringe dosing with pH/temperature sensing. Communication via USB-Serial (JSON), BLE GATT (NUS), and WiFi (REST API + WebSocket + WebUI).

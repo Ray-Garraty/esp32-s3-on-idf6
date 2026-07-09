@@ -12,6 +12,8 @@
 
 namespace ecotiter::infrastructure::network {
 
+class WifiManager; // forward decl
+
 static constexpr size_t WS_MAX_SESSIONS = 4;
 static constexpr int WS_FD_INVALID = -1;
 
@@ -32,6 +34,9 @@ public:
     [[nodiscard]] std::expected<void, domain::AppError> init();
     httpd_handle_t handle() const noexcept { return handle_; }
 
+    void setWifiManager(WifiManager* mgr) noexcept { wifiManager_ = mgr; }
+    WifiManager* wifiManager() const noexcept { return wifiManager_; }
+
     void registerRoutes();
 
     // WebSocket broadcast — call from any thread
@@ -46,6 +51,7 @@ public:
 
 private:
     httpd_handle_t handle_{nullptr};
+    WifiManager* wifiManager_{nullptr};
 
     std::array<WsSession, WS_MAX_SESSIONS> sessions_{};
 };

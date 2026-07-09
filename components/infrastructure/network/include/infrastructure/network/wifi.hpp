@@ -27,6 +27,13 @@ public:
     [[nodiscard]] std::expected<void, domain::AppError> init();
     void startAP();
     [[nodiscard]] bool tryStartSTA();
+
+    // Connect to STA with explicit credentials (blocking, up to timeoutMs).
+    // Returns true if connected, false on timeout/failure.
+    // Saves credentials to NVS on success.
+    [[nodiscard]] bool connectSTA(const char* ssid, const char* password,
+                                  uint32_t timeoutMs = 15000);
+
     void stop();
 
     [[nodiscard]] bool isConnected() const noexcept;
@@ -48,6 +55,9 @@ private:
     static constexpr uint32_t AP_IP = 0x0104A8C0; // 192.168.4.1 in network order
     static constexpr const char* AP_SSID = "EcoTiter-AP";
 
+    static constexpr EventBits_t STA_CONNECTED_BIT  = 1 << 0;
+    static constexpr EventBits_t STA_DISCONNECTED_BIT = 1 << 1;
+
     bool initialized_{false};
     bool apActive_{false};
     std::atomic<bool> staConnected_{false};
@@ -56,6 +66,8 @@ private:
     esp_netif_t* apNetif_{nullptr};
     esp_netif_t* staNetif_{nullptr};
     int dnsSocket_{-1};
+
+    EventGroupHandle_t staEventGroup_{nullptr};
 
     char apSsid_[32]{};
     char staSsid_[32]{};

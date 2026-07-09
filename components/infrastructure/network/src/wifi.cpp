@@ -171,6 +171,59 @@ void WifiManager::startAP() {
     ESP_LOGI(TAG, "AP started: %s (192.168.4.1)", apSsid_);
 }
 
+bool WifiManager::connectSTA(const char* ssid, const char* password,
+                              uint32_t timeoutMs) {
+    if (!initialized_) return false;
+
+    diag::FfiGuard guard(72);
+
+    if (staEventGroup_ == nullptr) {
+        staEventGroup_ = xEventGroupCreate();
+        if (staEventGroup_ == nullptr) return false;
+    }
+    xEventGroupClearBits(staEventGroup_, STA_CONNECTED_BIT | STA_DISCONNECTED_BIT);
+
+    wifi_config_t staConfig{};
+    std::strncpy(reinterpret_cast<char*>(staConfig.sta.ssid),
+                 ssid, sizeof(staConfig.sta.ssid) - 1);
+    std::strncpy(reinterpret_cast<char*>(staConfig.sta.password),
+                 password, sizeof(staConfig.sta.password) - 1);
+    staConfig.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &staConfig);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set STA config: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "wifi connect: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Connecting to STA: %s (timeout=%lu ms)", ssid,
+             (unsigned long)timeoutMs);
+
+    EventBits_t bits = xEventGroupWaitBits(
+        staEventGroup_,
+        STA_CONNECTED_BIT | STA_DISCONNECTED_BIT,
+        pdTRUE, pdFALSE,
+        pdMS_TO_TICKS(timeoutMs));
+
+    if (bits & STA_CONNECTED_BIT) {
+        // Save credentials on success
+        std::strncpy(staSsid_, ssid, sizeof(staSsid_) - 1);
+        staSsid_[sizeof(staSsid_) - 1] = '\0';
+        ESP_LOGI(TAG, "STA connected via connectSTA: %s", ssid);
+        return true;
+    }
+
+    ESP_LOGW(TAG, "STA connection timeout/failure for: %s", ssid);
+    esp_wifi_disconnect();
+    return false;
+}
+
 bool WifiManager::tryStartSTA() {
     if (!initialized_ || staConnecting_) return false;
 
@@ -395,6 +448,9 @@ void WifiManager::handleEvent(esp_event_base_t base, int32_t id, void* data) {
 
         case WIFI_EVENT_STA_CONNECTED:
             ESP_LOGI(TAG, "STA connected");
+            if (staEventGroup_) {
+                xEventGroupSetBits(staEventGroup_, STA_CONNECTED_BIT);
+            }
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED: {
@@ -402,6 +458,9 @@ void WifiManager::handleEvent(esp_event_base_t base, int32_t id, void* data) {
             staConnected_.store(false);
             if (staConnecting_) {
                 staConnecting_ = false;
+            }
+            if (staEventGroup_) {
+                xEventGroupSetBits(staEventGroup_, STA_DISCONNECTED_BIT);
             }
             break;
         }

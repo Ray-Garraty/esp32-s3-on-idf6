@@ -94,6 +94,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
 
     // GR-3: HTTP server init BEFORE BLE (DRAM is most abundant at this point)
     HttpServer httpServer;
+    httpServer.setWifiManager(&wifiManager);
     auto httpResult = httpServer.init();
     if (httpResult) {
         httpServer.registerRoutes();

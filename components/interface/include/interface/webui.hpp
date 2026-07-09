@@ -5,11 +5,13 @@
 #include <string_view>
 #include <array>
 
+using namespace std::literals::string_view_literals;
+
 namespace ecotiter::interface::webui {
 
 namespace detail {
 
-static constexpr auto INDEX_HTML = R"htmlraw(<!doctype html>
+static constexpr std::string_view INDEX_HTML = R"htmlraw(<!doctype html>
 <html lang="en" data-bs-theme="light">
 <head>
 <meta charset="UTF-8">
@@ -68,9 +70,9 @@ static constexpr auto INDEX_HTML = R"htmlraw(<!doctype html>
 <script src="js/logs.js"></script>
 <script src="js/init.js"></script>
 </body>
-</html>)htmlraw";
+</html>)htmlraw"sv;
 
-static constexpr auto CAPTIVE_HTML = R"htmlraw(<!DOCTYPE html>
+static constexpr std::string_view CAPTIVE_HTML = R"htmlraw(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -128,17 +130,17 @@ btn.disabled=false;btn.textContent='Connect';
 }});
 </script>
 </body>
-</html>)htmlraw";
+</html>)htmlraw"sv;
 
-static constexpr auto STYLE_CSS = R"css(
+static constexpr std::string_view STYLE_CSS = R"css(
 .accordion-button{font-weight:600}
 .accordion-button:focus{box-shadow:none;border-color:transparent}
 textarea#log-messages{font-size:0.75rem;resize:none}
 .table td,.table th{vertical-align:middle}
 #cmd-response{font-size:0.75rem}
-)css";
+)css"sv;
 
-static constexpr auto STATE_JS = R"js(
+static constexpr std::string_view STATE_JS = R"js(
 var CONFIG={LOG_MAX_ENTRIES:100};
 var APP_STATE={
   logs:{messages:[]},
@@ -147,9 +149,9 @@ var APP_STATE={
 };
 window.APP_STATE=APP_STATE;
 window.CONFIG=CONFIG;
-)js";
+)js"sv;
 
-static constexpr auto WS_JS = R"js(
+static constexpr std::string_view WS_JS = R"js(
 var ws=null;
 var lastMsgTime=Date.now();
 var wsReconnectTimer=null;
@@ -183,9 +185,9 @@ function updateConnStatus(){
 function sendWs(data){
   if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data));
 }
-)js";
+)js"sv;
 
-static constexpr auto UI_UPDATE_JS = R"js(
+static constexpr std::string_view UI_UPDATE_JS = R"js(
 function updateUI(data){
   if(data.temp!==undefined)setText('hw-temperature',data.temp!==null?data.temp.toFixed(1)+' C':'N/A');
   if(data.mv!==undefined)setText('hw-adc',data.mv!==null?data.mv+' mV':'N/A');
@@ -203,23 +205,23 @@ function clearLogs(){APP_STATE.logs.messages=[];var el=document.getElementById('
 function addLogEntry(msg){APP_STATE.logs.messages.unshift(msg);if(APP_STATE.logs.messages.length>CONFIG.LOG_MAX_ENTRIES)APP_STATE.logs.messages.length=CONFIG.LOG_MAX_ENTRIES;renderLog();}
 function renderLog(){var el=document.getElementById('log-messages');if(!el)return;el.value=APP_STATE.logs.messages.join('\n');el.scrollTop=0;}
 window.updateUI=updateUI;window.clearLogs=clearLogs;window.addLogEntry=addLogEntry;
-)js";
+)js"sv;
 
-static constexpr auto LOGS_JS = R"js(
+static constexpr std::string_view LOGS_JS = R"js(
 window.setLogLevelFilter=function(l){}
-)js";
+)js"sv;
 
-static constexpr auto STEPPER_JS = R"js(
+static constexpr std::string_view STEPPER_JS = R"js(
 window.initStepperControls=function(){}
-)js";
+)js"sv;
 
-static constexpr auto CALIBRATION_JS = R"js(
+static constexpr std::string_view CALIBRATION_JS = R"js(
 window.loadCalibrationStatus=function(){}
 window.loadBuretteCalStatus=function(){}
 window.initSpeedTable=function(){}
-)js";
+)js"sv;
 
-static constexpr auto INIT_JS = R"js(
+static constexpr std::string_view INIT_JS = R"js(
 var _cmdId=0;
 var sendCommand=async function(cmd,params){
   try{
@@ -266,7 +268,7 @@ document.addEventListener('DOMContentLoaded',initApp);
 window.sendCommand=sendCommand;
 window.toggleValve=toggleValve;
 window.sendCmd=sendCmd;
-)js";
+)js"sv;
 
 struct FileEntry {
     const char* path;
@@ -274,16 +276,16 @@ struct FileEntry {
 };
 
 static constexpr std::array<FileEntry, 10> FILES = {{
-    {"/",            std::string_view(INDEX_HTML, sizeof(INDEX_HTML) - 1)},
-    {"/wifi",        std::string_view(CAPTIVE_HTML, sizeof(CAPTIVE_HTML) - 1)},
-    {"/style.css",   std::string_view(STYLE_CSS, sizeof(STYLE_CSS) - 1)},
-    {"/js/state.js", std::string_view(STATE_JS, sizeof(STATE_JS) - 1)},
-    {"/js/ws.js",    std::string_view(WS_JS, sizeof(WS_JS) - 1)},
-    {"/js/ui-update.js", std::string_view(UI_UPDATE_JS, sizeof(UI_UPDATE_JS) - 1)},
-    {"/js/logs.js",  std::string_view(LOGS_JS, sizeof(LOGS_JS) - 1)},
-    {"/js/stepper.js", std::string_view(STEPPER_JS, sizeof(STEPPER_JS) - 1)},
-    {"/js/calibration.js", std::string_view(CALIBRATION_JS, sizeof(CALIBRATION_JS) - 1)},
-    {"/js/init.js",  std::string_view(INIT_JS, sizeof(INIT_JS) - 1)},
+    {"/",            INDEX_HTML},
+    {"/wifi",        CAPTIVE_HTML},
+    {"/style.css",   STYLE_CSS},
+    {"/js/state.js", STATE_JS},
+    {"/js/ws.js",    WS_JS},
+    {"/js/ui-update.js", UI_UPDATE_JS},
+    {"/js/logs.js",  LOGS_JS},
+    {"/js/stepper.js", STEPPER_JS},
+    {"/js/calibration.js", CALIBRATION_JS},
+    {"/js/init.js",  INIT_JS},
 }};
 
 } // namespace detail

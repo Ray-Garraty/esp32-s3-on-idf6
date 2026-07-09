@@ -123,6 +123,31 @@ Rationale: Every past crash was detectible pre-mortem by a diagnostic event.
 
 ---
 
+### GR-11: MANDATORY ESP-IDF MASTER + LEGACY STUDY BEFORE CODEGEN
+
+Before ANY code generation touching WiFi, DNS, HTTP, BLE, RMT, or any
+ESP-IDF API call, study the local authoritative copies:
+
+**Primary — `/home/vlabe/Downloads/esp-idf-master`:**
+The authoritative header source for ESP-IDF v6 (dev branch). Verify function
+signatures, struct definitions, enum values, and header locations here.
+Online docs may be out of date or mismatch the local build.
+
+**Secondary — `/home/vlabe/Downloads/legacy/arduino`:**
+Legacy Arduino-based firmware — **SOURCE OF BUSINESS LOGIC ONLY** (titration
+algorithms, dosing math, calibration formulas). Study when porting algorithms
+or maintaining compatibility with existing protocol expectations. Do NOT copy
+Arduino syntax (digitalWrite, Serial.println, etc.) into ESP-IDF code.
+
+Required: grep/read the relevant headers in BOTH directories BEFORE writing
+any code that calls espressif APIs or replicates Arduino behaviour or business logic.
+
+Failure (2026-07-09): Agent wrote `ESP_NETIF_DOMAIN_NAME_SERVER` with wrong
+param type (`uint32_t*`). A 30-second grep of esp-idf-master headers would
+have shown the actual API expects `uint8_t`.
+
+---
+
 ### GR-10: ONLY THE USER ASSESSES PHYSICAL STATE
 
 The AI agent MUST NEVER make claims about physical-world observations

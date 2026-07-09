@@ -1,6 +1,7 @@
 #include "infrastructure/network/http_server.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 
@@ -13,6 +14,9 @@
 #include "domain/types.hpp"
 #include "domain/memory.hpp"
 #include "diag/ffi_guard.hpp"
+#include "infrastructure/network/wifi.hpp"
+#include "infrastructure/storage/nvs.hpp"
+#include "infrastructure/config.hpp"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
@@ -73,12 +77,9 @@ std::expected<void, domain::AppError> HttpServer::init() {
 
 namespace {
 
-esp_err_t captive_wifi_page_handler(httpd_req_t* req) {
-    diag::FfiGuard guard(81);
+esp_err_t serve_wifi_page(httpd_req_t* req) {
     auto sv = interface::webui::getFile("/wifi");
-    ESP_LOGI(TAG, "Serving /wifi: %zu bytes", sv.size());
     if (sv.empty()) {
-        ESP_LOGW(TAG, "/wifi content is empty!");
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
@@ -87,8 +88,37 @@ esp_err_t captive_wifi_page_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+ESP_EVENT_DEFINE_BASE(CAPTIVE_PORTAL_EVENTS);
+esp_err_t captive_wifi_page_handler(httpd_req_t* req) {
+    diag::FfiGuard guard(81);
+    ESP_LOGI(TAG, "Serving /wifi: %zu bytes",
+             interface::webui::getFile("/wifi").size());
+    return serve_wifi_page(req);
+}
+
+esp_err_t captive_probe_204_handler(httpd_req_t* req) {
+    diag::FfiGuard guard(81);
+    ESP_LOGI(TAG, "Captive probe (204)");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, nullptr, 0);
+    return ESP_OK;
+}
+
+esp_err_t captive_probe_success_handler(httpd_req_t* req) {
+    diag::FfiGuard guard(81);
+    ESP_LOGI(TAG, "Captive probe (200 + captive page)");
+    return serve_wifi_page(req);
+}
+
 esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
     diag::FfiGuard guard(81);
+
+    auto* server = static_cast<HttpServer*>(req->user_ctx);
+    if (!server || !server->wifiManager()) {
+        ESP_LOGE(TAG, "No WifiManager available");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no wifi mgr");
+        return ESP_FAIL;
+    }
 
     domain::memory::CommandBuffer body{};
     size_t bodyLen = std::min(
@@ -101,13 +131,71 @@ esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
     }
     bodyLen = static_cast<size_t>(ret);
 
-    domain::memory::ResponseBuffer rsp{};
-    int n = std::snprintf(rsp.data(), rsp.size(),
-        R"({"success":true,"message":"Credentials received"})");
+    // Null-terminate and parse as simple JSON
+    body[bodyLen] = '\0';
+    auto* bodyStr = reinterpret_cast<const char*>(body.data());
+    ESP_LOGI(TAG, "WiFi connect request: %s", bodyStr);
+
+    // Parse SSID and password (simple scan — no json lib dependency needed in handler)
+    auto findField = [](const char* json, const char* field) -> const char* {
+        auto* pos = std::strstr(json, field);
+        if (!pos) return nullptr;
+        pos += std::strlen(field) + 2; // skip ":"
+        while (*pos == ' ') ++pos;
+        if (*pos != '"') return nullptr;
+        ++pos;
+        auto* end = std::strchr(pos, '"');
+        if (!end) return nullptr;
+        auto* val = static_cast<char*>(malloc(static_cast<size_t>(end - pos) + 1));
+        if (!val) return nullptr;
+        std::memcpy(val, pos, static_cast<size_t>(end - pos));
+        val[end - pos] = '\0';
+        return val;
+    };
+
+    auto* ssid = findField(bodyStr, "\"ssid\"");
+    auto* password = findField(bodyStr, "\"password\"");
+
+    if (!ssid || !password) {
+        free(const_cast<char*>(ssid));
+        free(const_cast<char*>(password));
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, R"({"success":false,"message":"Missing ssid or password"})",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Attempting WiFi connect to SSID: %s", ssid);
+
+    // Try to connect
+    auto* wifi = server->wifiManager();
+    bool connected = wifi->connectSTA(ssid, password, 15000);
+
+    if (connected) {
+        // Save credentials to NVS
+        std::ignore = storage::wifiWriteStr(config::NVS_KEY_WIFI_SSID, ssid);
+        std::ignore = storage::wifiWriteStr(config::NVS_KEY_WIFI_PASS, password);
+
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,
+            R"({"success":true,"message":"Connected. Restarting..."})",
+            HTTPD_RESP_USE_STRLEN);
+
+        ESP_LOGI(TAG, "WiFi connected, restarting in STA mode");
+        // Small delay so the response is sent before restart
+        vTaskDelay(pdMS_TO_TICKS(500));
+        free(const_cast<char*>(ssid));
+        free(const_cast<char*>(password));
+        esp_restart();
+    }
+
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, rsp.data(), static_cast<ssize_t>(n));
-    ESP_LOGI(TAG, "WiFi connect request: %.*s",
-             static_cast<int>(bodyLen), body.data());
+    httpd_resp_send(req,
+        R"({"success":false,"message":"Connection failed. Check SSID and password."})",
+        HTTPD_RESP_USE_STRLEN);
+    ESP_LOGW(TAG, "WiFi connect failed for: %s", ssid);
+    free(const_cast<char*>(ssid));
+    free(const_cast<char*>(password));
     return ESP_OK;
 }
 
@@ -231,7 +319,9 @@ void HttpServer::registerRoutes() {
 
     // Captive portal
     reg({ .uri = "/wifi", .method = HTTP_GET, .handler = captive_wifi_page_handler });
-    reg({ .uri = "/wifi/connect", .method = HTTP_POST, .handler = captive_wifi_connect_handler });
+    reg({ .uri = "/wifi/connect", .method = HTTP_POST,
+          .handler = captive_wifi_connect_handler,
+          .user_ctx = this });
     reg({ .uri = "/wifi/status", .method = HTTP_GET, .handler = captive_wifi_status_handler });
 
     // REST API
