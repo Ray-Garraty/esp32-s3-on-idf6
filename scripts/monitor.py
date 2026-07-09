@@ -44,7 +44,6 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
     CRASH_STATE_COLLECTING = 1
     crash_state = CRASH_STATE_IDLE
     crash_buffer: list[str] = []
-    log_path = None
     log_file = None
     if not no_log:
         log_dir = Path(log_dir)
@@ -98,8 +97,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
             ser.dtr = False
             ser.rts = False
             time.sleep(1.0)
-            # Note: no reset_input_buffer — we want to capture ROM bootloader
-            # output and the BOOT_OK_MARKER from early app_main.
+            # Note: no reset_input_buffer — we want to capture BOOT_OK_MARKER
+            # from early app_main. Garbage lines are filtered below.
 
         if log_file:
             writeline(f"=== Logging to {log_file} ===")
@@ -122,10 +121,17 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False, no_l
                         if not line:
                             continue
 
-                        # Filter out binary garbage from ROM bootloader preamble:
-                        # very short lines (<5 chars) with no alphabetic chars.
-                        # These are decoded fragments of the binary header.
-                        if len(line) < 5 and not any(c.isalpha() for c in line):
+                        # Filter out binary garbage from ROM bootloader preamble.
+                        # Real lines start with I/W/E/D/{/= (log level, JSON,
+                        # crash marker). Digit-starting lines are corrupted
+                        # JSON fragments (e.g. "000,\"acc\":...").
+                        # Lines with <30% alpha are raw binary decode.
+                        if not line:
+                            continue
+                        if line[0].isdigit():
+                            continue
+                        n_alpha = sum(c.isalpha() for c in line)
+                        if n_alpha < len(line) * 0.3:
                             continue
 
                         ts = timestamp()
