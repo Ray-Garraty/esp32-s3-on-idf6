@@ -233,7 +233,8 @@ EN pin active LOW: `gpio_set_level(en, 0)` in constructor.
 |---------|---------|---------|
 | `scripts/build.sh build` | Build firmware (auto‑removes stale `sdkconfig`) | ≥ 120 s |
 | `scripts/build.sh flash` | Flash firmware | ≥ 60 s |
-| `scripts/build.sh monitor` | Smoke test | 30 s |
+| `scripts/build.sh monitor` | Serial monitor (live log) | 30 s |
+| `scripts/smoke_test.py` | Automated smoke test (build + flash + 30s monitor) | 120 s |
 | `scripts/build.sh uart` | UART command test | 60 s |
 | `scripts/build.sh reconfigure` | Remove `sdkconfig` + `idf.py reconfigure` | ≥ 60 s |
 | `scripts/build.sh test` | Host unit tests (Catch2) | 60 s |
@@ -297,7 +298,7 @@ t0 main watermark=0  t1 motor watermark=0 ...
 | Scenario | Command |
 |----------|---------|
 | Serial log exists | `./scripts/analyze_last_crash.sh` |
-| Live capture | `timeout 60 python3 scripts/serial_monitor.py` |
+| Live capture | `timeout 60 python3 scripts/monitor.py` |
 | Raw crash text | `python3 scripts/crash_analyzer.py < crash.txt` |
 
 ### Known Patterns (from docs/lessons_learned/)
@@ -323,7 +324,7 @@ t0 main watermark=0  t1 motor watermark=0 ...
 
 ```
 # CORRECT
-timeout 30 python3 scripts/serial_monitor.py
+timeout 30 python3 scripts/monitor.py
 
 # FORBIDDEN
 python3 -m serial.tools.miniterm /dev/ttyACM0 115200
