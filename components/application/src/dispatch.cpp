@@ -35,7 +35,7 @@ std::expected<CommandResponse, domain::AppError> dispatch(
     case CommandType::Empty:
       return burette_ops::handleEmpty();
     case CommandType::DoseVolume:
-      return burette_ops::handleDoseVolume(cmd.volume);
+      return burette_ops::handleDoseVolume(cmd.volume, cmd.speedMlMin);
     case CommandType::Rinse:
       return burette_ops::handleRinse();
     case CommandType::Stop:

@@ -66,6 +66,7 @@ struct Command {
   std::optional<domain::Direction> direction;
   std::optional<uint32_t> speed;
   std::optional<uint32_t> accel;
+  std::optional<float> speedMlMin;
   std::optional<domain::Ml> targetVolume;
   std::optional<domain::ValvePosition> valvePos;
   std::optional<uint8_t> sgThreshold;

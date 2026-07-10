@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <expected>
 #include <vector>
@@ -47,5 +48,77 @@ struct CalibrationData {
 [[nodiscard]] inline Ml stepsToMl(Steps steps, const CalibrationData& cal) noexcept {
     return Ml{static_cast<float>(steps.value) / cal.stepsPerMl};
 }
+
+[[nodiscard]] inline Hz speedMlMinToHz(MlMin speedMlMin, const CalibrationData& cal) noexcept {
+    if (cal.speedCoeff < 0.000001f) return Hz{cal.minFreqHz};
+    uint32_t freq = static_cast<uint32_t>(speedMlMin.value / cal.speedCoeff + 0.5f);
+    if (freq < cal.minFreqHz) freq = cal.minFreqHz;
+    if (freq > cal.maxFreqHz) freq = cal.maxFreqHz;
+    return Hz{freq};
+}
+
+struct DosePlan {
+    uint32_t totalCycles;
+    float firstCycleVolMl;
+    float remainingVolMl;
+    bool singleCycle;
+    bool needsFillFirst;
+    bool valid;
+};
+
+[[nodiscard]] inline DosePlan planDose(float volumeMl, float currentVolumeMl, const CalibrationData& cal) noexcept {
+    DosePlan plan{};
+    if (volumeMl < 0.01f || volumeMl > 50.0f || cal.nominalVolumeMl < 0.001f) {
+        plan.valid = false;
+        return plan;
+    }
+    plan.valid = true;
+
+    if (volumeMl > cal.nominalVolumeMl + 0.001f) {
+        plan.totalCycles = static_cast<uint32_t>(volumeMl / cal.nominalVolumeMl + 0.999999f);
+        plan.remainingVolMl = std::fmod(volumeMl, cal.nominalVolumeMl);
+        if (plan.remainingVolMl < 0.01f) {
+            plan.remainingVolMl = cal.nominalVolumeMl;
+        } else {
+            plan.totalCycles = static_cast<uint32_t>(volumeMl / cal.nominalVolumeMl) + 1;
+            if (plan.totalCycles > 1) plan.totalCycles--;
+        }
+        plan.firstCycleVolMl = cal.nominalVolumeMl;
+        plan.singleCycle = false;
+    } else {
+        plan.totalCycles = 1;
+        plan.firstCycleVolMl = volumeMl;
+        plan.remainingVolMl = 0;
+        plan.singleCycle = true;
+    }
+    plan.needsFillFirst = (currentVolumeMl < plan.firstCycleVolMl - 0.001f);
+    return plan;
+}
+
+struct VolumeTracker {
+    float currentVolumeMl;
+
+    void onFillComplete(const CalibrationData& cal) noexcept {
+        currentVolumeMl = cal.nominalVolumeMl;
+    }
+    void onEmptyComplete() noexcept {
+        currentVolumeMl = 0.0f;
+    }
+    void onDoseComplete(float dispensedVolMl) noexcept {
+        currentVolumeMl -= dispensedVolMl;
+        if (currentVolumeMl < 0.0f) currentVolumeMl = 0.0f;
+    }
+    void onStopDuringFill(float startVolMl, int32_t stepsTaken, const CalibrationData& cal) noexcept {
+        currentVolumeMl = startVolMl + static_cast<float>(stepsTaken) / cal.stepsPerMl;
+        if (currentVolumeMl > cal.nominalVolumeMl) currentVolumeMl = cal.nominalVolumeMl;
+    }
+    void onStopDuringEmpty(float startVolMl, int32_t stepsTaken, const CalibrationData& cal) noexcept {
+        currentVolumeMl = startVolMl - static_cast<float>(stepsTaken) / cal.stepsPerMl;
+        if (currentVolumeMl < 0.0f) currentVolumeMl = 0.0f;
+    }
+    void onHomingComplete(const CalibrationData& cal) noexcept {
+        currentVolumeMl = cal.nominalVolumeMl;
+    }
+};
 
 } // namespace ecotiter::domain

@@ -5,9 +5,11 @@
 #include <cstring>
 
 #include "application/command.hpp"
+#include "domain/calibration.hpp"
 #include "domain/memory.hpp"
 #include "domain/types.hpp"
 #include "infrastructure/motor_task.hpp"
+#include "infrastructure/storage/nvs.hpp"
 
 namespace ecotiter::application::handlers::burette_ops {
 namespace {
@@ -47,22 +49,99 @@ bool sendMotorCommand(infrastructure::MotorCommand&& cmd) {
 } // anonymous namespace
 
 std::expected<CommandResponse, domain::AppError> handleFill() {
+  domain::gBuretteState.store(domain::BuretteState::Filling, std::memory_order_release);
+
+  auto cal = infrastructure::storage::calibrationRead();
+  if (!cal) return makeErrorResponse("calibration not available");
+
+  int32_t steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
+  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
+
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::MoveSteps;
+  cmd.steps = steps;
+  cmd.direction = domain::Direction::Cw;
+  cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
+  cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
+  sendMotorCommand(std::move(cmd));
   return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleEmpty() {
+  domain::gBuretteState.store(domain::BuretteState::Emptying, std::memory_order_release);
+
+  auto cal = infrastructure::storage::calibrationRead();
+  if (!cal) return makeErrorResponse("calibration not available");
+
+  float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
+  int32_t steps = static_cast<int32_t>(curVol * cal->stepsPerMl + 0.5f);
+  if (steps < 10) steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
+  domain::gDirection.store(domain::Direction::Ccw, std::memory_order_release);
+
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::MoveSteps;
+  cmd.steps = steps;
+  cmd.direction = domain::Direction::Ccw;
+  cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
+  cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
+  sendMotorCommand(std::move(cmd));
   return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleDoseVolume(
-    std::optional<domain::Ml> volume) {
+    std::optional<domain::Ml> volume,
+    std::optional<float> speedMlMin) {
   if (!volume) {
     return makeErrorResponse("doseVolume requires 'volume' param");
   }
+  auto cal = infrastructure::storage::calibrationRead();
+  if (!cal) return makeErrorResponse("calibration not available");
+
+  float currentVol = domain::gVolumeMl.load(std::memory_order_acquire);
+  auto plan = domain::planDose(volume->value, currentVol, *cal);
+  if (!plan.valid) {
+    return makeErrorResponse("volume out of range [0.01, 50.0]");
+  }
+
+  uint32_t speedHz = domain::gSpeed.load(std::memory_order_acquire);
+  if (speedMlMin && *speedMlMin > 0.1f) {
+    speedHz = domain::speedMlMinToHz(domain::MlMin{*speedMlMin}, *cal).value;
+  }
+
+  domain::gBuretteState.store(domain::BuretteState::Dosing, std::memory_order_release);
+
+  int32_t steps = static_cast<int32_t>(plan.firstCycleVolMl * cal->stepsPerMl + 0.5f);
+  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
+
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::MoveSteps;
+  cmd.steps = steps;
+  cmd.direction = domain::Direction::Cw;
+  cmd.speedHz = speedHz;
+  cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
+  sendMotorCommand(std::move(cmd));
+
   return makeAckThenResponse();
 }
 
-std::expected<CommandResponse, domain::AppError> handleRinse() {
+std::expected<CommandResponse, domain::AppError> handleRinse(
+    std::optional<uint32_t> cycles) {
+  (void)cycles;
+  auto cal = infrastructure::storage::calibrationRead();
+  if (!cal) return makeErrorResponse("calibration not available");
+
+  domain::gBuretteState.store(domain::BuretteState::Rinsing, std::memory_order_release);
+
+  int32_t steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
+  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
+
+  infrastructure::MotorCommand cmd{};
+  cmd.type = infrastructure::MotorCommandType::MoveSteps;
+  cmd.steps = steps;
+  cmd.direction = domain::Direction::Cw;
+  cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
+  cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
+  sendMotorCommand(std::move(cmd));
   return makeAckThenResponse();
 }
 

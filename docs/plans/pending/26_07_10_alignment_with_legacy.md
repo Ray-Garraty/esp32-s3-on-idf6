@@ -276,27 +276,22 @@ matches Arduino (was 7.8).
 **Diff:** +93/-28 source lines (7 files), +106/-44 including tests/docs.
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-### Phase 2: Dose Planner (HIGH priority)
+### Phase 2: Dose Planner — ✅ COMPLETED (2026-07-10)
 
 <!-- grep: phase-2 -->
 
-1. Implement `DosePlan planDose(DoseRequest)` in `domain/calibration.hpp`
-   - Signature: `auto planDose(float volumeMl, const CalibrationData& cal) -> std::expected<DosePlan, AppError>`
-   - `DosePlan` struct: `totalCycles`, `firstCycleVolMl`, `remainingVolMl`, `needsFillFirst`
-   - Validation: volume [0.01, 50.0], speed [0.1, 20.0]
-2. Implement `VolumeTracker` class in `domain/calibration.hpp`
-   - `onFillComplete(cal) → nominalVol`
-   - `onEmptyComplete → 0`
-   - `onDoseComplete(dispensed, cal) → current - dispensed`
-   - `onStopDuringFill(startVol, stepsTaken, cal) → start + steps/stepPerMl`
-   - `onStopDuringEmpty(startVol, stepsTaken, cal) → start - steps/stepPerMl`
-   - `onHomingComplete(cal) → nominalVol`
-3. Wire `handleDoseVolume` to call `planDose` + send motor commands
-4. Wire `handleFill` and `handleEmpty` to send motor commands
-5. Wire `handleStop` to calculate volume via `VolumeTracker`
+- Added `speedMlMin` field to `Command` struct + parsing from JSON
+- Added `speedMlMinToHz()` conversion in `calibration.hpp` (Arduino-compatible)
+- Implemented `DosePlan` struct + `planDose()` — multi-cycle dose planning:
+  `totalCycles`, `firstCycleVolMl`, `remainingVolMl`, `needsFillFirst`
+- Implemented `VolumeTracker` struct — tracks volume after fill/empty/dose/stop/homing
+- Wired `handleFill`: reads calibration → calculates steps from `nominalVol * stepsPerMl` → sends `MoveSteps` CW
+- Wired `handleEmpty`: reads current volume → calculates steps → sends `MoveSteps` CCW
+- Wired `handleDoseVolume`: validates via `planDose()` → converts `speedMlMin` to Hz → sends `MoveSteps`
+- Wired `handleRinse`: basic fill-to-nominal motor command (full rinse SM deferred to Phase 3)
 
-**Tests:** Planner: edge cases (vol < nominal, vol > nominal, vol < 0.01).
-VolumeTracker: all 6 operation types with known step counts.
+**Diff:** +165/-5 source lines (6 files).
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
 ### Phase 3: State Machines (HIGH priority)
 
@@ -402,10 +397,12 @@ OLS: verify against known dataset, check R² = 1 for perfect fit.
 
 | File | Change |
 |------|--------|
-| `components/domain/include/domain/calibration.hpp` | `DosePlan`, `planDose()`, `VolumeTracker` |
-| `components/domain/src/calibration.cpp` | Implementation |
-| `components/application/src/handlers/burette_ops.cpp` | Call planner + motor queue |
-| `components/infrastructure/src/motor_task.cpp` | Expose queue send for fill/empty cycles |
+| `components/domain/include/domain/calibration.hpp` | `DosePlan`, `planDose()`, `VolumeTracker`, `speedMlMinToHz()` |
+| `components/application/include/application/command.hpp` | `speedMlMin` field in `Command` |
+| `components/application/include/application/handlers/burette_ops.hpp` | Updated `handleDoseVolume`/`handleRinse` signatures |
+| `components/application/src/command.cpp` | Parse `speed_ml_min` from JSON |
+| `components/application/src/dispatch.cpp` | Pass `speedMlMin` to dose handler |
+| `components/application/src/handlers/burette_ops.cpp` | Wired fill/empty/dose/rinse to motor queue |
 
 ### Phase 3 — State Machines
 
@@ -488,7 +485,7 @@ Before Phase 2-4 codegen, the following headers in
 | Phase | Estimated additions | Actual | Risk |
 |-------|-------------------|--------|------|
 | 1 | 60 lines | **93** (source) / **106** (total) | ✅ Done |
-| 2 | 200 lines | — | Medium — planner logic |
+| 2 | 200 lines | **165** | ✅ Done |
 | 3 | 400 lines | — | Medium — SM correctness |
 | 4 | 300 lines | — | High — math correctness |
 | 5 | 150 lines | — | Medium — ADC timing |

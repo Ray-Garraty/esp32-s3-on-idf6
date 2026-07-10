@@ -142,6 +142,12 @@ std::expected<Command, domain::ProtocolError> parseCommand(
   cmd.valvePos = parseValvePosition(j, "position");
   cmd.speed = readU32("speed");
   cmd.accel = readU32("accel");
+  {
+    auto it = j.find("speed_ml_min");
+    if (it != j.end() && it->is_number()) {
+      cmd.speedMlMin = static_cast<float>(it->get<double>());
+    }
+  }
   cmd.configMoveSpeed = readU32("moveSpeed");
   cmd.configMoveAccel = readU32("moveAccel");
   cmd.configHomeSpeed = readU32("homeSpeed");
