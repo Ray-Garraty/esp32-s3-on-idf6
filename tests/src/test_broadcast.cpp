@@ -19,7 +19,7 @@ TEST_CASE("serializeBroadcast: builds valid JSON with all fields", "[broadcast]"
         .mv = 1500,
         .vlv = ValvePosition::Input,
         .brt = BuretteState::Idle,
-        .dir = Direction::Cw,
+        .dir = Direction::LiqIn,
         .speed = 1000,
         .accel = 500,
         .volumeMl = 50.0f,
@@ -38,21 +38,21 @@ TEST_CASE("serializeBroadcast: builds valid JSON with all fields", "[broadcast]"
     REQUIRE(j["brt"]["sts"] == "idle");
     REQUIRE(j["brt"]["vl"] == Catch::Approx(50.0));
     REQUIRE(j["brt"]["spd"] == Catch::Approx(30.5));
-    REQUIRE(j["dir"] == "cw");
+    REQUIRE(j["dir"] == "liq_in");
     REQUIRE(j["spd"] == 1000);
     REQUIRE(j["acc"] == 500);
     REQUIRE(j["vol"] == 50.0f);
     REQUIRE(j["steps"] == 12345);
 }
 
-TEST_CASE("serializeBroadcast: output position, ccw, dosing", "[broadcast]") {
+TEST_CASE("serializeBroadcast: output position, liq_out, dosing", "[broadcast]") {
     BroadcastEvent evt{
         .tick = 1,
         .tempCX100 = 0,
         .mv = 0,
         .vlv = ValvePosition::Output,
         .brt = BuretteState::Dosing,
-        .dir = Direction::Ccw,
+        .dir = Direction::LiqOut,
         .speed = 2000,
         .accel = 300,
         .volumeMl = 25.0f,
@@ -67,7 +67,7 @@ TEST_CASE("serializeBroadcast: output position, ccw, dosing", "[broadcast]") {
     REQUIRE(j["vlv"] == "out");
     REQUIRE(j["brt"]["sts"] == "working");
     REQUIRE(j["brt"]["vl"] == Catch::Approx(25.0));
-    REQUIRE(j["dir"] == "ccw");
+    REQUIRE(j["dir"] == "liq_out");
     REQUIRE(j["spd"] == 2000);
     REQUIRE(j["acc"] == 300);
     REQUIRE(j["vol"] == 25.0f);
@@ -81,7 +81,7 @@ TEST_CASE("serializeBroadcast: sensor not detected (tempCX100 = -99999)", "[broa
         .mv = 0,
         .vlv = ValvePosition::Input,
         .brt = BuretteState::Idle,
-        .dir = Direction::Cw,
+        .dir = Direction::LiqIn,
         .speed = 1000,
         .accel = 500,
         .volumeMl = 50.0f,
@@ -104,7 +104,7 @@ TEST_CASE("serializeBroadcast: all burette states round-trip", "[broadcast]") {
             .mv = 0,
             .vlv = ValvePosition::Input,
             .brt = state,
-            .dir = Direction::Cw,
+            .dir = Direction::LiqIn,
             .speed = 1000,
             .accel = 500,
             .volumeMl = 50.0f,

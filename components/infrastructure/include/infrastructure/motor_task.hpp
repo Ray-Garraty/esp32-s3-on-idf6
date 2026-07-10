@@ -17,7 +17,30 @@ enum class MotorCommandType : uint8_t {
     Home,
     SetDirection,
     SetSpeed,
-    SetAccel
+    SetAccel,
+    StartRinse,
+    StartCalDose,
+    StartCalSpeed,
+    StartCalSpeedSeq
+};
+
+struct StartRinseParams {
+    uint8_t cycles;
+    float speedMlMin;
+};
+
+struct StartCalDoseParams {
+    float speedMlMin;
+};
+
+struct StartCalSpeedParams {
+    float speedMlMin;
+    uint16_t testFreqHz;
+};
+
+struct StartCalSpeedSeqParams {
+    uint16_t freqs[3];
+    float fillSpeedMlMin;
 };
 
 struct MotorCommand {
@@ -26,8 +49,28 @@ struct MotorCommand {
     domain::Direction direction;
     uint32_t speedHz;
     uint32_t accelHzPerS;
+    StartRinseParams startRinse;
+    StartCalDoseParams startCalDose;
+    StartCalSpeedParams startCalSpeed;
+    StartCalSpeedSeqParams startCalSpeedSeq;
+};
+
+struct SmResult {
+    enum class Type : uint8_t {
+        None,
+        RinseComplete,
+        CalDoseComplete,
+        CalSpeedComplete,
+        CalSpeedSeqComplete,
+        Error
+    } type;
+    int32_t stepsTaken;
+    float measuredSpeedMlMin;
+    float results[3];
+    int resultCount;
 };
 
 extern QueueHandle_t gMotorCmdQueue;
+extern SmResult gSmResult;
 
 } // namespace ecotiter::infrastructure

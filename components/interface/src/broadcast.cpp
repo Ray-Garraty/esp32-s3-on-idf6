@@ -27,7 +27,7 @@ const char* brtStsStr(domain::BuretteState s) {
 }
 
 const char* dirStr(domain::Direction d) {
-    return (d == domain::Direction::Cw) ? "cw" : "ccw";
+    return (d == domain::Direction::LiqIn) ? "liq_in" : "liq_out";
 }
 
 } // anonymous namespace

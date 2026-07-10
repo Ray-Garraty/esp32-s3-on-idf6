@@ -55,14 +55,20 @@ TEST_CASE("handler: doseVolume missing param returns error", "[handlers][burette
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("handler: rinse returns AckThen", "[handlers][burette]") {
+TEST_CASE("handler: rinse cycles required", "[handlers][burette]") {
   auto rsp = burette_ops::handleRinse();
+  REQUIRE(rsp);
+  REQUIRE(rsp->kind == ResponseKind::Error);
+}
+
+TEST_CASE("handler: rinse with cycles returns AckThen", "[handlers][burette]") {
+  auto rsp = burette_ops::handleRinse(3);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("handler: setDirection cw", "[handlers][burette]") {
-  auto rsp = burette_ops::handleSetDirection(Direction::Cw);
+TEST_CASE("handler: setDirection liq_in", "[handlers][burette]") {
+  auto rsp = burette_ops::handleSetDirection(Direction::LiqIn);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
@@ -114,7 +120,7 @@ TEST_CASE("handler: moveSteps missing param returns error", "[handlers][burette]
 TEST_CASE("handler: getStatus returns correct fields", "[handlers][burette]") {
   auto rsp = burette_ops::handleGetStatus(
       BuretteState::Idle, 2530, ValvePosition::Input,
-      150.0f, Direction::Cw, 1000, 500, 50.0f);
+      150.0f, Direction::LiqIn, 1000, 500, 50.0f);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
@@ -322,13 +328,13 @@ TEST_CASE("handler: valve.getState output", "[handlers][valve]") {
 TEST_CASE("handler: system.getStatus returns valid JSON", "[handlers][system]") {
   auto rsp = system::handleGetStatus(
       BuretteState::Dosing, 0, ValvePosition::Output,
-      100.0f, Direction::Ccw, 2000, 400, 25.0f);
+      100.0f, Direction::LiqOut, 2000, 400, 25.0f);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
   REQUIRE(sv.find("dosing") != std::string_view::npos);
   REQUIRE(sv.find("output") != std::string_view::npos);
-  REQUIRE(sv.find("ccw") != std::string_view::npos);
+  REQUIRE(sv.find("liq_out") != std::string_view::npos);
 }
 
 TEST_CASE("handler: system.firmwareVersion default", "[handlers][system]") {

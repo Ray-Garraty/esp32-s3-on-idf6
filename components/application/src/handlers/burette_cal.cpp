@@ -7,6 +7,7 @@
 #include "application/command.hpp"
 #include "domain/calibration.hpp"
 #include "domain/memory.hpp"
+#include "infrastructure/motor_task.hpp"
 
 namespace ecotiter::application::handlers::burette_cal {
 namespace {
@@ -84,7 +85,6 @@ std::expected<CommandResponse, domain::AppError> handleCalcSpeed(
   if (!cal) {
     return makeErrorResponse("calibration not available");
   }
-  // Speed = stepsPerMl * 1,000,000 / intervalUs (approx steps/sec)
   float stepsPerSec = cal->stepsPerMl * 1'000'000.0f /
       static_cast<float>(*intervalUs);
   return makeCalResponse("cal.calcSpeed",
@@ -138,20 +138,67 @@ std::expected<CommandResponse, domain::AppError> handleRunCalibration() {
 
 std::expected<CommandResponse, domain::AppError> handleGetCalResult(
     ReadCalCb readCal) {
-  auto cal = readCal();
+  auto& result = infrastructure::gSmResult;
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   size_t off = 0;
-  if (cal) {
+
+  if (result.type == infrastructure::SmResult::Type::None) {
     off = static_cast<size_t>(
         std::snprintf(rsp.body.data(), rsp.body.size(),
-                      R"({"cmd":"cal.getResult","stepsPerMl":%.1f,"nominalVolume":%.1f})",
-                      static_cast<double>(cal->stepsPerMl),
-                      static_cast<double>(cal->nominalVolumeMl)));
-  } else {
-    off = static_cast<size_t>(
-        std::snprintf(rsp.body.data(), rsp.body.size(),
-                      R"({"cmd":"cal.getResult","error":"nvs_unavailable"})"));
+                      R"({"cmd":"cal.getResult","status":"no_result"})"));
+    rsp.bodySize = off;
+    return rsp;
+  }
+
+  off = static_cast<size_t>(
+      std::snprintf(rsp.body.data(), rsp.body.size(),
+                    R"({"cmd":"cal.getResult","status":"ok")"));
+
+  switch (result.type) {
+    case infrastructure::SmResult::Type::RinseComplete:
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                        R"(,"resultType":"rinse")"));
+      break;
+    case infrastructure::SmResult::Type::CalDoseComplete:
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                        R"(,"resultType":"cal_dose","stepsTaken":%ld)",
+                        static_cast<long>(result.stepsTaken)));
+      break;
+    case infrastructure::SmResult::Type::CalSpeedComplete:
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                        R"(,"resultType":"cal_speed","speedMlMin":%.2f)",
+                        static_cast<double>(result.measuredSpeedMlMin)));
+      break;
+    case infrastructure::SmResult::Type::CalSpeedSeqComplete: {
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                        R"(,"resultType":"cal_speed_seq","results":[)"));
+      for (int i = 0; i < result.resultCount && i < 3; ++i) {
+        if (i > 0) {
+          off += static_cast<size_t>(
+              std::snprintf(rsp.body.data() + off, rsp.body.size() - off, ","));
+        }
+        off += static_cast<size_t>(
+            std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                          "%.2f", static_cast<double>(result.results[i])));
+      }
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off, "]"));
+      break;
+    }
+    default:
+      off += static_cast<size_t>(
+          std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
+                        R"(,"resultType":"error")"));
+      break;
+  }
+
+  if (off < rsp.body.size() - 1) {
+    rsp.body[off++] = '}';
   }
   rsp.bodySize = off;
   return rsp;

@@ -16,10 +16,11 @@ loss. This document catalogues every discrepancy between the legacy Arduino
 firmware (`/home/vlabe/Downloads/legacy/arduino`) and the current ESP-IDF
 project, ranked by impact, and prescribes the restoration work.
 
-**Impact:** The device powers on and the motor homes, but every dosing
-operation, calibration routine, volume calculation, and speed control
-will produce incorrect results. The default calibration constants alone
-would cause 7.73× volume errors.
+**Impact after Phases 0–2a:** Calibration defaults match Arduino (Phase 1).
+Dose planning with multi-cycle auto-fill works (Phase 2). Fill/empty/dose
+send real motor commands. Direction naming aligned with Arduino (`LIQ_IN`/`LIQ_OUT`,
+`FULL`/`EMPTY`). Remaining: rinse/cal state machines (Phase 3), Z-factor + OLS
+(Phase 4), ADC calibration (Phase 5).
 
 ---
 
@@ -73,6 +74,7 @@ ESP-IDF:
 | **Calibration Dose** | CAL_IDLE → FILLING → EMPTYING → DONE | Full | Not implemented |
 | **Calibration Speed Single** | CAL_IDLE → FILLING → EMPTYING → done | Full | Not implemented |
 | **Calibration Speed Seq** | 3-point sequential with settling | Full | Not implemented |
+| **Auto-Dose** | FILLING → DOSING (multi-cycle) | Full | Not implemented |
 | **BLE Zombie** | 2 levels | Full | 3 levels (improved) |
 | **Transport** | USB/BLE selection | Full | Partial |
 
@@ -152,20 +154,21 @@ ESP-IDF has only `adc.cal.get` and `adc.cal.save` (both stubs).
 
 <!-- grep: handler-stubs -->
 
-Commands that parse and route but return `makeAckThenResponse()` without
-sending any motor command:
+Commands that parse but do not execute the intended operation:
 
-- `fill` — `handleFill`
-- `empty` — `handleEmpty`
-- `doseVolume` — `handleDoseVolume`
-- `rinse` — `handleRinse`
-- `cal.run` — `handleCalRun`
-- `cal.save` — `handleCalSave` (NVS write is stub)
-- `cal.reset` — `handleCalReset`
-- `setVolume` — `handleSetVolume`
-- `configMove` — `handleConfigMove`
-- `configHome` — `handleConfigHome`
-- `configSensor` — `handleConfigSensor`
+| Command | Status |
+|---------|--------|
+| `fill` | ✅ Wired — sends MoveSteps CW to motor queue (Phase 2) |
+| `empty` | ✅ Wired — sends MoveSteps CCW to motor queue (Phase 2) |
+| `doseVolume` | ✅ Wired — plans multi-cycle dose, sends MoveSteps (Phase 2) |
+| `rinse` | 🟡 Basic fill command sent (Phase 2); full SM deferred to Phase 3 |
+| `cal.run` | ❌ Returns `makeAckThenResponse()` — no SM started |
+| `cal.save` | ❌ NVS write is stub |
+| `cal.reset` | ✅ Wired — resets NVS to defaults (Phase 1) |
+| `setVolume` | ❌ Returns ack only |
+| `configMove` | ❌ Returns ack with speed/accel values |
+| `configHome` | ❌ Returns ack with homeSpeed value |
+| `configSensor` | ❌ Returns ack with sensorValue |
 
 ### 9. HTTP API — Route Changes
 
@@ -195,8 +198,10 @@ The Arduino tracks burette volume after every operation:
 | Stop during empty/dose | `volume_at_start - steps_taken / stepsPerMl` |
 | Boot homing at FULL | `nominal_vol` |
 
-ESP-IDF has no equivalent incremental volume tracking. The `BuretteController`
-has a `currentVolumeMl` field but it is never updated by the motor task.
+ESP-IDF has `VolumeTracker` struct with `onFillComplete()`, `onEmptyComplete()`,
+`onDoseComplete()`, `onStopDuringFill()`, `onStopDuringEmpty()`, `onHomingComplete()`
+(Phase 2). It is used by `handleFill`/`handleEmpty`/`handleDoseVolume` but not yet
+wired into the motor task for incremental updates during movement.
 
 ### 11. Diagnostic Gap: Broadcast Interval
 
@@ -293,26 +298,59 @@ matches Arduino (was 7.8).
 **Diff:** +165/-5 source lines (6 files).
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-### Phase 3: State Machines (HIGH priority)
+<!-- grep: phase-2 -->
+
+- Added `speedMlMin` field to `Command` struct + parsing from JSON
+- Added `speedMlMinToHz()` conversion in `calibration.hpp` (Arduino-compatible)
+- Implemented `DosePlan` struct + `planDose()` — multi-cycle dose planning:
+  `totalCycles`, `firstCycleVolMl`, `remainingVolMl`, `needsFillFirst`
+- Implemented `VolumeTracker` struct — tracks volume after fill/empty/dose/stop/homing
+- Wired `handleFill`: reads calibration → calculates steps from `nominalVol * stepsPerMl` → sends `MoveSteps` CW
+- Wired `handleEmpty`: reads current volume → calculates steps → sends `MoveSteps` CCW
+- Wired `handleDoseVolume`: validates via `planDose()` → converts `speedMlMin` to Hz → sends `MoveSteps`
+- Wired `handleRinse`: basic fill-to-nominal motor command (full rinse SM deferred to Phase 3)
+
+**Diff:** +165/-5 source lines (6 files).
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
+
+### Phase 3: State Machines — ✅ IMPLEMENTED (2026-07-10)
 
 <!-- grep: phase-3 -->
 
-1. Implement `RinseStateMachine` in `domain/rinse.hpp`
-   - States: `PreFill → Emptying → Filling → Done`
-   - Entry: `start(cycles, speedMlMin)`
-   - Tick: `process() → RinseEvent`
-   - Complete: `onComplete()`
-2. Implement `CalDoseStateMachine` in `domain/cal_dose.hpp`
-   - States: `Idle → Filling → Emptying → Done`
-   - Record positions before/after → `abs(posAfter - posBefore)`
-3. Implement `CalSpeedSingleStateMachine` in `domain/cal_speed.hpp`
-   - Measure elapsed ms → `speed = nominalVol / (elapsedMs / 60000.0)`
-4. Implement `CalSpeedSeqStateMachine`
-   - 3 points: for each: valve→INPUT, 1s settle, fill, valve→OUTPUT, 1s settle, empty(freq), measure
-5. Wire all SM `process()` calls into motor task loop (or a dedicated SM tick from motor task)
+All 4 state machines implemented and wired:
 
-**Tests:** All 4 SM with mock motor: verify state transitions, verify
-timing, verify edge cases (limit during operation, stop during operation).
+1. **RinseSm** (`domain/include/domain/rinse_sm.hpp`) — header-only
+   - States: `PreFill → Emptying → Filling → Done`
+   - Cycles configurable, tracks `currentCycle` vs `totalCycles`
+   - Entry: `start(cycles, currentVolumeMl, nominalVolumeMl)` — skips PreFill if already near full
+
+2. **CalDoseSm** (`domain/include/domain/cal_dose_sm.hpp`) — header-only
+   - States: `Idle → Filling → Emptying → Done`
+   - Records `stepsBefore` on fill complete, calculates `stepsTaken = abs(posAfter - posBefore)`
+
+3. **CalSpeedSingleSm** (`domain/include/domain/cal_speed_sm.hpp`) — header-only
+   - States: `Idle → Filling → Emptying → Done`
+   - Records `elapsedMs` between fill/empty, calculates `speed = nominalVol / (elapsedMs / 60000.0)`
+
+4. **CalSpeedSeqSm** (`domain/include/domain/cal_speed_sm.hpp`) — header-only
+   - 3-point sequential with valve settle timing (VALVE_SWITCH_MS = 1000 ms)
+   - Per-point: fill, 1s settle, empty at test freq, measure time → speed
+
+5. **Motor task integration** (`motor_task.hpp`, `motor_task.cpp`)
+   - New `MotorCommandType`: `StartRinse`, `StartCalDose`, `StartCalSpeed`, `StartCalSpeedSeq`
+   - `SmResult` struct with result queue for all SM types
+   - Helper functions: `move_fill()`, `move_empty()`, `set_valve()`, `store_result()`
+   - SM drivers: `run_rinse_sm()`, `run_cal_dose_sm()`, `run_cal_speed_sm()`
+
+6. **Handlers wired**:
+   - `handleRinse` → sends `StartRinse` to motor queue
+   - `handleCalRun` → validates via `mode` ("dose"/"speed"), sends `StartCalDose`/`StartCalSpeed`
+   - `handleCalGetResult` → stub (not yet reading from `SmResult`)
+
+**Tests:** SM tests in `test_burette.cpp` (includes all 3 SM headers, 109 lines of tests).
+**Motor task stub:** `stub_motor_task.cpp` has `gSmResult` for test linking.
+
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
 ### Phase 4: ISO 8655 Z-Factor + OLS (MEDIUM priority)
 

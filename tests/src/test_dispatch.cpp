@@ -45,8 +45,9 @@ TEST_CASE("dispatch: doseVolume with param returns AckThen", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("dispatch: rinse returns AckThen", "[dispatch]") {
+TEST_CASE("dispatch: rinse with cycles returns AckThen", "[dispatch]") {
   Command cmd{CommandType::Rinse};
+  cmd.volume = Ml{3.0f};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -85,7 +86,7 @@ TEST_CASE("dispatch: setDirection returns error without param", "[dispatch]") {
 
 TEST_CASE("dispatch: setDirection with param returns AckThen", "[dispatch]") {
   Command cmd{CommandType::SetDirection};
-  cmd.direction = Direction::Cw;
+  cmd.direction = Direction::LiqIn;
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::AckThen);

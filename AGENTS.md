@@ -132,15 +132,14 @@ Rationale: Every past crash was detectible pre-mortem by a diagnostic event.
 ### GR-10: ONLY THE USER ASSESSES PHYSICAL STATE
 
 The AI agent MUST NEVER make claims about physical-world observations
-(LED color, motor movement, relay clicks, sensor readings, device
-visibility on scanners, or any other observable phenomenon). Only the
+(LED color, motor movement, relay clicks, limit swithes being pressed, device
+visibility on mobile phone scanners, or any other observable phenomenon). Only the
 user can see, hear, or otherwise perceive hardware behavior.
 
 **Forbidden:**
-- "LED turned green" (you didn't see it — the user did)
-- "Device appears in scan" (you don't have a BLE scanner)
-- "Motor moved successfully" (you can't observe it)
-- "The board is powered on" (you don't know)
+- "LED turned green"
+- "Motor moved successfully"
+- "The limit switch has been pressed", etc.
 
 **Required:**
 - Present raw data (serial logs, script output, terminal text)
@@ -164,7 +163,7 @@ The authoritative header source for ESP-IDF v6 (dev branch). Verify function
 signatures, struct definitions, enum values, and header locations here.
 Online docs may be out of date or mismatch the local build.
 
-**Secondary — `/home/vlabe/Downloads/legacy/arduino`:**
+**Secondary — `/legacy/arduino`:**
 Legacy Arduino-based firmware — **SOURCE OF BUSINESS LOGIC ONLY** (dosing
 algorithms and math, calibration formulas). Study when porting algorithms
 or maintaining compatibility with existing protocol expectations. Do NOT copy

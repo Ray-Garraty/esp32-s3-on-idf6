@@ -14,6 +14,10 @@
 #include "infrastructure/drivers/limitswitch.hpp"
 #include "domain/types.hpp"
 #include "domain/errors.hpp"
+#include "domain/calibration.hpp"
+#include "domain/rinse_sm.hpp"
+#include "domain/cal_dose_sm.hpp"
+#include "domain/cal_speed_sm.hpp"
 #include "diag/ffi_guard.hpp"
 #include "diag/stack_monitor.hpp"
 #include "diag/state_tracer.hpp"
@@ -23,6 +27,7 @@ static constexpr auto TAG = "motor_task";
 namespace ecotiter::infrastructure {
 
 QueueHandle_t gMotorCmdQueue = nullptr;
+SmResult gSmResult{SmResult::Type::None, 0, 0.0f, {}, 0};
 
 namespace {
 
@@ -30,16 +35,19 @@ using drivers::StepperMotor;
 using drivers::LimitSwitch;
 using domain::Direction;
 using domain::BuretteState;
+using domain::ValvePosition;
 
 static constexpr size_t INTERVAL_CHUNK = 128;
 static constexpr uint32_t HOME_SPEED_HZ = 1500;
 static constexpr uint32_t HOME_INTERVAL_US = 1'000'000 / HOME_SPEED_HZ;
 static constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
 
+static domain::sm::RinseSm s_rinseSm;
+static domain::sm::CalDoseSm s_calDoseSm;
+static domain::sm::CalSpeedSingleSm s_calSpeedSm;
+static domain::sm::CalSpeedSeqSm s_calSpeedSeqSm;
+
 void assert_rmt_preconditions() {
-    // Check that RMT driver is initialized and GPIO pins are valid
-    // In ESP-IDF v6, RMT is initialized on first use
-    // CONTRACT: call before any RMT transmit operation
 }
 
 const char* buretteStateName(BuretteState s) {
@@ -56,6 +64,236 @@ const char* buretteStateName(BuretteState s) {
     return "unknown";
 }
 
+void set_valve(ValvePosition pos) {
+    gpio_set_level(config::PIN_VALVE, (pos == ValvePosition::Output) ? 1 : 0);
+    domain::gValvePosition.store(pos, std::memory_order_release);
+}
+
+uint32_t ml_min_to_hz(float speedMlMin) {
+    float speedCoeff = domain::CalibrationData::kDefaultSpeedCoeff;
+    uint16_t minFreq = domain::CalibrationData::kDefaultMinFreqHz;
+    uint16_t maxFreq = domain::CalibrationData::kDefaultMaxFreqHz;
+    auto hz = domain::speedMlMinToHz(domain::MlMin{speedMlMin},
+        {domain::CalibrationData::kDefaultStepsPerMl, 50.0f,
+         speedCoeff, minFreq, maxFreq});
+    return hz.value;
+}
+
+void move_to_endstop(StepperMotor& stepper, Direction dir,
+                     uint32_t speedHz, std::atomic<bool>& stopFlag) {
+    gpio_set_level(config::PIN_DIR, (dir == Direction::LiqIn) ? 1 : 0);
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    uint32_t intervalUs = 1'000'000 / speedHz;
+    uint32_t intervals[INTERVAL_CHUNK];
+    for (auto& i : intervals) i = intervalUs;
+
+    stopFlag.store(false, std::memory_order_release);
+
+    while (true) {
+        assert_rmt_preconditions();
+
+        if (stopFlag.load(std::memory_order_acquire)) break;
+
+        auto result = stepper.moveStepsIntervals(
+            {intervals, INTERVAL_CHUNK}, &stopFlag);
+        if (!result) {
+            if (result.error() == domain::StepperError::LimitSwitchTriggered) break;
+            ESP_LOGE(TAG, "move_to_endstop error: %d",
+                     static_cast<int>(result.error()));
+            break;
+        }
+    }
+    std::ignore = stepper.emergencyStop();
+    std::ignore = stepper.enable();
+}
+
+void move_fill(StepperMotor& stepper, uint32_t speedHz) {
+    ESP_LOGI(TAG, "fill: valve=INPUT, dir=LIQ_IN");
+    set_valve(ValvePosition::Input);
+    domain::gBuretteState.store(BuretteState::Filling, std::memory_order_release);
+    move_to_endstop(stepper, Direction::LiqIn, speedHz, domain::gStopFull);
+}
+
+void move_empty(StepperMotor& stepper, uint32_t speedHz) {
+    ESP_LOGI(TAG, "empty: valve=OUTPUT, dir=LIQ_OUT");
+    set_valve(ValvePosition::Output);
+    domain::gBuretteState.store(BuretteState::Emptying, std::memory_order_release);
+    move_to_endstop(stepper, Direction::LiqOut, speedHz, domain::gStopEmpty);
+}
+
+void store_result(SmResult::Type type, int32_t stepsTaken = 0,
+                  float measuredSpeed = 0.0f,
+                  const float* results = nullptr, int resultCount = 0) {
+    gSmResult.type = type;
+    gSmResult.stepsTaken = stepsTaken;
+    gSmResult.measuredSpeedMlMin = measuredSpeed;
+    gSmResult.resultCount = resultCount;
+    for (int i = 0; i < resultCount && i < 3; i++) {
+        gSmResult.results[i] = results[i];
+    }
+    domain::gBuretteState.store(BuretteState::Idle, std::memory_order_release);
+}
+
+void run_rinse_sm(StepperMotor& stepper,
+                  float speedMlMin, uint8_t cycles,
+                  float currentVolumeMl, float nominalVolumeMl) {
+    s_rinseSm.start(cycles, currentVolumeMl, nominalVolumeMl);
+
+    uint32_t speedHz = ml_min_to_hz(speedMlMin);
+
+    if (s_rinseSm.phase == domain::sm::RinseSm::Phase::PreFill) {
+        ESP_LOGI(TAG, "rinse: initial fill");
+        move_fill(stepper, speedHz);
+    }
+
+    while (!s_rinseSm.isComplete()) {
+        auto action = s_rinseSm.onMotorComplete(
+            domain::gVolumeMl.load(std::memory_order_acquire),
+            nominalVolumeMl);
+
+        switch (action) {
+            case domain::sm::RinseAction::FillToLimit:
+                ESP_LOGI(TAG, "rinse: fill (cycle %u/%u)",
+                         s_rinseSm.currentCycle, s_rinseSm.totalCycles);
+                move_fill(stepper, speedHz);
+                break;
+            case domain::sm::RinseAction::EmptyToLimit:
+                ESP_LOGI(TAG, "rinse: empty (cycle %u/%u)",
+                         s_rinseSm.currentCycle, s_rinseSm.totalCycles);
+                move_empty(stepper, speedHz);
+                break;
+            case domain::sm::RinseAction::Complete:
+                ESP_LOGI(TAG, "rinse: complete");
+                store_result(SmResult::Type::RinseComplete);
+                return;
+            case domain::sm::RinseAction::Error:
+                ESP_LOGE(TAG, "rinse: SM error");
+                store_result(SmResult::Type::Error);
+                return;
+        }
+    }
+}
+
+void run_cal_dose_sm(StepperMotor& stepper,
+                     float speedMlMin,
+                     float currentVolumeMl, float nominalVolumeMl) {
+    s_calDoseSm.start();
+    uint32_t speedHz = ml_min_to_hz(speedMlMin);
+
+    auto action = s_calDoseSm.onStart(currentVolumeMl, nominalVolumeMl);
+
+    if (action == domain::sm::CalDoseAction::FillToLimit) {
+        ESP_LOGI(TAG, "cal_dose: fill");
+        move_fill(stepper, speedHz);
+        action = s_calDoseSm.onFillComplete(
+            stepper.position().value);
+    }
+
+    if (action == domain::sm::CalDoseAction::EmptyToLimit) {
+        ESP_LOGI(TAG, "cal_dose: empty");
+        move_empty(stepper, speedHz);
+        action = s_calDoseSm.onEmptyComplete(
+            stepper.position().value);
+    }
+
+    if (action == domain::sm::CalDoseAction::Complete) {
+        ESP_LOGI(TAG, "cal_dose: complete, steps=%ld",
+                 static_cast<long>(s_calDoseSm.stepsTaken));
+        store_result(SmResult::Type::CalDoseComplete,
+                     s_calDoseSm.stepsTaken);
+    } else {
+        store_result(SmResult::Type::Error);
+    }
+}
+
+void run_cal_speed_sm(StepperMotor& stepper,
+                      float speedMlMin, uint16_t testFreqHz,
+                      float currentVolumeMl, float nominalVolumeMl) {
+    s_calSpeedSm.start();
+    uint32_t speedHz = ml_min_to_hz(speedMlMin);
+
+    auto action = s_calSpeedSm.onStart(currentVolumeMl, nominalVolumeMl);
+
+    if (action == domain::sm::CalSpeedAction::FillToLimit) {
+        ESP_LOGI(TAG, "cal_speed: fill");
+        move_fill(stepper, speedHz);
+        auto now = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        action = s_calSpeedSm.onFillComplete(now);
+    }
+
+    if (action == domain::sm::CalSpeedAction::EmptyToLimit) {
+        uint32_t hz = testFreqHz;
+        if (hz < ml_min_to_hz(15.0f)) hz = ml_min_to_hz(15.0f);
+        ESP_LOGI(TAG, "cal_speed: empty at %lu Hz",
+                 static_cast<unsigned long>(hz));
+        move_empty(stepper, hz);
+        auto now = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        action = s_calSpeedSm.onEmptyComplete(now, nominalVolumeMl);
+    }
+
+    if (action == domain::sm::CalSpeedAction::Complete) {
+        ESP_LOGI(TAG, "cal_speed: complete, speed=%.2f ml/min",
+                 static_cast<double>(s_calSpeedSm.measuredSpeedMlMin));
+        store_result(SmResult::Type::CalSpeedComplete,
+                     0, s_calSpeedSm.measuredSpeedMlMin);
+    } else {
+        store_result(SmResult::Type::Error);
+    }
+}
+
+void run_cal_speed_seq_sm(StepperMotor& stepper,
+                          const uint16_t freqs[3],
+                          float fillSpeedMlMin,
+                          float currentVolumeMl, float nominalVolumeMl) {
+    s_calSpeedSeqSm.start(freqs);
+    uint32_t fillHz = ml_min_to_hz(fillSpeedMlMin);
+
+    if (currentVolumeMl >= nominalVolumeMl - 0.1f) {
+        s_calSpeedSeqSm.firstEver = false;
+    }
+
+    while (!s_calSpeedSeqSm.isComplete()) {
+        auto now = static_cast<uint32_t>(
+            xTaskGetTickCount() * portTICK_PERIOD_MS);
+        auto action = s_calSpeedSeqSm.onTick(now);
+
+        switch (action) {
+            case domain::sm::CalSpeedAction::FillToLimit:
+                ESP_LOGI(TAG, "cal_speed_seq: fill (point %d/3)",
+                         s_calSpeedSeqSm.seqIdx + 1);
+                move_fill(stepper, fillHz);
+                break;
+
+            case domain::sm::CalSpeedAction::EmptyToLimit: {
+                int idx = s_calSpeedSeqSm.seqIdx;
+                uint16_t f = s_calSpeedSeqSm.freqs[idx];
+                ESP_LOGI(TAG, "cal_speed_seq: empty at %u Hz (point %d/3)",
+                         static_cast<unsigned>(f), idx + 1);
+                move_empty(stepper, f);
+                break;
+            }
+
+            case domain::sm::CalSpeedAction::SettleValve:
+                vTaskDelay(pdMS_TO_TICKS(50));
+                break;
+
+            case domain::sm::CalSpeedAction::Complete:
+                ESP_LOGI(TAG, "cal_speed_seq: complete");
+                store_result(SmResult::Type::CalSpeedSeqComplete,
+                             0, 0.0f,
+                             s_calSpeedSeqSm.results,
+                             s_calSpeedSeqSm.seqIdx);
+                return;
+
+            case domain::sm::CalSpeedAction::Error:
+                ESP_LOGE(TAG, "cal_speed_seq: SM error");
+                store_result(SmResult::Type::Error);
+                return;
+        }
+    }
+}
+
 void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     puts("DBG: run_homing START"); fflush(stdout);
 
@@ -68,10 +306,8 @@ void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     diag::StateTracer::logBuretteTransition(
         buretteStateName(oldState), "homing");
 
-    // Move toward FULL limit switch (CW = LiqIn)
     gpio_set_level(config::PIN_DIR, 1);
 
-    // Clear any stale FULL limit flag
     fullSwitch.clear();
     domain::gStopFull.store(false, std::memory_order_release);
 
@@ -152,7 +388,7 @@ void execute_move_steps(StepperMotor& stepper, int32_t steps) {
     if (steps <= 0) return;
 
     auto dir = domain::gDirection.load(std::memory_order_acquire);
-    gpio_set_level(config::PIN_DIR, (dir == Direction::Cw) ? 1 : 0);
+    gpio_set_level(config::PIN_DIR, (dir == Direction::LiqIn) ? 1 : 0);
     vTaskDelay(pdMS_TO_TICKS(1));
 
     auto speed = domain::gSpeed.load(std::memory_order_acquire);
@@ -211,7 +447,6 @@ extern "C" void motorTaskEntry(void* pvParameters) {
 
     diag::StackMonitor::instance().registerThread("motor", domain::MOTOR_THREAD_STACK);
 
-    // Fix 2: DRAM pre-check before queue allocation
     {
         auto largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
         ESP_LOGI(TAG, "motor task DRAM before queue: largest_free=%lu",
@@ -230,35 +465,32 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     }
     puts("DBG: motor queue created"); fflush(stdout);
 
-    // Fix 1: GPIO spinlock deadlock prevention
-    // LL-031: PHY calibration holds gpio_spinlock for 10-200ms after BT init.
-    // The main loop waited 1000ms before creating this task, but there's still
-    // a small chance the motor task starts running before PHY completes.
-    // Additionally, the FIRST gpio_config (in StepperMotor ctor) may retrigger
-    // a short PHY window. We insert a safety delay before the next GPIO.
-    puts("DBG: before StepperMotor ctor (gpio 21,26,27)"); fflush(stdout);
+    gpio_set_direction(config::PIN_VALVE, GPIO_MODE_OUTPUT);
+    gpio_set_level(config::PIN_VALVE, 0);
+    puts("DBG: valve GPIO initialized"); fflush(stdout);
+
+    puts("DBG: before StepperMotor ctor (gpio 21,5,27)"); fflush(stdout);
     StepperMotor stepper(config::PIN_STEP, config::PIN_DIR, config::PIN_EN);
     puts("DBG: after StepperMotor ctor"); fflush(stdout);
 
-    puts("DBG: before LimitSwitch homeSwitch ctor (gpio 35)"); fflush(stdout);
-    LimitSwitch homeSwitch(config::PIN_LIMIT_HOME,
-                           domain::gStopHome, false);
-    puts("DBG: after LimitSwitch homeSwitch ctor"); fflush(stdout);
+    puts("DBG: before LimitSwitch emptySwitch ctor (gpio 15)"); fflush(stdout);
+    LimitSwitch emptySwitch(config::PIN_LIMIT_EMPTY,
+                            domain::gStopEmpty, false);
+    puts("DBG: after LimitSwitch emptySwitch ctor"); fflush(stdout);
 
-    // Safety delay between GPIO configs. The StepperMotor ctor's gpio_config
-    // may briefly re-trigger PHY calibration activity. This delay gives
-    // gpio_spinlock time to settle before the next gpio_config (LL-031 belt).
     puts("DBG: PHY inter-GPIO safety delay start"); fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(500));
     puts("DBG: PHY inter-GPIO safety delay done"); fflush(stdout);
 
-    puts("DBG: before LimitSwitch fullSwitch ctor (gpio 34)"); fflush(stdout);
+    puts("DBG: before LimitSwitch fullSwitch ctor (gpio 7)"); fflush(stdout);
     LimitSwitch fullSwitch(config::PIN_LIMIT_FULL,
                            domain::gStopFull, false);
     puts("DBG: after LimitSwitch fullSwitch ctor"); fflush(stdout);
 
     puts("DBG: before run_homing"); fflush(stdout);
     run_homing(stepper, fullSwitch);
+
+    gSmResult = {SmResult::Type::None, 0, 0.0f, {}, 0};
 
     MotorCommand cmd;
     while (true) {
@@ -284,7 +516,7 @@ extern "C" void motorTaskEntry(void* pvParameters) {
             case MotorCommandType::EmergencyStop: {
                 ESP_LOGW(TAG, "EMERGENCY STOP");
                 domain::gStopFull.store(true, std::memory_order_release);
-                domain::gStopHome.store(true, std::memory_order_release);
+                domain::gStopEmpty.store(true, std::memory_order_release);
                 domain::gBuretteState.store(BuretteState::Error,
                                             std::memory_order_release);
                 diag::StateTracer::logBuretteTransition(
@@ -295,14 +527,14 @@ extern "C" void motorTaskEntry(void* pvParameters) {
             }
 
             case MotorCommandType::Home:
-                run_homing(stepper, homeSwitch);
+                run_homing(stepper, emptySwitch);
                 break;
 
             case MotorCommandType::SetDirection: {
                 auto dir = cmd.direction;
                 domain::gDirection.store(dir, std::memory_order_release);
                 gpio_set_level(config::PIN_DIR,
-                               (dir == Direction::Cw) ? 1 : 0);
+                                (dir == Direction::LiqIn) ? 1 : 0);
                 break;
             }
 
@@ -316,6 +548,58 @@ extern "C" void motorTaskEntry(void* pvParameters) {
             case MotorCommandType::SetAccel:
                 domain::gAccel.store(cmd.accelHzPerS, std::memory_order_release);
                 break;
+
+            case MotorCommandType::StartRinse: {
+                auto p = cmd.startRinse;
+                ESP_LOGI(TAG, "StartRinse: %u cycles", p.cycles);
+                domain::gBuretteState.store(BuretteState::Rinsing,
+                                            std::memory_order_release);
+                auto cal = domain::CalibrationData{};
+                float nominalVol = cal.nominalVolumeMl;
+                float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
+                run_rinse_sm(stepper, p.speedMlMin, p.cycles, curVol, nominalVol);
+                break;
+            }
+
+            case MotorCommandType::StartCalDose: {
+                auto p = cmd.startCalDose;
+                ESP_LOGI(TAG, "StartCalDose");
+                domain::gBuretteState.store(BuretteState::Dosing,
+                                            std::memory_order_release);
+                auto cal = domain::CalibrationData{};
+                float nominalVol = cal.nominalVolumeMl;
+                float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
+                run_cal_dose_sm(stepper, p.speedMlMin, curVol, nominalVol);
+                break;
+            }
+
+            case MotorCommandType::StartCalSpeed: {
+                auto p = cmd.startCalSpeed;
+                ESP_LOGI(TAG, "StartCalSpeed: freq=%u Hz",
+                         static_cast<unsigned>(p.testFreqHz));
+                domain::gBuretteState.store(BuretteState::Dosing,
+                                            std::memory_order_release);
+                auto cal = domain::CalibrationData{};
+                float nominalVol = cal.nominalVolumeMl;
+                float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
+                run_cal_speed_sm(stepper, p.speedMlMin, p.testFreqHz,
+                                 curVol, nominalVol);
+                break;
+            }
+
+            case MotorCommandType::StartCalSpeedSeq: {
+                auto p = cmd.startCalSpeedSeq;
+                ESP_LOGI(TAG, "StartCalSpeedSeq");
+                domain::gBuretteState.store(BuretteState::Dosing,
+                                            std::memory_order_release);
+                auto cal = domain::CalibrationData{};
+                float nominalVol = cal.nominalVolumeMl;
+                float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
+                run_cal_speed_seq_sm(stepper, p.freqs, p.fillSpeedMlMin,
+                                     curVol, nominalVol);
+                break;
+            }
+
             }
         }
     }

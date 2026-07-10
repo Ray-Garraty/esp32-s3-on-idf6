@@ -32,11 +32,11 @@ struct MlMin {
     constexpr auto operator<=>(const MlMin&) const = default;
 };
 
-enum class Direction : uint8_t { Cw, Ccw };
+enum class Direction : uint8_t { LiqIn, LiqOut };
 
 enum class ValvePosition : uint8_t { Input, Output };
 enum class TransportMode : uint8_t { UsbActive, BleAdvertising, BleConnected };
-enum class LimitSwitchId : uint8_t { Full, Home };
+enum class LimitSwitchId : uint8_t { Full, Empty };
 
 enum class BuretteState : uint8_t {
     Idle,
@@ -67,18 +67,23 @@ inline constexpr size_t TEMP_THREAD_STACK = 16384;
 inline constexpr size_t BLE_NOTIFY_STACK = 8192;
 inline constexpr size_t HTTP_SERVER_STACK = 12288;
 
+// Default runtime values
+inline constexpr uint32_t DEFAULT_SPEED_HZ = 1000;
+inline constexpr uint32_t DEFAULT_ACCEL_HZ_PER_S = 500;
+inline constexpr float    DEFAULT_VOLUME_ML = 50.0f;
+
 // Global hardware state atoms — published state for broadcasts and handlers
 // (infrastructure layer owns the raw hardware globals in a different namespace)
 inline std::atomic<int32_t> gTempCX100{-99999};
 inline std::atomic<uint16_t> gLastMv{0};
 inline std::atomic<ValvePosition> gValvePosition{ValvePosition::Input};
 inline std::atomic<BuretteState> gBuretteState{BuretteState::Idle};
-inline std::atomic<Direction> gDirection{Direction::Cw};
-inline std::atomic<uint32_t> gSpeed{1000};
-inline std::atomic<uint32_t> gAccel{500};
-inline std::atomic<float> gVolumeMl{50.0f};
+inline std::atomic<Direction> gDirection{Direction::LiqIn};
+inline std::atomic<uint32_t> gSpeed{DEFAULT_SPEED_HZ};
+inline std::atomic<uint32_t> gAccel{DEFAULT_ACCEL_HZ_PER_S};
+inline std::atomic<float> gVolumeMl{DEFAULT_VOLUME_ML};
 inline std::atomic<bool> gStopFull{false};
-inline std::atomic<bool> gStopHome{false};
+inline std::atomic<bool> gStopEmpty{false};
 inline std::atomic<uint32_t> gDispensedSteps{0};
 inline std::atomic<bool>     gUsbHandshakeReceived{false};
 inline std::atomic<bool>     gBleError{false};

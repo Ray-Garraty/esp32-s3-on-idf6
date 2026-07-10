@@ -11,7 +11,7 @@
 namespace ecotiter::infrastructure::drivers {
 
 inline std::atomic<bool> gStopFull{false};
-inline std::atomic<bool> gStopHome{false};
+inline std::atomic<bool> gStopEmpty{false};
 
 class LimitSwitch {
 public:

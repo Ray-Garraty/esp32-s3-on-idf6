@@ -31,20 +31,20 @@ TEST_CASE("parseCommand: doseVolume with volume", "[command]") {
   REQUIRE(approx(cmd->volume->value, 10.5f));
 }
 
-TEST_CASE("parseCommand: setDirection cw", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"setDirection","direction":"cw"})");
+TEST_CASE("parseCommand: setDirection liq_in", "[command]") {
+  auto cmd = parseCommand(R"({"cmd":"setDirection","direction":"liq_in"})");
   REQUIRE(cmd);
   REQUIRE(cmd->type == CommandType::SetDirection);
   REQUIRE(cmd->direction.has_value());
-  REQUIRE(*cmd->direction == Direction::Cw);
+  REQUIRE(*cmd->direction == Direction::LiqIn);
 }
 
-TEST_CASE("parseCommand: setDirection ccw", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"setDirection","direction":"ccw"})");
+TEST_CASE("parseCommand: setDirection liq_out", "[command]") {
+  auto cmd = parseCommand(R"({"cmd":"setDirection","direction":"liq_out"})");
   REQUIRE(cmd);
   REQUIRE(cmd->type == CommandType::SetDirection);
   REQUIRE(cmd->direction.has_value());
-  REQUIRE(*cmd->direction == Direction::Ccw);
+  REQUIRE(*cmd->direction == Direction::LiqOut);
 }
 
 TEST_CASE("parseCommand: moveSteps", "[command]") {

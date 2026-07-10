@@ -67,8 +67,8 @@ constexpr CommandType lookupCmdType(std::string_view name) {
   auto it = j.find(key);
   if (it == j.end() || !it->is_string()) return std::nullopt;
   auto s = it->get<std::string>();
-  if (s == "cw") return domain::Direction::Cw;
-  if (s == "ccw") return domain::Direction::Ccw;
+  if (s == "liq_in") return domain::Direction::LiqIn;
+  if (s == "liq_out") return domain::Direction::LiqOut;
   return std::nullopt;
 }
 
@@ -156,6 +156,19 @@ std::expected<Command, domain::ProtocolError> parseCommand(
   auto sgOpt = readU32("threshold");
   if (sgOpt) {
     cmd.sgThreshold = static_cast<uint8_t>(*sgOpt & 0xFF);
+  }
+
+  {
+    auto it = j.find("mode");
+    if (it != j.end() && it->is_string()) {
+      cmd.mode = it->get<std::string>();
+    }
+  }
+  {
+    auto it = j.find("freq_hz");
+    if (it != j.end() && it->is_number()) {
+      cmd.freqHz = static_cast<float>(it->get<double>());
+    }
   }
 
   return cmd;
@@ -271,7 +284,7 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
   }
 
   const char* valveStr = (valvePos == domain::ValvePosition::Input) ? "input" : "output";
-  const char* dirStr = (dir == domain::Direction::Cw) ? "cw" : "ccw";
+  const char* dirStr = (dir == domain::Direction::LiqIn) ? "liq_in" : "liq_out";
 
   float tempC = (tempCX100 > -99999)
       ? static_cast<float>(tempCX100) / 100.0f

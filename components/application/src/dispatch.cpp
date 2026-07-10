@@ -37,7 +37,9 @@ std::expected<CommandResponse, domain::AppError> dispatch(
     case CommandType::DoseVolume:
       return burette_ops::handleDoseVolume(cmd.volume, cmd.speedMlMin);
     case CommandType::Rinse:
-      return burette_ops::handleRinse();
+      return burette_ops::handleRinse(
+          cmd.volume ? std::optional<uint32_t>{
+              static_cast<uint32_t>(cmd.volume->value)} : std::nullopt);
     case CommandType::Stop:
       return burette_ops::handleStop();
     case CommandType::EmergencyStop:
@@ -47,7 +49,8 @@ std::expected<CommandResponse, domain::AppError> dispatch(
       return burette_ops::handleGetStatus(
           domain::BuretteState::Idle, 0,
           domain::ValvePosition::Input, 0.0f,
-          domain::Direction::Cw, 1000, 500, 50.0f);
+          domain::Direction::LiqIn, domain::DEFAULT_SPEED_HZ,
+          domain::DEFAULT_ACCEL_HZ_PER_S, domain::DEFAULT_VOLUME_ML);
     case CommandType::MoveSteps:
       return burette_ops::handleMoveSteps(cmd.steps);
     case CommandType::SetDirection:
@@ -80,7 +83,10 @@ std::expected<CommandResponse, domain::AppError> dispatch(
     case CommandType::CalReset:
       return burette_cal::handleResetCalibration(writeCal);
     case CommandType::CalRun:
-      return burette_cal::handleRunCalibration();
+      return burette_ops::handleCalRun(
+          cmd.mode ? std::optional<std::string_view>{*cmd.mode} : std::nullopt,
+          cmd.freqHz,
+          cmd.speedMlMin);
     case CommandType::CalGetResult:
       return burette_cal::handleGetCalResult(readCal);
 
@@ -107,7 +113,8 @@ std::expected<CommandResponse, domain::AppError> dispatch(
       return system::handleGetStatus(
           domain::BuretteState::Idle, 0,
           domain::ValvePosition::Input, 0.0f,
-          domain::Direction::Cw, 1000, 500, 50.0f);
+          domain::Direction::LiqIn, domain::DEFAULT_SPEED_HZ,
+          domain::DEFAULT_ACCEL_HZ_PER_S, domain::DEFAULT_VOLUME_ML);
     case CommandType::SystemGetFormattedLogs:
       return system::handleGetFormattedLogs();
     case CommandType::SystemReadLog:

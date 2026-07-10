@@ -6,6 +6,7 @@
 
 #include "application/command.hpp"
 #include "domain/calibration.hpp"
+#include "domain/cal_run_planner.hpp"
 #include "domain/memory.hpp"
 #include "domain/types.hpp"
 #include "infrastructure/motor_task.hpp"
@@ -55,12 +56,12 @@ std::expected<CommandResponse, domain::AppError> handleFill() {
   if (!cal) return makeErrorResponse("calibration not available");
 
   int32_t steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
-  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
+  domain::gDirection.store(domain::Direction::LiqIn, std::memory_order_release);
 
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::MoveSteps;
   cmd.steps = steps;
-  cmd.direction = domain::Direction::Cw;
+  cmd.direction = domain::Direction::LiqIn;
   cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
   cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
   sendMotorCommand(std::move(cmd));
@@ -76,12 +77,12 @@ std::expected<CommandResponse, domain::AppError> handleEmpty() {
   float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
   int32_t steps = static_cast<int32_t>(curVol * cal->stepsPerMl + 0.5f);
   if (steps < 10) steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
-  domain::gDirection.store(domain::Direction::Ccw, std::memory_order_release);
+  domain::gDirection.store(domain::Direction::LiqOut, std::memory_order_release);
 
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::MoveSteps;
   cmd.steps = steps;
-  cmd.direction = domain::Direction::Ccw;
+  cmd.direction = domain::Direction::LiqOut;
   cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
   cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
   sendMotorCommand(std::move(cmd));
@@ -111,12 +112,12 @@ std::expected<CommandResponse, domain::AppError> handleDoseVolume(
   domain::gBuretteState.store(domain::BuretteState::Dosing, std::memory_order_release);
 
   int32_t steps = static_cast<int32_t>(plan.firstCycleVolMl * cal->stepsPerMl + 0.5f);
-  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
+  domain::gDirection.store(domain::Direction::LiqIn, std::memory_order_release);
 
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::MoveSteps;
   cmd.steps = steps;
-  cmd.direction = domain::Direction::Cw;
+  cmd.direction = domain::Direction::LiqIn;
   cmd.speedHz = speedHz;
   cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
   sendMotorCommand(std::move(cmd));
@@ -126,22 +127,79 @@ std::expected<CommandResponse, domain::AppError> handleDoseVolume(
 
 std::expected<CommandResponse, domain::AppError> handleRinse(
     std::optional<uint32_t> cycles) {
-  (void)cycles;
+  if (!cycles || *cycles == 0) {
+    return makeErrorResponse("rinse requires 'cycles' param > 0");
+  }
   auto cal = infrastructure::storage::calibrationRead();
   if (!cal) return makeErrorResponse("calibration not available");
 
   domain::gBuretteState.store(domain::BuretteState::Rinsing, std::memory_order_release);
 
-  int32_t steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
-  domain::gDirection.store(domain::Direction::Cw, std::memory_order_release);
-
   infrastructure::MotorCommand cmd{};
-  cmd.type = infrastructure::MotorCommandType::MoveSteps;
-  cmd.steps = steps;
-  cmd.direction = domain::Direction::Cw;
-  cmd.speedHz = domain::gSpeed.load(std::memory_order_acquire);
-  cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
+  cmd.type = infrastructure::MotorCommandType::StartRinse;
+  cmd.startRinse.cycles = static_cast<uint8_t>(*cycles);
+  cmd.startRinse.speedMlMin = 50.0f;
   sendMotorCommand(std::move(cmd));
+  return makeAckThenResponse();
+}
+
+std::expected<CommandResponse, domain::AppError> handleCalRun(
+    std::optional<std::string_view> mode,
+    std::optional<float> freqHz,
+    std::optional<float> speedMlMin) {
+  if (!mode) {
+    return makeErrorResponse("cal.run requires 'mode' param (dose|speed)");
+  }
+
+  auto cal = infrastructure::storage::calibrationRead();
+  if (!cal) return makeErrorResponse("calibration not available");
+
+  auto state = domain::gBuretteState.load(std::memory_order_acquire);
+  bool isBusy = (state != domain::BuretteState::Idle);
+
+  uint16_t freq = (freqHz && *freqHz > 0)
+      ? static_cast<uint16_t>(*freqHz + 0.5f) : 0;
+  float speed = speedMlMin.value_or(0.0f);
+
+  char modeBuf[8];
+  modeBuf[0] = '\0';
+  size_t modeLen = mode->size();
+  if (modeLen > sizeof(modeBuf) - 1) modeLen = sizeof(modeBuf) - 1;
+  std::memcpy(modeBuf, mode->data(), modeLen);
+  modeBuf[modeLen] = '\0';
+
+  auto plan = domain::sm::planCalRun(
+      modeBuf, speed, freq, static_cast<float>(cal->maxFreqHz),
+      cal->speedCoeff, isBusy);
+
+  if (plan.action == domain::sm::CalRunAction::Reject) {
+    const char* reason = "invalid_params";
+    if (plan.rejectReason == domain::sm::CalRunRejectReason::BuretteBusy) {
+      reason = "burette_busy";
+    }
+    CommandResponse rsp;
+    rsp.kind = ResponseKind::Single;
+    rsp.bodySize = static_cast<size_t>(
+        std::snprintf(rsp.body.data(), rsp.body.size(),
+                      R"({"cmd":"cal.run","error":"%s"})", reason));
+    return rsp;
+  }
+
+  domain::gBuretteState.store(domain::BuretteState::Dosing, std::memory_order_release);
+
+  if (plan.action == domain::sm::CalRunAction::CalDose) {
+    infrastructure::MotorCommand cmd{};
+    cmd.type = infrastructure::MotorCommandType::StartCalDose;
+    cmd.startCalDose.speedMlMin = plan.speedMlMin;
+    sendMotorCommand(std::move(cmd));
+  } else {
+    infrastructure::MotorCommand cmd{};
+    cmd.type = infrastructure::MotorCommandType::StartCalSpeed;
+    cmd.startCalSpeed.speedMlMin = plan.speedMlMin;
+    cmd.startCalSpeed.testFreqHz = plan.freqHz;
+    sendMotorCommand(std::move(cmd));
+  }
+
   return makeAckThenResponse();
 }
 

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "domain/burette.hpp"
@@ -74,6 +75,8 @@ struct Command {
   std::optional<uint32_t> configMoveAccel;
   std::optional<uint32_t> configHomeSpeed;
   std::optional<uint32_t> configSensorValue;
+  std::optional<std::string> mode;
+  std::optional<float> freqHz;
 };
 
 enum class ResponseKind : uint8_t {
