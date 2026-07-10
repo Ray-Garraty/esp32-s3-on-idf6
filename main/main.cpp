@@ -26,6 +26,7 @@
 #include "infrastructure/network/ble_notify_thread.hpp"
 #include "interface/broadcast.hpp"
 #include "interface/serial.hpp"
+#include "domain/log_buffer.hpp"
 
 static constexpr auto TAG = "main";
 
@@ -71,7 +72,55 @@ struct NetTaskParams {
 };
 
 // Global pointer for WebSocket broadcast — set by net_owner task after init
-namespace { ecotiter::infrastructure::network::HttpServer* gHttpServerForWs{nullptr}; }
+// Must be atomic for cross-task visibility (GR-1: no blocking, no mutex)
+namespace { std::atomic<ecotiter::infrastructure::network::HttpServer*> gHttpServerForWs{nullptr}; }
+
+// ── ESP_LOG capture → LogBuffer ───────────────────────────────────
+static int logVprintf(const char* fmt, va_list args) {
+    char buf[384];
+    int n = std::vsnprintf(buf, sizeof(buf), fmt, args);
+    if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
+        const char* level = "INFO";
+        if (buf[0] == 'W' && buf[1] == ' ') level = "WARN";
+        else if (buf[0] == 'E' && buf[1] == ' ') level = "ERROR";
+        else if (buf[0] == 'D' && buf[1] == ' ') level = "DEBUG";
+        uint32_t ts = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        ecotiter::domain::LogBuffer::instance().push(ts, level, buf);
+    }
+    // Forward to UART through stdio
+    if (n > 0) {
+        fwrite(buf, 1, static_cast<size_t>(n), stdout);
+        fflush(stdout);
+    }
+    return n;
+}
+
+// WebSocket log push callback — registered after HTTP server init
+static void wsLogCallback(const ecotiter::domain::LogEntry& entry) {
+    auto* hs = gHttpServerForWs.load(std::memory_order_acquire);
+    if (!hs) return;
+
+    char buf[384];
+    int n = std::snprintf(buf, sizeof(buf),
+        R"({"event":"log","data":{"level":"%s","msg":")", entry.level);
+
+    const char* src = entry.message;
+    while (*src && static_cast<size_t>(n) < sizeof(buf) - 6) {
+        if (*src == '"') { buf[n++] = '\''; }
+        else if (*src == '\\') { buf[n++] = '/'; }
+        else { buf[n++] = *src; }
+        ++src;
+    }
+    buf[n] = '\0';
+
+    n = std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n),
+        R"("}})");
+    if (n < 0) return;
+    n = static_cast<int>(std::strlen(buf));
+    if (n > 0) {
+        hs->broadcastWsEvent(buf, static_cast<size_t>(n));
+    }
+}
 
 // GR-3: net_owner thread — WiFi init → HTTP server → BLE init → PHY wait → process loop
 extern "C" void netTaskEntry(void* pvParameters) {
@@ -103,7 +152,8 @@ extern "C" void netTaskEntry(void* pvParameters) {
     auto httpResult = httpServer.init();
     if (httpResult) {
         httpServer.registerRoutes();
-        gHttpServerForWs = &httpServer;
+        gHttpServerForWs.store(&httpServer, std::memory_order_release);
+        ecotiter::domain::LogBuffer::instance().setCallback(wsLogCallback);
         ESP_LOGI("net_owner", "HTTP server ready on 192.168.4.1:80");
     } else {
         ESP_LOGW("net_owner", "HTTP server init failed");
@@ -141,6 +191,9 @@ extern "C" void app_main(void)
 
     // Warmup: flush any stale serial data, ensure stdout works
     fflush(stdout);
+
+    // Install ESP_LOG capture → LogBuffer (captures all subsequent ESP_LOGI/LOGW/LOGE calls)
+    esp_log_set_vprintf(logVprintf);
 
     // ====== Step 1: NVS ======
     puts("DBG: step 1 - nvs_flash_init");
@@ -340,11 +393,14 @@ extern "C" void app_main(void)
                     std::ignore = bleManager.sendNotification(bleSv);
                     std::ignore = bleManager.sendNotification({"\n", 1});
                 }
-                if (gHttpServerForWs) {
-                    ecotiter::domain::memory::ResponseBuffer wsBuf{};
-                    auto wsSv = ecotiter::interface::serializeBroadcast(evt, wsBuf);
-                    if (!wsSv.empty()) {
-                        gHttpServerForWs->broadcastWsEvent(wsSv.data(), wsSv.size());
+                {
+                    auto* hs = gHttpServerForWs.load(std::memory_order_acquire);
+                    if (hs) {
+                        ecotiter::domain::memory::ResponseBuffer wsBuf{};
+                        auto wsSv = ecotiter::interface::serializeBroadcast(evt, wsBuf);
+                        if (!wsSv.empty()) {
+                            hs->broadcastWsEvent(wsSv.data(), wsSv.size());
+                        }
                     }
                 }
             }

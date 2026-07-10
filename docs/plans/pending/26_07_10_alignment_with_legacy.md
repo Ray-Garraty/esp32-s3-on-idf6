@@ -16,11 +16,14 @@ loss. This document catalogues every discrepancy between the legacy Arduino
 firmware (`/home/vlabe/Downloads/legacy/arduino`) and the current ESP-IDF
 project, ranked by impact, and prescribes the restoration work.
 
-**Impact after Phases 0–2a:** Calibration defaults match Arduino (Phase 1).
+**Impact after Phases 0–6b:** Calibration defaults match Arduino (Phase 1).
 Dose planning with multi-cycle auto-fill works (Phase 2). Fill/empty/dose
-send real motor commands. Direction naming aligned with Arduino (`LIQ_IN`/`LIQ_OUT`,
-`FULL`/`EMPTY`). Remaining: rinse/cal state machines (Phase 3), Z-factor + OLS
-(Phase 4), ADC calibration (Phase 5).
+send real motor commands. Rinse/cal state machines implemented (Phase 3).
+Z-factor + OLS gravimetric correction done (Phase 4). ADC calibration
+with 5-point measure/compute/reset + NVS persistence done (Phase 5).
+LogBuffer (cyclic RAM buffer) captures all ESP_LOG output; `/api/logs`
+and `/api/logs/download` return real data; WebSocket log push in progress
+(Phase 6b).
 
 ---
 
@@ -95,21 +98,22 @@ ESP-IDF:
 `{k, r_squared, min_freq, max_freq}`. `handleSaveCalibration` stores
 computed `k` as `speedCoeff` in NVS.
 
-### 6. ADC Calibration — Partial
+### 6. ADC Calibration — ✅ DONE (Phase 5)
 
 <!-- grep: adc-calibration -->
 
 | Arduino Command | ESP-IDF Status |
 |-----------------|----------------|
 | `adc.cal.get` | ✅ Returns defaults |
-| `adc.cal.measure` | ❌ **Not in CommandType** |
-| `adc.cal.compute` | ❌ **Not in CommandType** |
-| `adc.cal.save` | ❌ Handler exists, NVS write is stub |
-| `adc.cal.reset` | ❌ **Not in CommandType** |
+| `adc.cal.measure` | ✅ 32 samples, ±5 mV tolerance, max 10 attempts |
+| `adc.cal.compute` | ✅ OLS from 5 points, inverted coefficients |
+| `adc.cal.save` | ✅ Real NVS write + runtime globals update |
+| `adc.cal.reset` | ✅ Clears points, resets to defaults in NVS |
 
-The Arduino ADC calibration collects 5 reference points with stabilisation
-(32 samples, ±5 mV tolerance, max 10 attempts), then computes OLS. The
-ESP-IDF has only `adc.cal.get` and `adc.cal.save` (both stubs).
+**Status:** Full ADC calibration flow implemented. 5-point measure with
+stabilization, OLS compute (raw→corrected inversion), NVS persistence.
+Runtime `gCoeffAX1000`/`gCoeffB` updated on save. ADC `calibratedFromRaw()`
+applies correction in real time.
 
 ### 7. TMC2209 UART — Not Connected
 
@@ -376,19 +380,27 @@ All 4 state machines implemented and wired:
 
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-### Phase 5: ADC Calibration (MEDIUM priority)
+### Phase 5: ADC Calibration — ✅ COMPLETED (2026-07-10)
 
 <!-- grep: phase-5 -->
 
-1. Add `adc.cal.measure` to `CommandType` + parser + handler
-   - Stabilise: 32 samples, max 10 attempts, ±5 mV tolerance
-   - Record median of last 32 samples
-2. Add `adc.cal.compute` to `CommandType` + OLS from 5 points
-3. Add `adc.cal.reset` to `CommandType` + clear points + reset defaults
-4. Wire `adc.cal.save` to NVS write
-5. Wire ADC read task to apply `a_x1000`/`b` correction
+1. Added `AdcCalMeasure`, `AdcCalCompute`, `AdcCalReset` to `CommandType` +
+   parser + handlers
+2. **`handleAdcCalMeasure()`** — stabilisation: 32 samples, ±5 mV tolerance,
+   max 10 attempts, returns median
+3. **`handleAdcCalCompute()`** — OLS from 5 points with inversion:
+   `corrected = a * raw + b` where `a = 1/aRaw`, `b = -bRaw/aRaw`
+4. **`handleAdcCalReset()`** — clears 5 points, persists defaults (a=1000, b=0) to NVS
+5. **`adc.cal.save`** — real NVS write to `adc_cal` namespace, updates
+   `drivers::gCoeffAX1000`/`gCoeffB` runtime globals
+6. **ADC correction** — `calibratedFromRaw()` was already wired (no change)
+7. **NVS** — `adcCalibrationRead()`/`adcCalibrationWrite()` with config keys
+8. **Config** — NVS namespace `adc_cal`, keys `a_x1000`/`b`
 
-**Tests:** OLS from 5 known points, verify coefficients. NVS roundtrip.
+**Diff:** +511/-9 source lines (14 files), +167 lines of tests.
+**Tests:** 29 new assertions — stabilization tolerance, median, OLS math,
+full 5-point flow, dispatch routing, JSON parsing.
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
 ### Phase 6: TMC2209 UART (LOW priority)
 
@@ -402,6 +414,46 @@ All 4 state machines implemented and wired:
 6. Poll driver status (OTPW, OT, S2GA, S2GB, OLA, OLB) in motor task
 
 **Tests:** Verify register writes with mock UART. NVS roundtrip for SG threshold.
+
+### Phase 6b: Log Infrastructure — 🟡 IN PROGRESS (2026-07-10)
+
+<!-- grep: phase-6b -->
+
+Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
+
+1. **LogBuffer** (`domain/log_buffer.hpp`, `domain/log_buffer.cpp`)
+   - Lock-free ring buffer, 100 entries × 128 bytes, timestamp + level + message
+   - `push(ts, level, msg)` — atomic head index, re-entrancy guard via `pushing_`
+   - `fetch(out, maxCount, levelFilter)` — newest-first, optional level filter
+   - `setCallback(cb)` — for WebSocket push
+   - `clear()` — reset
+
+2. **ESP_LOG capture** (`main.cpp`)
+   - `esp_log_set_vprintf(logVprintf)` at start of `app_main()`
+   - Level detection from first char: I→INFO, W→WARN, E→ERROR, D→DEBUG
+   - Store in LogBuffer, forward to UART via `fwrite(stdout)` + `fflush()`
+
+3. **`/api/logs` and `/api/logs/download`** (`http_server.cpp`)
+   - `GET /api/logs?limit=N&level=XXX` — JSON with entries, JSON-escaped chars
+   - `GET /api/logs/download` — plain text
+   - Response buffer increased to `MAX_RSP_SIZE=2048`
+
+4. **WebSocket log push** (`main.cpp`)
+   - `wsLogCallback()` — formats `{"event":"log","data":{"level":"...","msg":"..."}}`
+   - Registered after HTTP server init in `netTaskEntry`
+   - `gHttpServerForWs` → `std::atomic<HttpServer*>` for cross-task visibility
+
+5. **Frontend** (`webui.hpp`)
+   - `ws.onmessage` — handles `event === 'log'` → `addLogEntry()`
+   - `loadInitialLogs()` — unchanged from before
+
+**Known issues:**
+- `fwrite(stdout)` for ESP_LOG forwarding to UART is unstable after
+  UART driver reinit in `SerialReader::init()` — some ESP_LOG lines are lost
+- WebSocket push diagnostic via `write()` not visible in serial log
+
+**Diff:** 3 new files, 6 modified files.
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
 ### Phase 7: HTTP API Alignment (LOW priority)
 
@@ -491,11 +543,19 @@ All 4 state machines implemented and wired:
 
 | File | Change |
 |------|--------|
-| `components/application/include/application/command.hpp` | Add `AdcCalMeasure`, `AdcCalCompute`, `AdcCalReset` |
-| `components/application/src/command.cpp` | Parse new cmds |
-| `components/application/src/dispatch.cpp` | Route new cmds |
-| `components/application/src/handlers/sensors.cpp` | Stub → real impl |
-| `components/infrastructure/src/drivers/adc.cpp` | Calibration apply |
+| `components/application/include/application/command.hpp` | `AdcCalMeasure`, `AdcCalCompute`, `AdcCalReset` enums + `refMv` field |
+| `components/application/include/application/handlers/sensors.hpp` | `AdcSampleReadCb` type + handler declarations |
+| `components/application/src/command.cpp` | Parse new cmds + `ref_mv` |
+| `components/application/src/dispatch.cpp` | Route new cmds, wire real NVS callbacks |
+| `components/application/src/handlers/sensors.cpp` | Stub → real impl (186 lines) |
+| `components/infrastructure/include/infrastructure/config.hpp` | NVS keys: `NVS_NS_ADC_CAL`, `NVS_KEY_ADC_A_X1000`, `NVS_KEY_ADC_B` |
+| `components/infrastructure/include/infrastructure/storage/nvs.hpp` | `adcCalibrationRead()`, `adcCalibrationWrite()` |
+| `components/infrastructure/src/storage/nvs.cpp` | NVS read/write + runtime globals update |
+| `tests/src/stub_nvs.cpp` | Test stubs for ADC cal |
+| `tests/src/test_adc.cpp` | 99 lines: stabilization, OLS math |
+| `tests/src/test_command.cpp` | 26 lines: parse tests for 3 new cmds |
+| `tests/src/test_dispatch.cpp` | 14 lines: dispatch routing |
+| `tests/src/test_handlers.cpp` | 85 lines: full 5-point flow |
 
 ### Phase 6 — TMC2209 UART
 
@@ -505,6 +565,18 @@ All 4 state machines implemented and wired:
 | `components/infrastructure/include/infrastructure/drivers/stepper.hpp` | UART methods |
 | `components/infrastructure/src/drivers/stepper.cpp` | UART init + register ops |
 | `components/infrastructure/src/motor_task.cpp` | SG polling |
+
+### Phase 6b — Log Infrastructure
+
+| File | Change |
+|------|--------|
+| `components/domain/include/domain/log_buffer.hpp` | New file — LogBuffer class (lock-free ring buffer) |
+| `components/domain/src/log_buffer.cpp` | New file — push/fetch/clear/setCallback |
+| `components/domain/CMakeLists.txt` | Add log_buffer.cpp |
+| `main/main.cpp` | vprintf hook, wsLogCallback, atomic gHttpServerForWs |
+| `components/infrastructure/network/src/http_server.cpp` | Real /api/logs, /api/logs/download, WS diag |
+| `components/interface/include/interface/webui.hpp` | WS onmessage handles `event === 'log'` |
+| `components/domain/include/domain/memory.hpp` | MAX_RSP_SIZE 512→2048 |
 
 ### Phase 7 — HTTP API
 
@@ -558,8 +630,9 @@ Before Phase 2-4 codegen, the following headers in
 | 2 | 200 lines | **165** | ✅ Done |
 | 3 | 400 lines | — | Medium — SM correctness |
 | 4 | 300 lines | — | High — math correctness |
-| 5 | 150 lines | — | Medium — ADC timing |
+| 5 | 150 lines | **511** (source) / **678** (total) | ✅ Done |
 | 6 | 200 lines | — | Medium — UART on PSRAM |
+| 6b | 200 lines | — | Medium — ESP_LOG forwarding |
 | 7 | 50 lines | — | Low — routes + mDNS |
 | 8 | 30 lines | — | Low — broadcast format |
 | 9 | 80 lines | — | Low — timeouts |

@@ -174,7 +174,15 @@ function connectWs(){
   ws.onmessage=function(e){
     lastMsgTime=Date.now();
     if(!APP_STATE.connectionAlive){APP_STATE.connectionAlive=true;updateConnStatus();}
-    try{var data=JSON.parse(e.data);updateUI(data);}catch(err){}
+    try{
+      var data=JSON.parse(e.data);
+      if(data.event==='log'&&data.data){
+        var ts=new Date().toLocaleTimeString();
+        addLogEntry('['+ts+'] ['+(data.data.level||'INFO')+'] '+(data.data.msg||''));
+      }else{
+        updateUI(data);
+      }
+    }catch(err){}
   };
   ws.onclose=function(){
     APP_STATE.connectionAlive=false;updateConnStatus();

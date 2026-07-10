@@ -14,6 +14,7 @@
 #include "domain/types.hpp"
 #include "domain/memory.hpp"
 #include "domain/json_utils.hpp"
+#include "domain/log_buffer.hpp"
 #include "diag/ffi_guard.hpp"
 #include "infrastructure/network/wifi.hpp"
 #include "infrastructure/storage/nvs.hpp"
@@ -213,18 +214,100 @@ esp_err_t api_valve_post_handler(httpd_req_t* req) {
 
 esp_err_t api_logs_handler(httpd_req_t* req) {
     diag::FfiGuard guard(82);
+
+    // Parse query params
+    int limit = 20;
+    char levelFilter[16]{};
+    char qbuf[128];
+    if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK) {
+        char val[16];
+        if (httpd_query_key_value(qbuf, "limit", val, sizeof(val)) == ESP_OK) {
+            int parsed = std::atoi(val);
+            if (parsed > 0 && parsed <= 100) limit = parsed;
+        }
+        if (httpd_query_key_value(qbuf, "level", val, sizeof(val)) == ESP_OK) {
+            std::strncpy(levelFilter, val, sizeof(levelFilter) - 1);
+        }
+    }
+
+    // Build JSON response
     domain::memory::ResponseBuffer rsp{};
-    int n = std::snprintf(rsp.data(), rsp.size(),
-        R"({"entries":[],"count":0})");
+    size_t pos = 0;
+    auto append = [&](const char* s) {
+        size_t len = std::strlen(s);
+        if (pos + len < rsp.size()) {
+            std::memcpy(rsp.data() + pos, s, len);
+            pos += len;
+        }
+    };
+    auto appendCh = [&](char c) {
+        if (pos + 1 < rsp.size()) { rsp.data()[pos++] = c; }
+    };
+
+    append(R"({"entries":)");
+    {
+        domain::LogEntry entries[50];
+        size_t count = domain::LogBuffer::instance().fetch(
+            entries, static_cast<size_t>(limit),
+            levelFilter[0] ? levelFilter : nullptr);
+
+        appendCh('[');
+        for (size_t i = 0; i < count; ++i) {
+            if (i > 0) appendCh(',');
+            appendCh('{');
+            append(R"("level":")");
+            append(entries[i].level);
+            append(R"(","msg":")");
+            // message — escape JSON special chars
+            for (const char* p = entries[i].message; *p; ++p) {
+                if (*p == '\\') { append(R"(\\)"); }
+                else if (*p == '"') { append(R"(\")"); }
+                else if (*p == '\n') { append(R"(\n)"); }
+                else if (*p == '\r') { append(R"(\r)"); }
+                else if (*p == '\t') { append(R"(\t)"); }
+                else { appendCh(*p); }
+            }
+            appendCh('"');
+            appendCh('}');
+        }
+        appendCh(']');
+
+        append(R"(,"count":)");
+        {
+            char num[16];
+            int n = std::snprintf(num, sizeof(num), "%zu", count);
+            if (n > 0) append(num);
+        }
+    }
+    appendCh('}');
+
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, rsp.data(), static_cast<ssize_t>(n));
+    httpd_resp_send(req, rsp.data(), static_cast<ssize_t>(pos));
     return ESP_OK;
 }
 
 esp_err_t api_logs_download_handler(httpd_req_t* req) {
     diag::FfiGuard guard(82);
+
+    domain::LogEntry entries[100];
+    size_t count = domain::LogBuffer::instance().fetch(entries, 100);
+
+    domain::memory::ResponseBuffer rsp{};
+    size_t pos = 0;
+    for (size_t i = 0; i < count; ++i) {
+        int n = std::snprintf(rsp.data() + pos, rsp.size() - pos,
+            "[%s] %s\n", entries[i].level, entries[i].message);
+        if (n > 0) pos += static_cast<size_t>(n);
+        if (pos >= rsp.size()) break;
+    }
+    if (pos == 0) {
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "No logs available", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
     httpd_resp_set_type(req, "text/plain");
-    httpd_resp_send(req, "No logs available", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, rsp.data(), static_cast<ssize_t>(pos));
     return ESP_OK;
 }
 
@@ -379,6 +462,7 @@ void HttpServer::broadcastWsEvent(const char* jsonData, size_t len) {
     frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(jsonData));
     frame.len = len;
 
+    int sent = 0;
     for (auto& session : sessions_) {
         if (session.fd < 0) continue;
 
@@ -391,8 +475,19 @@ void HttpServer::broadcastWsEvent(const char* jsonData, size_t len) {
         esp_err_t err = httpd_ws_send_frame_async(
             handle_, session.fd, &frame);
         if (err != ESP_OK) {
+            char dbg[64];
+            int nn = std::snprintf(dbg, sizeof(dbg), "WS send err=%d fd=%d\n",
+                                   static_cast<int>(err), session.fd);
+            write(STDOUT_FILENO, dbg, static_cast<size_t>(nn));
             session.fd = WS_FD_INVALID;
+        } else {
+            ++sent;
         }
+    }
+    if (sent > 0) {
+        write(STDOUT_FILENO, "DBG: WS broadcast OK\n", 22);
+    } else {
+        write(STDOUT_FILENO, "DBG: WS broadcast no sessions\n", 31);
     }
 }
 
