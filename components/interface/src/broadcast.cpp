@@ -56,8 +56,8 @@ std::string_view serializeBroadcast(
         vlStr = vlBuf;
     }
 
-    double spdMlMin = static_cast<double>(evt.speed) * 60.0
-        / static_cast<double>(domain::CalibrationData::kDefaultStepsPerMl);
+    double spdMlMin = static_cast<double>(evt.speed)
+        * static_cast<double>(domain::CalibrationData::kDefaultSpeedCoeff);
 
     int n = std::snprintf(buf.data(), buf.size(),
         R"({"t":%lu,"temp":%s,"mv":%u,"vlv":"%s",)"

@@ -65,6 +65,7 @@ target_link_libraries(ecotiter_app PUBLIC nlohmann_json::nlohmann_json)
 # --- Host stubs for components not under test ---
 set(STUB_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/stub_motor_task.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/stub_nvs.cpp
 )
 
 # --- Unit test executable ---

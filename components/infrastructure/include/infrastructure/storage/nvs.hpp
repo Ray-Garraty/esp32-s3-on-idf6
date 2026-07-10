@@ -7,6 +7,7 @@
 
 #include "nvs_flash.h"
 
+#include "domain/calibration.hpp"
 #include "domain/errors.hpp"
 
 namespace ecotiter::infrastructure::storage {
@@ -44,6 +45,8 @@ private:
 
 [[nodiscard]] uint8_t stallguardReadThreshold();
 [[nodiscard]] domain::Result<void, domain::ResourceError> stallguardWriteThreshold(uint8_t value);
+[[nodiscard]] domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead();
+[[nodiscard]] domain::Result<void, domain::ResourceError> calibrationWrite(const domain::CalibrationData& cal);
 
 template <size_t N>
 [[nodiscard]] domain::Result<std::optional<std::string_view>, domain::ResourceError> wifiReadStr(

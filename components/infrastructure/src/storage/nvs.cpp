@@ -1,4 +1,6 @@
 #include "infrastructure/storage/nvs.hpp"
+#include "infrastructure/config.hpp"
+#include "domain/calibration.hpp"
 #include "esp_log.h"
 
 #include <bit>
@@ -170,6 +172,53 @@ domain::Result<void, domain::ResourceError> wifiErase(const char* key) {
     auto nvs = NvsHandle("wifi", true);
     if (!nvs.isValid()) return std::unexpected(domain::ResourceError::NvsOpenFailed);
     return nvs.eraseKey(key);
+}
+
+domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead() {
+    auto nvs = NvsHandle(config::NVS_NS_BURETTE_CAL, false);
+    if (!nvs.isValid()) return std::unexpected(domain::ResourceError::NvsOpenFailed);
+
+    domain::CalibrationData cal{};
+    {
+        auto r = nvs.getF32(config::NVS_KEY_CAL_SPM);
+        cal.stepsPerMl = (r && r->has_value()) ? r->value() : domain::CalibrationData::kDefaultStepsPerMl;
+    }
+    {
+        auto r = nvs.getF32(config::NVS_KEY_CAL_NOM);
+        cal.nominalVolumeMl = (r && r->has_value()) ? r->value() : domain::CalibrationData::kDefaultNominalVolumeMl;
+    }
+    {
+        auto r = nvs.getF32(config::NVS_KEY_CAL_COEFF);
+        cal.speedCoeff = (r && r->has_value()) ? r->value() : domain::CalibrationData::kDefaultSpeedCoeff;
+    }
+    {
+        auto r = nvs.getU32(config::NVS_KEY_CAL_MIN_FREQ);
+        cal.minFreqHz = (r && r->has_value()) ? static_cast<uint16_t>(r->value() & 0xFFFF) : domain::CalibrationData::kDefaultMinFreqHz;
+    }
+    {
+        auto r = nvs.getU32(config::NVS_KEY_CAL_MAX_FREQ);
+        cal.maxFreqHz = (r && r->has_value()) ? static_cast<uint16_t>(r->value() & 0xFFFF) : domain::CalibrationData::kDefaultMaxFreqHz;
+    }
+    return cal;
+}
+
+domain::Result<void, domain::ResourceError> calibrationWrite(const domain::CalibrationData& cal) {
+    auto nvs = NvsHandle(config::NVS_NS_BURETTE_CAL, true);
+    if (!nvs.isValid()) return std::unexpected(domain::ResourceError::NvsOpenFailed);
+
+    auto r1 = nvs.setF32(config::NVS_KEY_CAL_SPM, cal.stepsPerMl);
+    if (!r1) return std::unexpected(r1.error());
+    auto r2 = nvs.setF32(config::NVS_KEY_CAL_NOM, cal.nominalVolumeMl);
+    if (!r2) return std::unexpected(r2.error());
+    auto r3 = nvs.setF32(config::NVS_KEY_CAL_COEFF, cal.speedCoeff);
+    if (!r3) return std::unexpected(r3.error());
+    auto r4 = nvs.setU32(config::NVS_KEY_CAL_MIN_FREQ, static_cast<uint32_t>(cal.minFreqHz));
+    if (!r4) return std::unexpected(r4.error());
+    auto r5 = nvs.setU32(config::NVS_KEY_CAL_MAX_FREQ, static_cast<uint32_t>(cal.maxFreqHz));
+    if (!r5) return std::unexpected(r5.error());
+    auto r6 = nvs.setI32(config::NVS_KEY_CAL_DATE, 0);
+    if (!r6) return std::unexpected(r6.error());
+    return {};
 }
 
 } // namespace ecotiter::infrastructure::storage

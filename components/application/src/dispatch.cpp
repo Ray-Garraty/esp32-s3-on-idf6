@@ -1,6 +1,7 @@
 #include "application/dispatch.hpp"
 
 #include "application/command.hpp"
+#include "infrastructure/storage/nvs.hpp"
 #include "application/handlers/burette_ops.hpp"
 #include "application/handlers/burette_cal.hpp"
 #include "application/handlers/sensors.hpp"
@@ -13,13 +14,8 @@ namespace ecotiter::application {
 
 // Stub callbacks — wired at integration time (Step 6).
 namespace {
-std::expected<domain::CalibrationData, domain::ResourceError> stubReadCal() {
-  return std::unexpected(domain::ResourceError::NvsOpenFailed);
-}
-std::expected<void, domain::ResourceError> stubWriteCal(
-    const domain::CalibrationData&) {
-  return std::unexpected(domain::ResourceError::NvsOpenFailed);
-}
+auto readCal = infrastructure::storage::calibrationRead;
+auto writeCal = infrastructure::storage::calibrationWrite;
 void stubAdcCalRead(uint16_t&, int16_t&) {}
 std::expected<void, domain::ResourceError> stubAdcCalWrite(uint16_t, int16_t) {
   return std::unexpected(domain::ResourceError::NvsOpenFailed);
@@ -71,22 +67,22 @@ std::expected<CommandResponse, domain::AppError> dispatch(
 
     // --- Calibration ---
     case CommandType::CalGet:
-      return burette_cal::handleGetCalibration(stubReadCal);
+      return burette_cal::handleGetCalibration(readCal);
     case CommandType::CalCalcVolume:
-      return burette_cal::handleCalcVolume(cmd.steps, stubReadCal);
+      return burette_cal::handleCalcVolume(cmd.steps, readCal);
     case CommandType::CalCalcSpeed:
-      return burette_cal::handleCalcSpeed(cmd.speed, stubReadCal);
+      return burette_cal::handleCalcSpeed(cmd.speed, readCal);
     case CommandType::CalSave:
       return burette_cal::handleSaveCalibration(
           cmd.volume ? std::optional<float>{cmd.volume->value} : std::nullopt,
           cmd.targetVolume ? std::optional<float>{cmd.targetVolume->value} : std::nullopt,
-          stubWriteCal);
+          writeCal);
     case CommandType::CalReset:
-      return burette_cal::handleResetCalibration(stubWriteCal);
+      return burette_cal::handleResetCalibration(writeCal);
     case CommandType::CalRun:
       return burette_cal::handleRunCalibration();
     case CommandType::CalGetResult:
-      return burette_cal::handleGetCalResult(stubReadCal);
+      return burette_cal::handleGetCalResult(readCal);
 
     // --- Sensors ---
     case CommandType::TempRead:

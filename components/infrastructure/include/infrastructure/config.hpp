@@ -51,10 +51,17 @@ inline constexpr int16_t  ADC_DEFAULT_B          = 0;
 inline constexpr uint32_t TEMP_CONVERSION_WAIT_MS = 800;
 
 // NVS namespaces
-inline constexpr const char* NVS_NS_STALLGUARD   = "stallguard";
-inline constexpr const char* NVS_NS_WIFI         = "wifi";
-inline constexpr const char* NVS_KEY_SG_THRESHOLD = "threshold";
-inline constexpr const char* NVS_KEY_WIFI_SSID   = "ssid";
-inline constexpr const char* NVS_KEY_WIFI_PASS   = "password";
+inline constexpr const char* NVS_NS_STALLGUARD    = "stallguard";
+inline constexpr const char* NVS_NS_WIFI          = "wifi";
+inline constexpr const char* NVS_NS_BURETTE_CAL   = "burette_cal";
+inline constexpr const char* NVS_KEY_SG_THRESHOLD  = "threshold";
+inline constexpr const char* NVS_KEY_WIFI_SSID    = "ssid";
+inline constexpr const char* NVS_KEY_WIFI_PASS    = "password";
+inline constexpr const char* NVS_KEY_CAL_SPM      = "steps_per_ml";
+inline constexpr const char* NVS_KEY_CAL_NOM      = "nominal_vol";
+inline constexpr const char* NVS_KEY_CAL_COEFF    = "speed_coeff";
+inline constexpr const char* NVS_KEY_CAL_MIN_FREQ = "min_freq";
+inline constexpr const char* NVS_KEY_CAL_MAX_FREQ = "max_freq";
+inline constexpr const char* NVS_KEY_CAL_DATE     = "cal_date";
 
 } // namespace ecotiter::config

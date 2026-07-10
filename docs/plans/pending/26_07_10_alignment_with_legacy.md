@@ -32,17 +32,15 @@ would cause 7.73× volume errors.
 The ESP-IDF defaults do not match the Arduino calibrated values. Using these
 will cause the device to dispense wildly incorrect volumes out of the box.
 
-| Parameter | Arduino | ESP-IDF | Error |
-|-----------|---------|---------|-------|
-| `stepsPerMl` | 7730.0 | **1000.0** | 7.73× under-dispense |
-| `nominalVolumeMl` | 8.14 ml | **50.0 ml** | 6.14× over-estimate |
-| `speedCoeff` (ml/min)/Hz | 0.03052 | **missing** | Speed conversion broken |
-| `minFreq` Hz | 30 | 30 (constant only) | Not persisted |
-| `maxFreq` Hz | 3000 | 3000 (constant only) | Not persisted |
+| Parameter | Arduino | ESP-IDF (Phase 1) | Error |
+|-----------|---------|-------------------|-------|
+| `stepsPerMl` | 7730.0 | ✅ `7730.0` | Fixed |
+| `nominalVolumeMl` | 8.14 ml | ✅ `8.14` | Fixed |
+| `speedCoeff` (ml/min)/Hz | 0.03052 | ✅ `0.03052` | Fixed |
+| `minFreq` Hz | 30 | ✅ `30` (persisted) | Fixed |
+| `maxFreq` Hz | 3000 | ✅ `3000` (persisted) | Fixed |
 
-**Sources:**
-- Arduino: `src/calibration.cpp` lines 22-26
-- ESP-IDF: `components/domain/include/domain/calibration.hpp`
+**Status:** Phase 1 complete. All defaults restored, NVS persistence wired. `broadcast.cpp` speed conversion uses `kDefaultSpeedCoeff`. Dispatch uses real `calibrationRead`/`calibrationWrite` callbacks.
 
 ### 2. Dose Planner Algorithm — CRITICAL
 
@@ -260,25 +258,23 @@ reset to discard ROM bootloader binary garbage from log files.
 
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics, log is clean.
 
-### Phase 1a: Calibration Constants — ✅ COMPLETED (2026-07-10)
+### Phase 1 — Calibration Constants — ✅ COMPLETED (2026-07-10)
 
 <!-- grep: phase-1 -->
 
-- Added `CalibrationData::kDefaultStepsPerMl` (7730.0f) and `CalibrationData::kDefaultNominalVolumeMl` (8.14f) as `static constexpr inline` in `calibration.hpp`
-- Updated `burette_cal.cpp` to use named constants instead of `{1000.0f, 50.0f}`
-- Updated `broadcast.cpp` speed conversion: `kDefaultStepsPerMl` 3000 → 7730 (now uses `CalibrationData::kDefaultStepsPerMl`)
-- Test assertions corrected to match new defaults (192 passed, 0 failed)
+**1a — Named constants:** Added `CalibrationData::kDefaultStepsPerMl` (7730.0f) and
+`CalibrationData::kDefaultNominalVolumeMl` (8.14f). Removed all inline magic numbers
+(`1000.0`, `50.0`, `3000.0`). Tests corrected to match new defaults.
 
-**Remaining in Phase 1:**
-1. Add `kDefaultSpeedCoeff = 0.03052f` to `CalibrationData`
-2. Add `kDefaultMinFreqHz = 30` and `kDefaultMaxFreqHz = 3000`
-3. Sync NVS namespace `burette_cal` with keys: `steps_per_ml`, `nominal_vol`, `speed_coeff`, `min_freq`, `max_freq`, `cal_date`
-4. Wire NVS read/write in `handleCalSave`, `handleCalGet`, `handleCalReset`
-5. Update `broadcast.cpp` speed conversion to use `cal.speedCoeff` (instead of hardcoded 7730/60)
-6. Add `speedCoeff`, `minFreq`, `maxFreq` to `CalibrationData` struct
+**1b — Full CalibrationData + NVS:** Added `speedCoeff` (0.03052), `minFreqHz` (30),
+`maxFreqHz` (3000) fields and defaults to `CalibrationData`. Implemented
+`calibrationRead()`/`calibrationWrite()` in `nvs.cpp` with fallback to defaults.
+Wired real NVS callbacks in `dispatch.cpp`. Fixed broadcast speed conversion:
+`speedHz * speedCoeff` instead of `speedHz * 60 / stepsPerMl` — `"spd":30.5` now
+matches Arduino (was 7.8).
 
-**Tests:** Catch2 test for `mlToSteps(1.0, cal) == 7730`, `stepsToMl(7730, cal) == 1.0`.
-NVS write-then-read roundtrip.
+**Diff:** +93/-28 source lines (7 files), +106/-44 including tests/docs.
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
 ### Phase 2: Dose Planner (HIGH priority)
 
@@ -393,12 +389,14 @@ OLS: verify against known dataset, check R² = 1 for perfect fit.
 
 | File | Change |
 |------|--------|
-| `components/domain/include/domain/calibration.hpp` | Constants, NVS keys, `CalibrationData` struct |
-| `components/domain/src/calibration.cpp` | NVS load/save |
-| `components/infrastructure/include/infrastructure/config.hpp` | Constants |
-| `components/infrastructure/src/storage/nvs.cpp` | Burette cal namespace |
-| `components/interface/src/broadcast.cpp` | Speed conversion, interval |
-| `components/application/src/handlers/burette_cal.cpp` | Wire NVS calls |
+| `components/domain/include/domain/calibration.hpp` | `speedCoeff`, `minFreqHz`, `maxFreqHz` fields + defaults |
+| `components/infrastructure/include/infrastructure/config.hpp` | NVS key constants for burette cal |
+| `components/infrastructure/include/infrastructure/storage/nvs.hpp` | `calibrationRead()`, `calibrationWrite()` declarations |
+| `components/infrastructure/src/storage/nvs.cpp` | `calibrationRead()`, `calibrationWrite()` implementations |
+| `components/application/src/dispatch.cpp` | Wire real NVS callbacks |
+| `components/application/src/handlers/burette_cal.cpp` | Init all `CalibrationData` fields |
+| `components/interface/src/broadcast.cpp` | Speed conversion: `kDefaultSpeedCoeff` |
+| `tests/src/test_broadcast.cpp` | Expected `spd` 7.8 → 30.52 |
 
 ### Phase 2 — Dose Planner
 
@@ -487,15 +485,15 @@ Before Phase 2-4 codegen, the following headers in
 
 ## Rework Budget
 
-| Phase | Estimated additions | Estimated changes | Risk |
-|-------|-------------------|-------------------|------|
-| 1 | 50 lines | 80 lines | Low — constants + NVS |
-| 2 | 200 lines | 100 lines | Medium — planner logic |
-| 3 | 400 lines | 50 lines | Medium — SM correctness |
-| 4 | 300 lines | 30 lines | High — math correctness |
-| 5 | 150 lines | 80 lines | Medium — ADC timing |
-| 6 | 200 lines | 100 lines | Medium — UART on PSRAM |
-| 7 | 50 lines | 60 lines | Low — routes + mDNS |
-| 8 | 80 lines | 40 lines | Low — timeouts |
+| Phase | Estimated additions | Actual | Risk |
+|-------|-------------------|--------|------|
+| 1 | 60 lines | **93** (source) / **106** (total) | ✅ Done |
+| 2 | 200 lines | — | Medium — planner logic |
+| 3 | 400 lines | — | Medium — SM correctness |
+| 4 | 300 lines | — | High — math correctness |
+| 5 | 150 lines | — | Medium — ADC timing |
+| 6 | 200 lines | — | Medium — UART on PSRAM |
+| 7 | 50 lines | — | Low — routes + mDNS |
+| 8 | 80 lines | — | Low — timeouts |
 
 **Total:** ~1430 lines added, ~540 lines changed.

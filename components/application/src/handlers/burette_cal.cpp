@@ -96,10 +96,12 @@ std::expected<CommandResponse, domain::AppError> handleCalcSpeed(
 std::expected<CommandResponse, domain::AppError> handleSaveCalibration(
     std::optional<float> stepsPerMl, std::optional<float> nomVolume,
     WriteCalCb writeCal) {
-  domain::CalibrationData cal{
-      domain::CalibrationData::kDefaultStepsPerMl,
-      domain::CalibrationData::kDefaultNominalVolumeMl
-  };
+  domain::CalibrationData cal{};
+  cal.stepsPerMl = domain::CalibrationData::kDefaultStepsPerMl;
+  cal.nominalVolumeMl = domain::CalibrationData::kDefaultNominalVolumeMl;
+  cal.speedCoeff = domain::CalibrationData::kDefaultSpeedCoeff;
+  cal.minFreqHz = domain::CalibrationData::kDefaultMinFreqHz;
+  cal.maxFreqHz = domain::CalibrationData::kDefaultMaxFreqHz;
   if (stepsPerMl) cal.stepsPerMl = *stepsPerMl;
   if (nomVolume) cal.nominalVolumeMl = *nomVolume;
   auto result = writeCal(cal);
@@ -114,10 +116,12 @@ std::expected<CommandResponse, domain::AppError> handleSaveCalibration(
 
 std::expected<CommandResponse, domain::AppError> handleResetCalibration(
     WriteCalCb writeCal) {
-  domain::CalibrationData defaults{
-      domain::CalibrationData::kDefaultStepsPerMl,
-      domain::CalibrationData::kDefaultNominalVolumeMl
-  };
+  domain::CalibrationData defaults{};
+  defaults.stepsPerMl = domain::CalibrationData::kDefaultStepsPerMl;
+  defaults.nominalVolumeMl = domain::CalibrationData::kDefaultNominalVolumeMl;
+  defaults.speedCoeff = domain::CalibrationData::kDefaultSpeedCoeff;
+  defaults.minFreqHz = domain::CalibrationData::kDefaultMinFreqHz;
+  defaults.maxFreqHz = domain::CalibrationData::kDefaultMaxFreqHz;
   auto result = writeCal(defaults);
   if (!result) {
     return makeErrorResponse("failed to reset calibration");

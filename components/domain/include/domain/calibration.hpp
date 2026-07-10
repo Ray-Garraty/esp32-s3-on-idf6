@@ -30,9 +30,15 @@ struct AdcCalibration {
 struct CalibrationData {
     float stepsPerMl;
     float nominalVolumeMl;
+    float speedCoeff;
+    uint16_t minFreqHz;
+    uint16_t maxFreqHz;
 
     static constexpr inline float kDefaultStepsPerMl = 7730.0f;
     static constexpr inline float kDefaultNominalVolumeMl = 8.14f;
+    static constexpr inline float kDefaultSpeedCoeff = 0.03052f;
+    static constexpr inline uint16_t kDefaultMinFreqHz = 30;
+    static constexpr inline uint16_t kDefaultMaxFreqHz = 3000;
 };
 
 [[nodiscard]] inline Steps mlToSteps(Ml volume, const CalibrationData& cal) noexcept {
