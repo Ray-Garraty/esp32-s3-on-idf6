@@ -10,6 +10,7 @@ idf_component_register(
         "src/motor_task.cpp"
         "src/temp_thread.cpp"
         "network/src/ble.cpp"
+        "network/src/ble_notify_thread.cpp"
         "network/src/wifi.cpp"
         "network/src/http_server.cpp"
     INCLUDE_DIRS

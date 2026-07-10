@@ -32,8 +32,9 @@ using domain::Direction;
 using domain::BuretteState;
 
 static constexpr size_t INTERVAL_CHUNK = 128;
-static constexpr uint32_t HOME_SPEED_HZ = 200;
+static constexpr uint32_t HOME_SPEED_HZ = 1500;
 static constexpr uint32_t HOME_INTERVAL_US = 1'000'000 / HOME_SPEED_HZ;
+static constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
 
 void assert_rmt_preconditions() {
     // Check that RMT driver is initialized and GPIO pins are valid
@@ -55,7 +56,7 @@ const char* buretteStateName(BuretteState s) {
     return "unknown";
 }
 
-void run_homing(StepperMotor& stepper, LimitSwitch& homeSwitch) {
+void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     puts("DBG: run_homing START"); fflush(stdout);
 
     diag::FfiGuard guard(30);
@@ -67,34 +68,41 @@ void run_homing(StepperMotor& stepper, LimitSwitch& homeSwitch) {
     diag::StateTracer::logBuretteTransition(
         buretteStateName(oldState), "homing");
 
+    // Move toward FULL limit switch (CW = LiqIn)
     gpio_set_level(config::PIN_DIR, 1);
 
-    homeSwitch.clear();
-    domain::gStopHome.store(false, std::memory_order_release);
+    // Clear any stale FULL limit flag
+    fullSwitch.clear();
+    domain::gStopFull.store(false, std::memory_order_release);
 
     uint32_t intervals[INTERVAL_CHUNK];
     for (size_t i = 0; i < INTERVAL_CHUNK; ++i) {
         intervals[i] = HOME_INTERVAL_US;
     }
 
-    constexpr uint32_t MAX_HOMING_STEPS = 10000;
     uint32_t totalSent = 0;
     bool homed = false;
+    auto startTime = xTaskGetTickCount();
+    bool timedOut = false;
 
-    while (totalSent < MAX_HOMING_STEPS && !homed) {
+    while (!homed && !timedOut) {
         assert_rmt_preconditions();
 
-        if (domain::gStopHome.load(std::memory_order_acquire)) {
+        if (domain::gStopFull.load(std::memory_order_acquire)) {
             homed = true;
             break;
         }
 
-        size_t chunk = MAX_HOMING_STEPS - totalSent;
-        if (chunk > INTERVAL_CHUNK) chunk = INTERVAL_CHUNK;
+        if ((xTaskGetTickCount() - startTime) >= pdMS_TO_TICKS(HOMING_TIMEOUT_MS)) {
+            timedOut = true;
+            break;
+        }
+
+        size_t chunk = INTERVAL_CHUNK;
 
         auto result = stepper.moveStepsIntervals(
             {intervals, chunk},
-            &domain::gStopHome);
+            &domain::gStopFull);
 
         if (!result) {
             if (result.error() == domain::StepperError::LimitSwitchTriggered) {
@@ -110,10 +118,14 @@ void run_homing(StepperMotor& stepper, LimitSwitch& homeSwitch) {
             }
         }
 
-        totalSent += chunk;
+        totalSent += static_cast<uint32_t>(chunk);
 
-        if (domain::gStopHome.load(std::memory_order_acquire)) {
+        if (domain::gStopFull.load(std::memory_order_acquire)) {
             homed = true;
+        }
+
+        if ((xTaskGetTickCount() - startTime) >= pdMS_TO_TICKS(HOMING_TIMEOUT_MS)) {
+            timedOut = true;
         }
     }
 
@@ -122,11 +134,12 @@ void run_homing(StepperMotor& stepper, LimitSwitch& homeSwitch) {
 
     if (homed) {
         stepper.setCurrentPosition(domain::Steps{0});
-        domain::gStopHome.store(false, std::memory_order_release);
-        ESP_LOGI(TAG, "Homing complete at step %lu",
+        domain::gStopFull.store(false, std::memory_order_release);
+        ESP_LOGI(TAG, "Homing complete at step %lu (FULL limit)",
                  static_cast<unsigned long>(totalSent));
-    } else {
-        ESP_LOGW(TAG, "Homing timed out after %lu steps",
+    } else if (timedOut) {
+        ESP_LOGW(TAG, "Homing timed out after %lu ms (%lu steps)",
+                 static_cast<unsigned long>(HOMING_TIMEOUT_MS),
                  static_cast<unsigned long>(totalSent));
     }
 
@@ -245,7 +258,7 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     puts("DBG: after LimitSwitch fullSwitch ctor"); fflush(stdout);
 
     puts("DBG: before run_homing"); fflush(stdout);
-    run_homing(stepper, homeSwitch);
+    run_homing(stepper, fullSwitch);
 
     MotorCommand cmd;
     while (true) {

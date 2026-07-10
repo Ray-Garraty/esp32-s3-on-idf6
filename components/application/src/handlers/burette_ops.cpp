@@ -91,8 +91,9 @@ std::expected<CommandResponse, domain::AppError> handleGetStatus(
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   size_t off = 0;
+  bool volumeIsNull = (state == domain::BuretteState::Homing);
   serializeStatusJson(rsp.body, off, state, tempCX100,
-                      valvePos, mv, dir, speed, accel, volumeMl);
+                      valvePos, mv, dir, speed, accel, volumeMl, volumeIsNull);
   rsp.bodySize = off;
   return rsp;
 }

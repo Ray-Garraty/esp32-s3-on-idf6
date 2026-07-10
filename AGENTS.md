@@ -4,6 +4,8 @@ Agent-critical rules for this firmware. Reference details in `docs/refs/project.
 (hardware, threads, network) and `docs/refs/coding_style.md` (C++23 conventions,
 RAII, error handling). Violations of CRITICAL rules invalidate all changes.
 
+- **Path accuracy**: File paths in sub-agent prompts must be relative to the repo root (e.g. `legacy/arduino/src/`, not `arduino/src/` or `src/`). The sub-agent's working directory is the workspace root — relative paths in prompts are resolved from there.
+
 ## 1. CRITICAL RULES (Auto-Revert)
 
 ### GR-1: NEVER BLOCK THE MAIN LOOP

@@ -242,7 +242,8 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
                          domain::BuretteState state, int32_t tempCX100,
                          domain::ValvePosition valvePos, float mv,
                          domain::Direction dir, uint32_t speed,
-                         uint32_t accel, float volumeMl) {
+                         uint32_t accel, float volumeMl,
+                         bool volumeIsNull) {
   constexpr auto S = domain::memory::MAX_RSP_SIZE;
   auto w = [&](const char* fmt, auto... args) {
     if (offset >= S) return;
@@ -254,7 +255,7 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
   const char* stateStr = "";
   switch (state) {
     case domain::BuretteState::Idle:      stateStr = "idle"; break;
-    case domain::BuretteState::Homing:    stateStr = "homing"; break;
+    case domain::BuretteState::Homing:    stateStr = "working"; break;
     case domain::BuretteState::Filling:   stateStr = "filling"; break;
     case domain::BuretteState::Emptying:  stateStr = "emptying"; break;
     case domain::BuretteState::Dosing:    stateStr = "dosing"; break;
@@ -272,9 +273,15 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
 
   w(R"({"state":"%s","temperature":%.1f,"valve":"%s","mv":%.1f,)",
     stateStr, static_cast<double>(tempC), valveStr, static_cast<double>(mv));
-  w(R"("direction":"%s","speed":%lu,"accel":%lu,"volume":%.1f})",
-    dirStr, static_cast<unsigned long>(speed),
-    static_cast<unsigned long>(accel), static_cast<double>(volumeMl));
+  if (volumeIsNull) {
+    w(R"("direction":"%s","speed":%lu,"accel":%lu,"volume":null})",
+      dirStr, static_cast<unsigned long>(speed),
+      static_cast<unsigned long>(accel));
+  } else {
+    w(R"("direction":"%s","speed":%lu,"accel":%lu,"volume":%.1f})",
+      dirStr, static_cast<unsigned long>(speed),
+      static_cast<unsigned long>(accel), static_cast<double>(volumeMl));
+  }
 }
 
 } // namespace ecotiter::application

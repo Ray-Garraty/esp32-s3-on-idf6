@@ -7,22 +7,23 @@ namespace ecotiter::interface {
 
 namespace {
 
+constexpr float kDefaultStepsPerMl = 3000.0f;
+
 const char* valveStr(domain::ValvePosition v) {
-    return (v == domain::ValvePosition::Input) ? "input" : "output";
+    return (v == domain::ValvePosition::Input) ? "in" : "out";
 }
 
-const char* buretteStr(domain::BuretteState s) {
+const char* brtStsStr(domain::BuretteState s) {
     switch (s) {
-        case domain::BuretteState::Idle:     return "idle";
-        case domain::BuretteState::Homing:   return "homing";
-        case domain::BuretteState::Filling:  return "filling";
-        case domain::BuretteState::Emptying: return "emptying";
-        case domain::BuretteState::Dosing:   return "dosing";
-        case domain::BuretteState::Rinsing:  return "rinsing";
-        case domain::BuretteState::Stopping: return "stopping";
         case domain::BuretteState::Error:    return "error";
+        case domain::BuretteState::Homing:
+        case domain::BuretteState::Filling:
+        case domain::BuretteState::Emptying:
+        case domain::BuretteState::Dosing:
+        case domain::BuretteState::Rinsing:
+        case domain::BuretteState::Stopping: return "working";
+        default:                             return "idle";
     }
-    return "unknown";
 }
 
 const char* dirStr(domain::Direction d) {
@@ -35,14 +36,40 @@ std::string_view serializeBroadcast(
     const BroadcastEvent& evt,
     domain::memory::ResponseBuffer& buf) {
 
+    char tempBuf[32];
+    const char* tempStr;
+    if (evt.tempCX100 > -99999) {
+        std::snprintf(tempBuf, sizeof(tempBuf), "%.1f",
+            static_cast<double>(evt.tempCX100) / 100.0);
+        tempStr = tempBuf;
+    } else {
+        tempStr = "null";
+    }
+
+    const char* vlStr;
+    char vlBuf[32];
+    if (evt.brt == domain::BuretteState::Homing) {
+        vlStr = "null";
+    } else {
+        std::snprintf(vlBuf, sizeof(vlBuf), "%.1f",
+            static_cast<double>(evt.volumeMl));
+        vlStr = vlBuf;
+    }
+
+    double spdMlMin = static_cast<double>(evt.speed) * 60.0
+        / static_cast<double>(kDefaultStepsPerMl);
+
     int n = std::snprintf(buf.data(), buf.size(),
-        R"({"t":%lu,"temp":%ld,"mv":%u,"vlv":"%s","brt":"%s",)"
+        R"({"t":%lu,"temp":%s,"mv":%u,"vlv":"%s",)"
+        R"("brt":{"sts":"%s","vl":%s,"spd":%.1f},)"
         R"("dir":"%s","spd":%lu,"acc":%lu,"vol":%.1f,"steps":%lu})",
         static_cast<unsigned long>(evt.tick),
-        static_cast<long>(evt.tempCX100),
+        tempStr,
         static_cast<unsigned>(evt.mv),
         valveStr(evt.vlv),
-        buretteStr(evt.brt),
+        brtStsStr(evt.brt),
+        vlStr,
+        spdMlMin,
         dirStr(evt.dir),
         static_cast<unsigned long>(evt.speed),
         static_cast<unsigned long>(evt.accel),

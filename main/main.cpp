@@ -22,6 +22,8 @@
 #include "infrastructure/network/wifi.hpp"
 #include "infrastructure/network/http_server.hpp"
 #include "infrastructure/temp_thread.hpp"
+#include "application/state_machine.hpp"
+#include "infrastructure/network/ble_notify_thread.hpp"
 #include "interface/broadcast.hpp"
 #include "interface/serial.hpp"
 
@@ -68,6 +70,9 @@ struct NetTaskParams {
     ecotiter::infrastructure::network::BleManager* bleManager;
 };
 
+// Global pointer for WebSocket broadcast — set by net_owner task after init
+namespace { ecotiter::infrastructure::network::HttpServer* gHttpServerForWs{nullptr}; }
+
 // GR-3: net_owner thread — WiFi init → HTTP server → BLE init → PHY wait → process loop
 extern "C" void netTaskEntry(void* pvParameters) {
     auto* params = static_cast<NetTaskParams*>(pvParameters);
@@ -98,6 +103,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
     auto httpResult = httpServer.init();
     if (httpResult) {
         httpServer.registerRoutes();
+        gHttpServerForWs = &httpServer;
         ESP_LOGI("net_owner", "HTTP server ready on 192.168.4.1:80");
     } else {
         ESP_LOGW("net_owner", "HTTP server init failed");
@@ -109,6 +115,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
         auto bleResult = params->bleManager->init();
         if (bleResult) {
             ESP_LOGI("net_owner", "BLE initialized successfully");
+            startBleNotifyThread(*params->bleManager);
         } else {
             ESP_LOGW("net_owner", "BLE init skipped (insufficient heap or HW error)");
         }
@@ -202,6 +209,21 @@ extern "C" void app_main(void)
     bool currentLedError = false;
     rgbLed.setTransportMode(currentLedMode, currentLedError);
 
+    // ====== Step 7c: Temperature thread ======
+    puts("DBG: step 7c - xTaskCreate temp");
+    fflush(stdout);
+    domain::gBootProgress.store(domain::BootProgress::TempTask, std::memory_order_release);
+    logDramBeforeTask("temp", domain::TEMP_THREAD_STACK);
+    BaseType_t tt = xTaskCreate(tempTaskEntry, "temp",
+                                domain::TEMP_THREAD_STACK / sizeof(configSTACK_DEPTH_TYPE),
+                                nullptr, 1, nullptr);
+    {
+        char dbg[64];
+        std::snprintf(dbg, sizeof(dbg), "DBG: xTaskCreate temp returned=%d\n", (int)tt);
+        puts(dbg);
+        fflush(stdout);
+    }
+
     // ====== Step 8: Motor task ======
     puts("DBG: step 8 - xTaskCreate motor");
     fflush(stdout);
@@ -241,6 +263,7 @@ extern "C" void app_main(void)
     infrastructure::drivers::AdcDriver adc(ADC_UNIT_1, ADC_CHANNEL_3);
 
     application::TickScheduler scheduler;
+    application::ApplicationStateMachine appStateMachine;
     TickType_t lastWake = xTaskGetTickCount();
     constexpr TickType_t PACING_TICK = pdMS_TO_TICKS(10);
 
@@ -273,6 +296,11 @@ extern "C" void app_main(void)
         rtcWdt.feed();
 
         scheduler.tick();
+
+        if (scheduler.shouldCheckWatermarks()) {
+            stackmon.logAllWatermarks();
+        }
+        appStateMachine.tick(application::gTick.load(std::memory_order_acquire));
 
         if (scheduler.shouldSample())
         {
@@ -311,6 +339,13 @@ extern "C" void app_main(void)
                     std::string_view bleSv(sv.data(), sv.size());
                     std::ignore = bleManager.sendNotification(bleSv);
                     std::ignore = bleManager.sendNotification({"\n", 1});
+                }
+                if (gHttpServerForWs) {
+                    ecotiter::domain::memory::ResponseBuffer wsBuf{};
+                    auto wsSv = ecotiter::interface::serializeBroadcast(evt, wsBuf);
+                    if (!wsSv.empty()) {
+                        gHttpServerForWs->broadcastWsEvent(wsSv.data(), wsSv.size());
+                    }
                 }
             }
         }
@@ -362,6 +397,15 @@ extern "C" void app_main(void)
                 currentLedError = newLedError;
                 rgbLed.setTransportMode(currentLedMode, currentLedError);
             }
+        }
+
+        // Update transport state in appStateMachine
+        if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire)) {
+            appStateMachine.setTransportState(application::TransportState::UsbActive);
+        } else if (bleManager.isConnected()) {
+            appStateMachine.setTransportState(application::TransportState::BleConnected);
+        } else {
+            appStateMachine.setTransportState(application::TransportState::BleDisconnected);
         }
 
         // Drain BLE command queue (only if initialized — commandQueue is created during init())

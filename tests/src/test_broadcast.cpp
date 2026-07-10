@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <cstring>
 #include <string_view>
@@ -31,10 +32,12 @@ TEST_CASE("serializeBroadcast: builds valid JSON with all fields", "[broadcast]"
 
     auto j = json::parse(sv);
     REQUIRE(j["t"] == 42);
-    REQUIRE(j["temp"] == 2345);
+    REQUIRE(j["temp"] == Catch::Approx(23.4));
     REQUIRE(j["mv"] == 1500);
-    REQUIRE(j["vlv"] == "input");
-    REQUIRE(j["brt"] == "idle");
+    REQUIRE(j["vlv"] == "in");
+    REQUIRE(j["brt"]["sts"] == "idle");
+    REQUIRE(j["brt"]["vl"] == Catch::Approx(50.0));
+    REQUIRE(j["brt"]["spd"] == Catch::Approx(20.0));
     REQUIRE(j["dir"] == "cw");
     REQUIRE(j["spd"] == 1000);
     REQUIRE(j["acc"] == 500);
@@ -61,8 +64,9 @@ TEST_CASE("serializeBroadcast: output position, ccw, dosing", "[broadcast]") {
     REQUIRE_FALSE(sv.empty());
 
     auto j = json::parse(sv);
-    REQUIRE(j["vlv"] == "output");
-    REQUIRE(j["brt"] == "dosing");
+    REQUIRE(j["vlv"] == "out");
+    REQUIRE(j["brt"]["sts"] == "working");
+    REQUIRE(j["brt"]["vl"] == Catch::Approx(25.0));
     REQUIRE(j["dir"] == "ccw");
     REQUIRE(j["spd"] == 2000);
     REQUIRE(j["acc"] == 300);
@@ -89,11 +93,11 @@ TEST_CASE("serializeBroadcast: sensor not detected (tempCX100 = -99999)", "[broa
     REQUIRE_FALSE(sv.empty());
 
     auto j = json::parse(sv);
-    REQUIRE(j["temp"] == -99999);
+    REQUIRE(j["temp"].is_null());
 }
 
 TEST_CASE("serializeBroadcast: all burette states round-trip", "[broadcast]") {
-    auto testState = [](BuretteState state, const char* expected) {
+    auto testState = [](BuretteState state, const char* expectedSts, bool expectVlNull) {
         BroadcastEvent evt{
             .tick = 0,
             .tempCX100 = 0,
@@ -110,17 +114,22 @@ TEST_CASE("serializeBroadcast: all burette states round-trip", "[broadcast]") {
         auto sv = serializeBroadcast(evt, buf);
         REQUIRE_FALSE(sv.empty());
         auto j = json::parse(sv);
-        REQUIRE(j["brt"] == expected);
+        REQUIRE(j["brt"]["sts"] == expectedSts);
+        if (expectVlNull) {
+            REQUIRE(j["brt"]["vl"].is_null());
+        } else {
+            REQUIRE(j["brt"]["vl"] == Catch::Approx(50.0));
+        }
     };
 
-    testState(BuretteState::Idle, "idle");
-    testState(BuretteState::Homing, "homing");
-    testState(BuretteState::Filling, "filling");
-    testState(BuretteState::Emptying, "emptying");
-    testState(BuretteState::Dosing, "dosing");
-    testState(BuretteState::Rinsing, "rinsing");
-    testState(BuretteState::Stopping, "stopping");
-    testState(BuretteState::Error, "error");
+    testState(BuretteState::Idle, "idle", false);
+    testState(BuretteState::Homing, "working", true);
+    testState(BuretteState::Filling, "working", false);
+    testState(BuretteState::Emptying, "working", false);
+    testState(BuretteState::Dosing, "working", false);
+    testState(BuretteState::Rinsing, "working", false);
+    testState(BuretteState::Stopping, "working", false);
+    testState(BuretteState::Error, "error", false);
 }
 
 TEST_CASE("serializeBroadcast: empty buffer returns empty view", "[broadcast]") {
@@ -152,6 +161,6 @@ TEST_CASE("serializeBroadcast: reads from domain atoms produce valid JSON", "[br
     REQUIRE_FALSE(sv.empty());
 
     auto j = json::parse(sv);
-    REQUIRE(j["temp"] == 2500);
+    REQUIRE(j["temp"] == Catch::Approx(25.0));
     REQUIRE(j["mv"] == 1800);
 }

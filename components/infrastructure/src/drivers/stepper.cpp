@@ -2,6 +2,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
+#include "driver/rmt_types.h"
 
 static constexpr auto TAG = "stepper";
 
@@ -119,10 +120,25 @@ domain::Result<void, domain::StepperError> StepperMotor::moveStepsIntervals(
             chunkSize = config::RMT_CHUNK_SYMBOLS;
         }
 
+        uint32_t symbols[config::RMT_CHUNK_SYMBOLS];
+        for (size_t i = 0; i < chunkSize; ++i) {
+            uint32_t interval = intervals[offset + i];
+            uint32_t pulseUs = 5;
+            if (interval <= pulseUs * 2) {
+                pulseUs = interval / 2;
+            }
+            rmt_symbol_word_t sym{};
+            sym.duration0 = static_cast<uint16_t>(pulseUs);
+            sym.level0 = 1;
+            sym.duration1 = static_cast<uint16_t>(interval - pulseUs);
+            sym.level1 = 0;
+            symbols[i] = sym.val;
+        }
+
         esp_err_t err = rmt_transmit(
             channel_.get(),
             encoder_,
-            &intervals[offset],
+            symbols,
             chunkSize * sizeof(uint32_t),
             &txConfig);
 

@@ -109,6 +109,7 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
                          domain::BuretteState state, int32_t tempCX100,
                          domain::ValvePosition valvePos, float mv,
                          domain::Direction dir, uint32_t speed,
-                         uint32_t accel, float volumeMl);
+                         uint32_t accel, float volumeMl,
+                         bool volumeIsNull = false);
 
 } // namespace ecotiter::application

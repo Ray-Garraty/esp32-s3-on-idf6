@@ -24,17 +24,20 @@ std::expected<size_t, int> handlePingCore(
 
 std::expected<size_t, int> handleStatusCore(
     domain::memory::ResponseBuffer& buf) {
+    auto state = domain::gBuretteState.load(std::memory_order_acquire);
+    bool volumeIsNull = (state == domain::BuretteState::Homing);
     size_t offset = 0;
     application::serializeStatusJson(
         buf, offset,
-        domain::gBuretteState.load(std::memory_order_acquire),
+        state,
         domain::gTempCX100.load(std::memory_order_acquire),
         domain::gValvePosition.load(std::memory_order_acquire),
         static_cast<float>(domain::gLastMv.load(std::memory_order_acquire)),
         domain::gDirection.load(std::memory_order_acquire),
         domain::gSpeed.load(std::memory_order_acquire),
         domain::gAccel.load(std::memory_order_acquire),
-        domain::gVolumeMl.load(std::memory_order_acquire));
+        domain::gVolumeMl.load(std::memory_order_acquire),
+        volumeIsNull);
     if (offset == 0) return std::unexpected(500);
     return offset;
 }
