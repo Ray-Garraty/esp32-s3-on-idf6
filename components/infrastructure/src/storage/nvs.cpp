@@ -149,6 +149,41 @@ domain::Result<void, domain::ResourceError> NvsHandle::eraseAll() {
     return {};
 }
 
+void nvsInit() {
+    // Create calibration namespaces if they don't exist (NVS_READWRITE auto-creates)
+    {
+        auto nvs = NvsHandle(config::NVS_NS_BURETTE_CAL, true);
+        if (nvs.isValid()) {
+            // Check if any key exists — if not, this is a fresh namespace
+            auto r = nvs.getF32(config::NVS_KEY_CAL_SPM);
+            if (r && !r->has_value()) {
+                // First boot — write defaults
+                auto cal = domain::CalibrationData{};
+                std::ignore = nvs.setF32(config::NVS_KEY_CAL_SPM, cal.stepsPerMl);
+                std::ignore = nvs.setF32(config::NVS_KEY_CAL_NOM, cal.nominalVolumeMl);
+                std::ignore = nvs.setF32(config::NVS_KEY_CAL_COEFF, cal.speedCoeff);
+                std::ignore = nvs.setU32(config::NVS_KEY_CAL_MIN_FREQ, static_cast<uint32_t>(cal.minFreqHz));
+                std::ignore = nvs.setU32(config::NVS_KEY_CAL_MAX_FREQ, static_cast<uint32_t>(cal.maxFreqHz));
+                std::ignore = nvs.setI32(config::NVS_KEY_CAL_DATE, 0);
+                ESP_LOGI(TAG, "Initialized %s namespace with defaults", config::NVS_NS_BURETTE_CAL);
+            }
+        }
+    }
+    {
+        auto nvs = NvsHandle(config::NVS_NS_ADC_CAL, true);
+        if (nvs.isValid()) {
+            auto r = nvs.getU32(config::NVS_KEY_ADC_A_X1000);
+            if (r && !r->has_value()) {
+                std::ignore = nvs.setU32(config::NVS_KEY_ADC_A_X1000,
+                    static_cast<uint32_t>(config::ADC_DEFAULT_A_X1000));
+                std::ignore = nvs.setI32(config::NVS_KEY_ADC_B,
+                    static_cast<int32_t>(config::ADC_DEFAULT_B));
+                ESP_LOGI(TAG, "Initialized %s namespace with defaults", config::NVS_NS_ADC_CAL);
+            }
+        }
+    }
+}
+
 uint8_t stallguardReadThreshold() {
     auto nvs = NvsHandle("stallguard", false);
     if (!nvs.isValid()) return 0;

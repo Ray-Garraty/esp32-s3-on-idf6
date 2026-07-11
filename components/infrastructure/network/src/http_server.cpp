@@ -352,13 +352,25 @@ esp_err_t api_logs_download_handler(httpd_req_t* req) {
 esp_err_t ws_handler(httpd_req_t* req) {
     diag::FfiGuard guard(83);
 
-    if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "WebSocket connect");
-        int fd = httpd_req_to_sockfd(req);
-        if (fd >= 0 && req->user_ctx) {
-            auto* server = static_cast<HttpServer*>(req->user_ctx);
+    // ESP-IDF handles the HTTP_GET WebSocket upgrade internally
+    // (httpd_uri.c:362-363 — "do not call the uri->handler"),
+    // so ws_handler HTTP_GET branch may never be reached.
+    // Track the session unconditionally on the first data frame instead.
+    //
+    // For HTTP_GET (if it ever reaches here): add session and return OK.
+    // For data frames: add session if not yet tracked, then process.
+
+    int fd = httpd_req_to_sockfd(req);
+
+    if (fd >= 0 && req->user_ctx) {
+        auto* server = static_cast<HttpServer*>(req->user_ctx);
+        if (!server->findSession(fd)) {
             server->addSession(fd);
+            ESP_LOGI(TAG, "WS session added for fd=%d", fd);
         }
+    }
+
+    if (req->method == HTTP_GET) {
         return ESP_OK;
     }
 
@@ -370,7 +382,6 @@ esp_err_t ws_handler(httpd_req_t* req) {
 
     esp_err_t err = httpd_ws_recv_frame(req, &frame, frame.len);
     if (err != ESP_OK) {
-        int fd = httpd_req_to_sockfd(req);
         if (fd >= 0 && req->user_ctx) {
             auto* server = static_cast<HttpServer*>(req->user_ctx);
             server->removeSession(fd);
@@ -379,7 +390,6 @@ esp_err_t ws_handler(httpd_req_t* req) {
     }
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE) {
-        int fd = httpd_req_to_sockfd(req);
         if (fd >= 0 && req->user_ctx) {
             auto* server = static_cast<HttpServer*>(req->user_ctx);
             server->removeSession(fd);
@@ -512,31 +522,39 @@ void HttpServer::registerRoutes() {
 void HttpServer::broadcastWsEvent(const char* jsonData, size_t len) {
     if (!handle_ || !jsonData || len == 0) return;
 
+    bool hasValid = false;
+    for (auto& s : sessions_) { if (s.fd >= 0) { hasValid = true; break; } }
+    if (!hasValid) { return; }
+
     httpd_ws_frame_t frame{};
     frame.type = HTTPD_WS_TYPE_TEXT;
     frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(jsonData));
     frame.len = len;
 
     int sent = 0;
-    int total = 0;
+    int skipped = 0;
     for (auto& session : sessions_) {
-        if (session.fd < 0) continue;
-        ++total;
+        if (session.fd < 0) {
+            ++skipped;
+            continue;
+        }
 
         auto fdInfo = httpd_ws_get_fd_info(handle_, session.fd);
-        if (fdInfo != HTTPD_WS_CLIENT_WEBSOCKET) {
-            ESP_LOGW(TAG, "WS session fd=%d not WS (info=%d), removing",
-                     session.fd, static_cast<int>(fdInfo));
+        if (fdInfo == HTTPD_WS_CLIENT_INVALID) {
             session.fd = WS_FD_INVALID;
+            ++skipped;
+            continue;
+        }
+        if (fdInfo != HTTPD_WS_CLIENT_WEBSOCKET) {
+            ++skipped;
             continue;
         }
 
         esp_err_t err = httpd_ws_send_frame_async(
             handle_, session.fd, &frame);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "WS send err=%d fd=%d", static_cast<int>(err), session.fd);
             auto checkInfo = httpd_ws_get_fd_info(handle_, session.fd);
-            if (checkInfo != HTTPD_WS_CLIENT_WEBSOCKET) {
+            if (checkInfo == HTTPD_WS_CLIENT_INVALID) {
                 session.fd = WS_FD_INVALID;
             }
         } else {

@@ -51,18 +51,34 @@ std::string_view serializeBroadcast(
     }
 
     int n = std::snprintf(buf.data(), buf.size(),
-        R"({"ts":%lu,"temp":%s,"mv":%u,"vlv":"%s",)"
+        R"({"ts":%lu,"temp":%s,"mv":%u,"electrode_mv":%u,"vlv":"%s",)"
         R"("brt":{"sts":"%s","vl":%s,"spd":%.1f},)"
-        R"("full":%s,"empty":%s})",
+        R"("full":%s,"empty":%s,)"
+        R"("usbSerialConnected":%s,"bleConnected":%s,)"
+        R"("stepperDrv":{"isConnected":%s,"otpw":%s,"ot":%s,)"
+        R"("motor":{"stallGuard":{"value":%u,"isStalled":%s,"threshold":%u},"isMoving":%s}},)"
+        R"("buretteSteps":{"taken":%lu})"
+        R"(})",
         static_cast<unsigned long>(evt.tick),
         tempStr,
         static_cast<unsigned>(evt.mv),
+        static_cast<unsigned>(evt.electrodeMv),
         valveStr(evt.vlv),
         brtStsStr(evt.brt),
         vlStr,
         static_cast<double>(evt.speedMlMin),
         evt.limitFull ? "true" : "false",
-        evt.limitEmpty ? "true" : "false");
+        evt.limitEmpty ? "true" : "false",
+        evt.usbSerialConnected ? "true" : "false",
+        evt.bleConnected ? "true" : "false",
+        evt.stepperDrvConnected ? "true" : "false",
+        evt.stepperDrvOtpw ? "true" : "false",
+        evt.stepperDrvOt ? "true" : "false",
+        static_cast<unsigned>(evt.stallGuardValue),
+        evt.isStalled ? "true" : "false",
+        static_cast<unsigned>(evt.stallGuardThreshold),
+        evt.motorIsMoving ? "true" : "false",
+        static_cast<unsigned long>(evt.stepsTaken));
 
     if (n < 0 || static_cast<size_t>(n) >= buf.size()) {
         // Truncation or error — return empty view

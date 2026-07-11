@@ -1,8 +1,11 @@
 ---
 type: CrashReport
+title: "Stack overflow in log_worker via httpd_ws_send_frame_async (synchronous despite name)"
+description: "Panic handler entered multiple times — stack overflow in log_worker task (4KB) via httpd_ws_send_frame_async -> send_fn() -> LWIP send() chain. The function is SYNCHRONOUS despite '_async' suffix."
+tags: [crash, stack_overflow, websocket, worker, lwip]
 version: "1.1"
 task_id: "manual"
-timestamp: "2026-07-11T15:30:00Z"
+timestamp: "2026-07-11"
 crash_signature: "Panic handler entered multiple times — root cause: stack overflow in log_worker task (4KB) via httpd_ws_send_frame_async → send_fn() → LWIP send() call chain. The function name is MISLEADING: it is SYNCHRONOUS, not async."
 ---
 

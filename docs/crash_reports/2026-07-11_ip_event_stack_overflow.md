@@ -1,9 +1,12 @@
 ---
 type: CrashReport
+title: "IP_EVENT_STA_GOT_IP callback chain overflow in system event task"
+description: "Stack overflow in default system event task (2304B) caused by ESP_LOGI -> LogBuffer::push() -> wsLogCallback -> broadcastWsEvent callback chain when IP_EVENT_STA_GOT_IP fires"
+tags: [crash, stack_overflow, wifi, event, callback]
 version: "1.0"
 task_id: "manual"
-timestamp: "2026-07-11T13:00:00Z"
-crash_signature: "IP_EVENT_STA_GOT_IP → callback chain overflow in system event task (stack=2304B default)"
+timestamp: "2026-07-11"
+crash_signature: "IP_EVENT_STA_GOT_IP -> callback chain overflow in system event task (stack=2304B default)"
 ---
 
 # Crash Report

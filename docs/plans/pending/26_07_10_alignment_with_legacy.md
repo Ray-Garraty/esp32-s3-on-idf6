@@ -3,7 +3,7 @@ type: Plan
 title: Alignment with Legacy Arduino Firmware
 description: Audit findings and restoration plan for business logic lost during Arduino → Rust → ESP-IDF migration
 tags: [migration, business-logic, calibration, state-machines, api]
-timestamp: 2026-07-10
+timestamp: 2026-07-11
 status: in_progress
 ---
 
@@ -16,14 +16,18 @@ loss. This document catalogues every discrepancy between the legacy Arduino
 firmware (`/home/vlabe/Downloads/legacy/arduino`) and the current ESP-IDF
 project, ranked by impact, and prescribes the restoration work.
 
-**Impact after Phases 0–6b:** Calibration defaults match Arduino (Phase 1).
-Dose planning with multi-cycle auto-fill works (Phase 2). Fill/empty/dose
-send real motor commands. Rinse/cal state machines implemented (Phase 3).
-Z-factor + OLS gravimetric correction done (Phase 4). ADC calibration
-with 5-point measure/compute/reset + NVS persistence done (Phase 5).
+**Impact after audit (2026-07-11):** Calibration defaults match Arduino (Phase 1 ✅).
+Dose planning with multi-cycle auto-fill works (Phase 2 ✅). Fill/empty/dose
+send real motor commands (Phase 2 ✅). Rinse/cal state machines implemented,
+handleCalRun + handleCalGetResult fully wired (Phase 3 ✅).
+Z-factor + OLS gravimetric correction done (Phase 4 ✅). ADC calibration
+with 5-point measure/compute/reset + NVS persistence done (Phase 5 ✅).
 LogBuffer (cyclic RAM buffer) captures all ESP_LOG output; `/api/logs`
-and `/api/logs/download` return real data; WebSocket log push in progress
-(Phase 6b).
+and `/api/logs/download` return real data; WebSocket log push wired
+but `fwrite(stdout)` after UART reinit still unstable (Phase 6b 🟡).
+Broadcast format fixed — `"t"` → `"ts"`, extra fields removed (Phase 8 ✅).
+mDNS `ecotiter.local` and `GET /api/nvs/status` implemented (Phase 7 🟡).
+TMC2209 UART (Phase 6 ❌) and Diagnostics (Phase 9 ❌) remain unstarted.
 
 ---
 
@@ -51,7 +55,7 @@ will cause the device to dispense wildly incorrect volumes out of the box.
 <!-- grep: dose-planner -->
 
 The Arduino dose planner splits large volumes into auto-fill cycles. The
-ESP-IDF has no equivalent logic.
+ESP-IDF now has equivalent logic (Phase 2 ✅):
 
 ```
 Arduino:
@@ -61,23 +65,24 @@ Arduino:
   state: DOSE_FILL_FIRST if current_vol < first_cycle_vol
          DOSE_DIRECT       otherwise
 
-ESP-IDF:
-  doseVolume handler → makeAckThenResponse() → NO motor command sent
+ESP-IDF (Phase 2):
+  planDose(volumeMl, nominalVol) → DosePlan { totalCycles, firstCycleVolMl, ... }
+  handleDoseVolume → plans multi-cycle, converts speedMlMin→Hz, sends MoveSteps
 ```
 
 **Source:** Arduino `src/burette_planner.cpp` (validation + cycle logic)
 
-### 3. State Machines — Not Ported
+### 3. State Machines — Ported (Phase 3 ✅)
 
 <!-- grep: state-machines-missing -->
 
 | State Machine | States | Arduino Status | ESP-IDF Status |
 |---------------|--------|----------------|----------------|
-| **Rinse** | PRE_FILL → EMPTYING → FILLING → DONE | Full | Not implemented |
-| **Calibration Dose** | CAL_IDLE → FILLING → EMPTYING → DONE | Full | Not implemented |
-| **Calibration Speed Single** | CAL_IDLE → FILLING → EMPTYING → done | Full | Not implemented |
-| **Calibration Speed Seq** | 3-point sequential with settling | Full | Not implemented |
-| **Auto-Dose** | FILLING → DOSING (multi-cycle) | Full | Not implemented |
+| **Rinse** | PRE_FILL → EMPTYING → FILLING → DONE | Full | ✅ `rinse_sm.hpp` + motor task `StartRinse` |
+| **Calibration Dose** | CAL_IDLE → FILLING → EMPTYING → DONE | Full | ✅ `cal_dose_sm.hpp` + motor task `StartCalDose` |
+| **Calibration Speed Single** | CAL_IDLE → FILLING → EMPTYING → done | Full | ✅ `cal_speed_sm.hpp` + motor task `StartCalSpeed` |
+| **Calibration Speed Seq** | 3-point sequential with settling | Full | ✅ 3-point in `cal_speed_sm.hpp` + `StartCalSpeedSeq` |
+| **Auto-Dose** | FILLING → DOSING (multi-cycle) | Full | ✅ `planDose()` multi-cycle logic (Phase 2) |
 | **BLE Zombie** | 2 levels | Full | 3 levels (improved) |
 | **Transport** | USB/BLE selection | Full | Partial |
 
@@ -115,7 +120,7 @@ stabilization, OLS compute (raw→corrected inversion), NVS persistence.
 Runtime `gCoeffAX1000`/`gCoeffB` updated on save. ADC `calibratedFromRaw()`
 applies correction in real time.
 
-### 7. TMC2209 UART — Not Connected
+### 7. TMC2209 UART — Not Connected (Phase 6 ❌)
 
 <!-- grep: tmc-uart -->
 
@@ -131,25 +136,25 @@ applies correction in real time.
 
 **GPIOs 16/17 (PDN_UART) are not defined in ESP-IDF config.hpp.**
 
-### 8. API Commands — Handler Stubs
+### 8. API Commands — Wiring Status
 
 <!-- grep: handler-stubs -->
 
-Commands that parse but do not execute the intended operation:
+Current wiring status of all API commands:
 
 | Command | Status |
 |---------|--------|
 | `fill` | ✅ Wired — sends MoveSteps CW to motor queue (Phase 2) |
 | `empty` | ✅ Wired — sends MoveSteps CCW to motor queue (Phase 2) |
 | `doseVolume` | ✅ Wired — plans multi-cycle dose, sends MoveSteps (Phase 2) |
-| `rinse` | 🟡 Basic fill command sent (Phase 2); full SM deferred to Phase 3 |
-| `cal.run` | ❌ Returns `makeAckThenResponse()` — no SM started |
-| `cal.save` | ❌ NVS write is stub |
+| `rinse` | ✅ Wired — sends `StartRinse` SM to motor queue (Phase 3) |
+| `cal.run` | ✅ Wired — sends `StartCalDose`/`StartCalSpeed` SM via `planCalRun()` |
+| `cal.save` | ✅ Real NVS persistence via `calibrationWrite()` |
 | `cal.reset` | ✅ Wired — resets NVS to defaults (Phase 1) |
-| `setVolume` | ❌ Returns ack only |
-| `configMove` | ❌ Returns ack with speed/accel values |
-| `configHome` | ❌ Returns ack with homeSpeed value |
-| `configSensor` | ❌ Returns ack with sensorValue |
+| `setVolume` | 🟡 Returns JSON with volume value, no runtime side effect |
+| `configMove` | 🟡 Returns JSON with speed/accel values, no persistence |
+| `configHome` | 🟡 Returns JSON with homeSpeed value, no persistence |
+| `configSensor` | 🟡 Returns JSON with sensorValue, no persistence |
 
 ### 9. HTTP API — Route Changes
 
@@ -160,11 +165,11 @@ Commands that parse but do not execute the intended operation:
 | `POST /api/valve/set` | `POST /api/valve` | Client break |
 | `GET /api/valve/state` | `GET /api/valve` | Client break |
 | `GET /api/events` (SSE) | `GET /ws/stream` (WebSocket) | Protocol change |
-| `GET /api/nvs/status` | Not present | Monitorability loss |
-| mDNS `ecotiter.local` | Not configured | Discovery loss |
-| AP password `12345678` | Open (no password) | Security regression |
+| `GET /api/nvs/status` | ✅ Implemented `http_server.cpp:289` | Fixed |
+| mDNS `ecotiter.local` | ✅ `wifi.cpp:445` — called on `IP_EVENT_STA_GOT_IP` | Fixed |
+| AP password `12345678` | ❌ Still `WIFI_AUTH_OPEN` | Security regression |
 
-### 10. Volume Tracking — Not Ported
+### 10. Volume Tracking — Ported (Phase 2), motor task wiring pending
 
 <!-- grep: volume-tracking -->
 
@@ -184,7 +189,7 @@ ESP-IDF has `VolumeTracker` struct with `onFillComplete()`, `onEmptyComplete()`,
 (Phase 2). It is used by `handleFill`/`handleEmpty`/`handleDoseVolume` but not yet
 wired into the motor task for incremental updates during movement.
 
-### 11. Diagnostic Gap: Broadcast Interval
+### 11. Diagnostic Gap: Broadcast Interval (still ~2000 ms vs Arduino 300 ms)
 
 <!-- grep: broadcast-interval -->
 
@@ -193,23 +198,25 @@ Arduino: 300 ms  →  ESP-IDF: ~2000 ms
 The 2-second latency will cause BLE/HTTP clients to see stale state,
 especially during fast dosing operations.
 
-### 12. Broadcast JSON Format — Mismatch with Spec
+### 12. Broadcast JSON Format — ✅ FIXED (Phase 8)
 
 <!-- grep: broadcast-format -->
 
-The ESP-IDF broadcast output does not match the legacy `SERIAL_API.md` spec:
+Phase 8 completed. All mismatches resolved:
 
 | Field | Legacy Spec | ESP-IDF (current) |
 |-------|-------------|-------------------|
-| `ts` (timestamp) | `"ts"` | `"t"` — wrong key |
-| Motor config `dir` | Not in broadcast | `"dir":"liq_in"` — extra field |
-| Motor config `spd` (Hz) | Not in broadcast | `"spd":1000` — extra field |
-| Motor config `acc` | Not in broadcast | `"acc":500` — extra field |
-| Motor config `vol` | Not in broadcast | `"vol":50.0` — duplicate of `brt.vl` |
-| Motor config `steps` | Not in broadcast | `"steps":12345` — extra field |
+| `ts` (timestamp) | `"ts"` | ✅ `"ts"` — correct key |
+| Motor config `dir` | Not in broadcast | ✅ Removed from struct and output |
+| Motor config `spd` (Hz) | Not in broadcast | ✅ Removed from output (field inside `brt` remains) |
+| Motor config `acc` | Not in broadcast | ✅ Removed from struct |
+| Motor config `vol` | Not in broadcast | ✅ Removed from struct |
+| Motor config `steps` | Not in broadcast | ✅ Removed from struct |
 
-**Fix:** Remove `dir`, `spd`, `acc`, `vol`, `steps` from broadcast JSON. Rename
-`"t"` → `"ts"`. Remove unused fields from `BroadcastEvent` struct.
+**Note:** `brt.spd` (speed in ml/min) still present inside the `BuretteStatus`
+sub-object — this is intentional, not the same as the removed top-level field.
+However, `speedMlMin` in broadcast is always `0.0` (set in `main.cpp:380` but
+never populated with live data).
 
 ---
 
@@ -220,10 +227,10 @@ The ESP-IDF broadcast output does not match the legacy `SERIAL_API.md` spec:
 After each phase, the following must pass:
 
 ```bash
-scripts/build.sh build      # Zero errors
-scripts/build.sh tidy       # Zero clang-tidy warnings
-scripts/build.sh test       # All Catch2 tests pass
-scripts/smoke_test.py       # Build + flash + 30 s monitor — no panics
+scripts/idf.sh build      # Zero errors
+scripts/idf.sh tidy       # Zero clang-tidy warnings
+scripts/idf.sh test       # All Catch2 tests pass
+scripts/idf.sh smoke      # Build + flash + 30 s monitor — no panics
 ```
 
 ### Manual Acceptance Criteria
@@ -297,26 +304,11 @@ matches Arduino (was 7.8).
 **Diff:** +165/-5 source lines (6 files).
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-<!-- grep: phase-2 -->
-
-- Added `speedMlMin` field to `Command` struct + parsing from JSON
-- Added `speedMlMinToHz()` conversion in `calibration.hpp` (Arduino-compatible)
-- Implemented `DosePlan` struct + `planDose()` — multi-cycle dose planning:
-  `totalCycles`, `firstCycleVolMl`, `remainingVolMl`, `needsFillFirst`
-- Implemented `VolumeTracker` struct — tracks volume after fill/empty/dose/stop/homing
-- Wired `handleFill`: reads calibration → calculates steps from `nominalVol * stepsPerMl` → sends `MoveSteps` CW
-- Wired `handleEmpty`: reads current volume → calculates steps → sends `MoveSteps` CCW
-- Wired `handleDoseVolume`: validates via `planDose()` → converts `speedMlMin` to Hz → sends `MoveSteps`
-- Wired `handleRinse`: basic fill-to-nominal motor command (full rinse SM deferred to Phase 3)
-
-**Diff:** +165/-5 source lines (6 files).
-**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
-
-### Phase 3: State Machines — ✅ IMPLEMENTED (2026-07-10)
+### Phase 3: State Machines — ✅ COMPLETED (2026-07-11)
 
 <!-- grep: phase-3 -->
 
-All 4 state machines implemented and wired:
+All 4 state machines implemented and wired. Verified via codebase audit:
 
 1. **RinseSm** (`domain/include/domain/rinse_sm.hpp`) — header-only
    - States: `PreFill → Emptying → Filling → Done`
@@ -336,7 +328,7 @@ All 4 state machines implemented and wired:
    - Per-point: fill, 1s settle, empty at test freq, measure time → speed
 
 5. **Motor task integration** (`motor_task.hpp`, `motor_task.cpp`)
-   - New `MotorCommandType`: `StartRinse`, `StartCalDose`, `StartCalSpeed`, `StartCalSpeedSeq`
+   - `MotorCommandType`: `StartRinse`, `StartCalDose`, `StartCalSpeed`, `StartCalSpeedSeq`
    - `SmResult` struct with result queue for all SM types
    - Helper functions: `move_fill()`, `move_empty()`, `set_valve()`, `store_result()`
    - SM drivers: `run_rinse_sm()`, `run_cal_dose_sm()`, `run_cal_speed_sm()`
@@ -344,10 +336,14 @@ All 4 state machines implemented and wired:
 6. **Handlers wired**:
    - `handleRinse` → sends `StartRinse` to motor queue
    - `handleCalRun` → validates via `mode` ("dose"/"speed"), sends `StartCalDose`/`StartCalSpeed`
-   - `handleCalGetResult` → stub (not yet reading from `SmResult`)
+   - `handleCalGetResult` → ✅ reads `gSmResult` with full type dispatch (was stub in plan)
 
 **Tests:** SM tests in `test_burette.cpp` (includes all 3 SM headers, 109 lines of tests).
 **Motor task stub:** `stub_motor_task.cpp` has `gSmResult` for test linking.
+
+**Note:** The "Files affected" table below lists `domain/src/rinse.cpp`, `cal_dose.cpp`,
+`cal_speed.cpp` — these do NOT exist. All SMs are correctly header-only as described
+above. The files-affected table is inaccurate.
 
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
@@ -402,7 +398,7 @@ All 4 state machines implemented and wired:
 full 5-point flow, dispatch routing, JSON parsing.
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-### Phase 6: TMC2209 UART (LOW priority)
+### Phase 6: TMC2209 UART — ❌ NOT STARTED (LOW priority)
 
 <!-- grep: phase-6 -->
 
@@ -415,7 +411,7 @@ full 5-point flow, dispatch routing, JSON parsing.
 
 **Tests:** Verify register writes with mock UART. NVS roundtrip for SG threshold.
 
-### Phase 6b: Log Infrastructure — 🟡 IN PROGRESS (2026-07-10)
+### Phase 6b: Log Infrastructure — 🟡 MOSTLY DONE (2026-07-11)
 
 <!-- grep: phase-6b -->
 
@@ -447,38 +443,45 @@ Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
    - `ws.onmessage` — handles `event === 'log'` → `addLogEntry()`
    - `loadInitialLogs()` — unchanged from before
 
-**Known issues:**
+**Known issues (unchanged from plan — found during audit):**
 - `fwrite(stdout)` for ESP_LOG forwarding to UART is unstable after
   UART driver reinit in `SerialReader::init()` — some ESP_LOG lines are lost
 - WebSocket push diagnostic via `write()` not visible in serial log
+- `speedMlMin` in broadcast always `0.0` — set in `main.cpp:380` but never populated
 
 **Diff:** 3 new files, 6 modified files.
 **Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
 
-### Phase 7: HTTP API Alignment (LOW priority)
+### Phase 7: HTTP API Alignment — 🟡 MOSTLY DONE (2026-07-11)
 
 <!-- grep: phase-7 -->
 
-1. Add `GET /api/nvs/status` endpoint
-2. Add mDNS: `mdns_init()`, `mdns_hostname_set("ecotiter")`, `mdns_service_add("http")`
-3. Restore AP password: add `kApPassword = "12345678"` to config, set in WiFi init
+1. `GET /api/nvs/status` → ✅ Implented at `http_server.cpp:289`, registered line 472
+2. mDNS → ✅ `startMdns()` in `wifi.cpp:445`, called on `IP_EVENT_STA_GOT_IP`
+3. Restore AP password → ❌ Still `WIFI_AUTH_OPEN` at `wifi.cpp:154` — needs
+   `kApPassword = "12345678"` in config
 4. Document WebSocket vs SSE protocol change in `docs/API/SERIAL_API.md`
 
 **Tests:** Host-based HTTP request/response tests. Manual mDNS resolution test.
 
-### Phase 8: Broadcast Format Fix (LOW priority)
+### Phase 8: Broadcast Format Fix — ✅ COMPLETED (2026-07-11)
 
 <!-- grep: phase-8 -->
 
-1. Fix `"t"` → `"ts"` in broadcast JSON key
-2. Remove extra fields from broadcast: `dir`, `spd`, `acc`, `vol`, `steps`
-3. Remove unused `dir`, `accel`, `dispensedSteps` from `BroadcastEvent` struct
-4. Update `main.cpp` — stop populating removed fields
-5. Update tests to match new format
+All items verified done during audit:
 
-**Tests:** Broadcast tests must pass with legacy-compatible format.
+1. `"t"` → `"ts"` → ✅ `broadcast.cpp:54` uses `"ts"`
+2. Remove `dir`, `spd`, `acc`, `vol`, `steps` → ✅ All removed from output
+3. Remove `dir`, `accel`, `dispensedSteps` from struct → ✅ `BroadcastEvent` is clean
+4. Update `main.cpp` → ✅ No longer populating removed fields
+5. Tests updated → ✅ `test_broadcast.cpp` uses `j["ts"]`
 
-### Phase 9: Diagnostics (LOW priority)
+**Note:** `brt.spd` (speed in ml/min) remains inside the `BuretteStatus` sub-object
+but is always `0.0` (never populated with live data — see Phase 6b known issues).
+
+**Tests:** Broadcast tests pass with legacy-compatible format.
+
+### Phase 9: Diagnostics — ❌ NOT STARTED (LOW priority)
 
 <!-- grep: phase-9 -->
 
@@ -490,6 +493,37 @@ Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
 **Tests:** Simulate timeout → verify transition to Idle/Error.
 
 ---
+
+### Phase 10: Post-Audit Cleanup Items (2026-07-11)
+
+<!-- grep: phase-10 -->
+
+Items discovered during the 2026-07-11 codebase audit that are not yet in any
+phase:
+
+1. **`handleGetStatus` returns hard-coded defaults** — reads `Idle`, `input` valve,
+   `0 mV` instead of current state from globals. Should return real runtime values.
+   (`application/src/dispatch.cpp`)
+
+2. **`stubSampleRead()` returns 0** — ADC calibration measure always reads 0 in
+   dispatch. Must wire real ADC read for production. (`application/src/dispatch.cpp`)
+
+3. **StateTracer not wired for SM transitions** — `run_rinse_sm()`,
+   `run_cal_dose_sm()`, `run_cal_speed_sm()` do not call
+   `StateTracer::logBuretteTransition()`. Only homing/error/idle transitions
+   are traced. (`infrastructure/src/motor_task.cpp`)
+
+4. **`speedMlMin` in broadcast always `0.0`** — set in `main.cpp:380` but never
+   populated with live motor speed data. (`main/main.cpp`)
+
+5. **No RWDT coverage for long SM operations** — Rinse 3 cycles can run for
+   minutes. May trigger task WDT if not refreshed. (`infrastructure/src/motor_task.cpp`)
+
+6. **`setVolume`, `configMove`, `configHome`, `configSensor` lack NVS persistence** —
+   Return JSON acknowledging values but never store them. (`application/src/handlers/`)
+
+**Priority:** These are non-blocking for physical testing but should be addressed
+before production release.
 
 ## Files affected
 
@@ -517,17 +551,17 @@ Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
 | `components/application/src/dispatch.cpp` | Pass `speedMlMin` to dose handler |
 | `components/application/src/handlers/burette_ops.cpp` | Wired fill/empty/dose/rinse to motor queue |
 
-### Phase 3 — State Machines
+### Phase 3 — State Machines (header-only — .cpp files below don't exist)
 
 | File | Change |
 |------|--------|
-| `components/domain/include/domain/rinse.hpp` | New file |
-| `components/domain/include/domain/cal_dose.hpp` | New file |
-| `components/domain/include/domain/cal_speed.hpp` | New file |
-| `components/domain/src/rinse.cpp` | New file |
-| `components/domain/src/cal_dose.cpp` | New file |
-| `components/domain/src/cal_speed.cpp` | New file |
-| `components/CMakeLists.txt` | Add new source files |
+| `components/domain/include/domain/rinse_sm.hpp` | New file (header-only) |
+| `components/domain/include/domain/cal_dose_sm.hpp` | New file (header-only) |
+| `components/domain/include/domain/cal_speed_sm.hpp` | New file (header-only, single + seq) |
+| ~~`components/domain/src/rinse.cpp`~~ | ❌ Does not exist — header-only |
+| ~~`components/domain/src/cal_dose.cpp`~~ | ❌ Does not exist — header-only |
+| ~~`components/domain/src/cal_speed.cpp`~~ | ❌ Does not exist — header-only |
+| `components/CMakeLists.txt` | ❌ No new sources needed (header-only) |
 
 ### Phase 4 — Z-Factor + OLS
 
@@ -578,31 +612,40 @@ Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
 | `components/interface/include/interface/webui.hpp` | WS onmessage handles `event === 'log'` |
 | `components/domain/include/domain/memory.hpp` | MAX_RSP_SIZE 512→2048 |
 
-### Phase 7 — HTTP API
+### Phase 7 — HTTP API (items 1-2 done, item 3 pending)
 
 | File | Change |
 |------|--------|
-| `components/infrastructure/src/network/http_server.cpp` | Routes |
-| `components/infrastructure/src/network/wifi.cpp` | AP password |
-| `components/infrastructure/src/network/main.cpp` | mDNS init |
+| `components/infrastructure/src/network/http_server.cpp` | ✅ `api_nvs_status_handler` at line 289 |
+| `components/infrastructure/src/network/wifi.cpp` | ✅ `startMdns()` + `IP_EVENT_STA_GOT_IP` at line 445; ❌ AP password `WIFI_AUTH_OPEN` at line 154 |
+| `components/infrastructure/src/network/wifi.cpp` | mDNS init |
 
-### Phase 8 — Broadcast Format Fix
-
-| File | Change |
-|------|--------|
-| `components/interface/include/interface/broadcast.hpp` | Remove `dir`, `accel`, `dispensedSteps` |
-| `components/interface/src/broadcast.cpp` | Fix `t`→`ts`, remove extra fields |
-| `main/main.cpp` | Stop populating removed fields |
-| `tests/src/test_broadcast.cpp` | Match new format |
-
-### Phase 9 — Diagnostics
+### Phase 8 — Broadcast Format Fix (✅ ALL DONE)
 
 | File | Change |
 |------|--------|
-| `components/application/src/state_machine.cpp` | Pending watchdog |
-| `components/application/include/application/state_machine.hpp` | Timeout config |
-| `components/interface/src/serial.cpp` | USB heartbeat |
-| `main/main.cpp` | StateTracer wiring |
+| `components/interface/include/interface/broadcast.hpp` | ✅ Fields removed |
+| `components/interface/src/broadcast.cpp` | ✅ `"t"` → `"ts"`, extra fields removed at line 54 |
+| `main/main.cpp` | ✅ No longer populating removed fields (line 380: `always 0.0` issue remains) |
+| `tests/src/test_broadcast.cpp` | ✅ Updated — uses `j["ts"]` |
+
+### Phase 9 — Diagnostics (❌ NOT IMPLEMENTED)
+
+| File | Change |
+|------|--------|
+| `components/application/src/state_machine.cpp` | Pending watchdog — not implemented |
+| `components/application/include/application/state_machine.hpp` | Timeout config — not implemented |
+| `components/interface/src/serial.cpp` | USB heartbeat — not implemented |
+| `main/main.cpp` | StateTracer wiring — only homing/idle transitions, not SM states |
+
+### Phase 10 — Post-Audit Cleanup
+
+| File | Change |
+|------|--------|
+| `components/application/src/dispatch.cpp` | Fix `handleGetStatus` hard-coded defaults; wire real ADC read |
+| `components/infrastructure/src/motor_task.cpp` | Wire StateTracer for SM transitions; add WDT refresh for long SMs |
+| `main/main.cpp` | Fix `speedMlMin` broadcast population |
+| `components/application/src/handlers/burette_ops.cpp` | Add NVS persistence for `setVolume`, `configMove`, `configHome`, `configSensor` |
 
 ---
 
@@ -624,17 +667,18 @@ Before Phase 2-4 codegen, the following headers in
 
 ## Rework Budget
 
-| Phase | Estimated additions | Actual | Risk |
-|-------|-------------------|--------|------|
+| Phase | Estimated additions | Actual | Status |
+|-------|-------------------|--------|--------|
 | 1 | 60 lines | **93** (source) / **106** (total) | ✅ Done |
 | 2 | 200 lines | **165** | ✅ Done |
-| 3 | 400 lines | — | Medium — SM correctness |
-| 4 | 300 lines | — | High — math correctness |
+| 3 | 400 lines | ~350 (header-only, no .cpp) | ✅ Done |
+| 4 | 300 lines | ~140 (Z-factor + OLS) | ✅ Done |
 | 5 | 150 lines | **511** (source) / **678** (total) | ✅ Done |
-| 6 | 200 lines | — | Medium — UART on PSRAM |
-| 6b | 200 lines | — | Medium — ESP_LOG forwarding |
-| 7 | 50 lines | — | Low — routes + mDNS |
-| 8 | 30 lines | — | Low — broadcast format |
-| 9 | 80 lines | — | Low — timeouts |
+| 6 | 200 lines | 0 | ❌ Not started |
+| 6b | 200 lines | ~250 (3 new files, 6 modified) | 🟡 Nearly done — fwrite issue |
+| 7 | 50 lines | ~30 (items 1-2 done) | 🟡 Mostly done — AP password |
+| 8 | 30 lines | ~20 (all items done) | ✅ Done |
+| 9 | 80 lines | 0 | ❌ Not started |
+| 10 | 100 lines | 0 | 🟡 Post-audit cleanup |
 
-**Total:** ~1460 lines added, ~560 lines changed.
+**Total:** ~1460 lines estimated; ~1650 lines actual completed; ~500 lines remaining.

@@ -12,12 +12,23 @@ struct BroadcastEvent {
     uint32_t tick;
     int32_t tempCX100;
     uint16_t mv;
+    uint16_t electrodeMv;
     domain::ValvePosition vlv;
     domain::BuretteState brt;
     float volumeMl;
     float speedMlMin;
     bool limitFull;
     bool limitEmpty;
+    bool usbSerialConnected;
+    bool bleConnected;
+    bool stepperDrvConnected;
+    bool stepperDrvOtpw;
+    bool stepperDrvOt;
+    uint8_t stallGuardValue;
+    bool isStalled;
+    uint8_t stallGuardThreshold;
+    bool motorIsMoving;
+    uint32_t stepsTaken;
 };
 
 // Serialize BroadcastEvent to a pre-allocated JSON buffer.

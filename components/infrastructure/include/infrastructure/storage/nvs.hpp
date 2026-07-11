@@ -43,6 +43,9 @@ private:
     bool open_{false};
 };
 
+// Initialize calibration namespaces with default values on first boot
+void nvsInit();
+
 [[nodiscard]] uint8_t stallguardReadThreshold();
 [[nodiscard]] domain::Result<void, domain::ResourceError> stallguardWriteThreshold(uint8_t value);
 [[nodiscard]] domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead();

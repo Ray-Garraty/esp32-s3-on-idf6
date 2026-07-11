@@ -48,7 +48,8 @@ body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;f
 .form-control{display:block;width:100%;padding:6px 12px;font-size:1rem;line-height:1.5;color:#212529;background:#fff;border:1px solid #dee2e6;border-radius:6px;transition:border-color .15s}
 .form-control:focus{border-color:#86b7fe;outline:0;box-shadow:0 0 0 3px rgba(13,110,253,.25)}
 .form-control-sm{padding:4px 8px;font-size:.875rem;border-radius:4px}
-.form-control[readonly]{background:#e9ecef;pointer-events:none}
+.form-control[readonly]{background:#e9ecef}
+#log-messages{pointer-events:auto;overflow-y:auto}
 [data-bs-theme="dark"] .form-control{background:var(--bg-dark-primary);border-color:var(--bg-dark-accent);color:var(--text-dark)}
 textarea.form-control{resize:none;font-family:'SF Mono',SFMono-Regular,ui-monospace,Menlo,Consolas,monospace}
 .form-select{display:block;width:auto;padding:4px 28px 4px 8px;font-size:.875rem;line-height:1.5;color:#212529;background:#fff url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") no-repeat right 8px center/12px;border:1px solid #dee2e6;border-radius:6px;appearance:none}
@@ -66,7 +67,7 @@ textarea.form-control{resize:none;font-family:'SF Mono',SFMono-Regular,ui-monosp
 .table-dark{--bs-table-bg:#212529;--bs-table-color:#fff;color:var(--bs-table-color);background:var(--bs-table-bg)}
 .table-dark th,.table-dark td{border-color:#373b3e}
 [data-bs-theme="dark"] .table-bordered,[data-bs-theme="dark"] .table-bordered th,[data-bs-theme="dark"] .table-bordered td,[data-bs-theme="dark"] .table th,[data-bs-theme="dark"] .table td{border-color:var(--border-dark)}
-.accordion-button{position:relative;display:flex;align-items:center;width:100%;padding:16px 20px;font-size:1.25rem;font-weight:700;color:#212529;background:transparent;border:0;border-radius:0;cursor:pointer;text-align:left}
+.accordion-button{position:relative;display:flex;align-items:center;width:100%;padding:16px 20px;font-size:1.25rem;font-weight:700;color:#212529;background:transparent;border:0;border-radius:0;cursor:pointer}
 .accordion-button:not(.collapsed){background:#e7f1ff;color:#0c63e4;box-shadow:inset 0 -1px 0 rgba(0,0,0,.125)}
 .accordion-button:focus{box-shadow:none;border-color:transparent}
 .accordion-button::after{content:'';width:20px;height:20px;margin-left:auto;background:url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23212529' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") no-repeat center;transition:transform .2s;flex-shrink:0}
@@ -87,7 +88,7 @@ textarea.form-control{resize:none;font-family:'SF Mono',SFMono-Regular,ui-monosp
 #stepperDrv-sg-threshold:not([readonly]){background:#fff;border-color:var(--focus-border);color:#212529}
 [data-bs-theme="dark"] #stepperDrv-sg-threshold{background:var(--bg-input-dark);border-color:var(--border-dark);color:var(--text-input)}
 [data-bs-theme="dark"] #stepperDrv-sg-threshold[readonly]{background:transparent;border-color:transparent}
-#log-messages{font-size:.75rem}#sse-log-entries pre,#sse-log-entries code{font-size:.7rem}#sse-log-entries{min-height:50px;border:1px dashed #ccc;padding:4px}
+#log-messages{font-size:.75rem}#ws-log-entries pre,#ws-log-entries code{font-size:.7rem}#ws-log-entries{min-height:50px;border:1px dashed #ccc;padding:4px;width:100%}
 [data-bs-theme="dark"] #log-messages{background:var(--bg-input-dark);color:var(--text-dark);border-color:var(--border-dark)}
 .spinner-border{display:inline-block;width:24px;height:24px;border:3px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spinner-border .75s linear infinite;vertical-align:middle}
 .spinner-border-sm{width:16px;height:16px;border-width:2px}
@@ -101,7 +102,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>EcoTiter Dashboard</title>
+<title>EcoTiter ESP32 Dashboard</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
@@ -116,7 +117,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 1. Peripheral Status -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button" data-bs-toggle="collapse" data-bs-target="#collapse-hardware" aria-expanded="true">Status</button></h2>
+<h2 class="accordion-header"><button class="accordion-button" data-bs-toggle="collapse" data-bs-target="#collapse-hardware" aria-expanded="true"><span class="flex-grow-1 text-center">Status</span></button></h2>
 <div id="collapse-hardware" class="accordion-collapse collapse show">
 <div class="card-body">
 <table class="table table-sm table-bordered mb-0">
@@ -133,7 +134,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 2. Stepper Driver -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-stepperdrv">Stepper Driver <span id="stepperDrv-status-icon" class="badge bg-danger ms-1" style="display:none">&#10007;</span><span id="stepperDrv-overheat" style="display:none"></span></button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-stepperdrv"><span class="flex-grow-1 text-center">Stepper Driver</span><span id="stepperDrv-status-icon" class="badge bg-danger ms-1">&#10007;</span><span id="stepperDrv-overheat" style="display:none"></span></button></h2>
 <div id="collapse-stepperdrv" class="accordion-collapse collapse">
 <div class="accordion-body">
 <div class="row"><div class="col-md-6">
@@ -146,7 +147,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 3. Stepper Control -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-stepper">Stepper Motor Control</button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-stepper"><span class="flex-grow-1 text-center">Stepper Motor Control</span></button></h2>
 <div id="collapse-stepper" class="accordion-collapse collapse">
 <div class="accordion-body">
 <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
@@ -159,8 +160,8 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 <button id="stepper-start-stop-btn" class="btn btn-success">&#9654; Start</button>
 <div id="stepper-spinner" class="spinner-border text-primary" role="status" style="display:none"></div>
 <div class="btn-group" role="group">
-<input type="radio" class="btn-check" name="stepper-dir" id="dir-down" value="LIQ_IN" checked> <label class="btn btn-outline-primary btn-md" for="dir-down">&#9660; IN</label>
-<input type="radio" class="btn-check" name="stepper-dir" id="dir-up" value="LIQ_OUT"> <label class="btn btn-outline-primary btn-md" for="dir-up">&#9650; OUT</label>
+<input type="radio" class="btn-check" name="stepper-dir" id="dir-down" value="LIQ_IN" checked> <label class="btn btn-outline-primary btn-md" for="dir-down"><i class="bi bi-arrow-down-square"></i> IN</label>
+<input type="radio" class="btn-check" name="stepper-dir" id="dir-up" value="LIQ_OUT"> <label class="btn btn-outline-primary btn-md" for="dir-up"><i class="bi bi-arrow-up-square"></i> OUT</label>
 </div>
 <span class="fw-bold me-1">EN:</span> <span id="stepperDrv-en-pin" class="badge bg-secondary ms-1">HIGH</span>
 </div>
@@ -168,7 +169,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 4. System Log -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button" data-bs-toggle="collapse" data-bs-target="#collapse-logs" aria-expanded="true">System Log</button></h2>
+<h2 class="accordion-header"><button class="accordion-button" data-bs-toggle="collapse" data-bs-target="#collapse-logs" aria-expanded="true"><span class="flex-grow-1 text-center">System Log</span></button></h2>
 <div id="collapse-logs" class="accordion-collapse collapse show">
 <div class="accordion-body">
 <div class="d-flex justify-content-end gap-2 mb-2">
@@ -181,7 +182,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 5. WS Events -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-ws">WS Events</button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-ws"><span class="flex-grow-1 text-center">WS Events</span></button></h2>
 <div id="collapse-ws" class="accordion-collapse collapse">
 <div class="accordion-body">
 <div class="d-flex justify-content-end gap-3 mb-2">
@@ -193,7 +194,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 6. ADC Calibration -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-adc-cal">ADC Calibration <span id="adc-cal-status-badge" class="badge bg-secondary ms-2">Default</span></button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-adc-cal"><span class="flex-grow-1 text-center">ADC Calibration</span><span id="adc-cal-status-badge" class="badge bg-secondary ms-2">&#9679; Default</span></button></h2>
 <div id="collapse-adc-cal" class="accordion-collapse collapse">
 <div class="accordion-body px-2 py-2">
 <table class="table table-sm table-bordered mb-2 text-center" id="adc-cal-points-table">
@@ -206,7 +207,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 7. Pinout Table -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-pinout">Pinout Table</button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-pinout"><span class="flex-grow-1 text-center">Pinout Table</span></button></h2>
 <div id="collapse-pinout" class="accordion-collapse collapse">
 <div class="accordion-body p-0">
 <table class="table table-sm table-bordered text-center"><thead class="table-dark"><tr><th>GPIO</th><th>Device</th><th>Note</th></tr></thead>
@@ -226,7 +227,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 8. Burette Volume Calibration -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-bc-volume">Volume Calibration <span id="bc-cal-status-badge" class="badge bg-secondary ms-2">Default</span></button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-bc-volume"><span class="flex-grow-1 text-center">Volume Calibration</span><span id="bc-cal-status-badge" class="badge bg-secondary ms-2">Default</span></button></h2>
 <div id="collapse-bc-volume" class="accordion-collapse collapse">
 <div class="accordion-body px-2 py-2">
 <table class="table table-sm table-bordered mb-2"><tbody><tr class="text-center">
@@ -252,7 +253,7 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 
 <!-- 9. Burette Speed Calibration -->
 <div class="accordion-item mb-3">
-<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-bc-speed">Speed Calibration <span id="bc-sp-cal-status-badge" class="badge bg-secondary ms-2">Default</span></button></h2>
+<h2 class="accordion-header"><button class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-bc-speed"><span class="flex-grow-1 text-center">Speed Calibration</span><span id="bc-sp-cal-status-badge" class="badge bg-secondary ms-2">Default</span></button></h2>
 <div id="collapse-bc-speed" class="accordion-collapse collapse">
 <div class="accordion-body px-2 py-2">
 <table class="table table-sm table-bordered mb-2"><tbody><tr class="text-center">
@@ -281,7 +282,9 @@ static constexpr std::string_view INDEX_HTML = R"idxhtml(<!doctype html>
 <script src="js/init.js"></script>
 <script>
 document.querySelectorAll('.accordion-button').forEach(function(btn){
-btn.addEventListener('click',function(){var t=document.querySelector(this.dataset.bsTarget);if(t){t.classList.toggle('show');this.classList.toggle('collapsed');this.setAttribute('aria-expanded',t.classList.contains('show'));}});
+function ta(){var t=document.querySelector(btn.getAttribute('data-bs-target'));if(t){var s=t.classList.toggle('show');btn.classList.toggle('collapsed');btn.setAttribute('aria-expanded',s);}}
+btn.addEventListener('click',ta);
+btn.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();ta();}});
 });
 </script>
 </body>
@@ -347,13 +350,13 @@ function setConnectionStatus(alive){
   _connAlive=alive;
   var el=document.getElementById('connection-status');
   if(el){el.className='badge bg-'+(alive?'success':'danger');el.innerHTML=alive?'<i class="bi-wifi"></i>':'<i class="bi-wifi-off"></i>';}
-  ['hw-valve-toggle-btn','stepper-start-stop-btn','logs-download-btn','dir-down','dir-up'].forEach(function(id){var btn=document.getElementById(id);if(btn)btn.disabled=!alive;});
+  ['hw-valve-toggle-btn','stepper-start-stop-btn','dir-down','dir-up'].forEach(function(id){var btn=document.getElementById(id);if(btn)btn.disabled=!alive;});
   ['dir-down','dir-up'].forEach(function(id){var lbl=document.querySelector('label[for="'+id+'"]');if(lbl){lbl.style.pointerEvents=alive?'auto':'none';}});
   if(!alive)resetUIValues();
 }
 
 function resetUIValues(){
-  var fields={'hw-temperature':'--','hw-adc':'--','hw-valve':'--','hw-limit-full':'--','hw-limit-empty':'--','hw-connection':'--','stepperDrv-status-icon':'&#10007;','stepperDrv-sg-result':'--','stepperDrv-stall':'--','stepperDrv-motor-busy':'--','stepper-actual-steps':'0'};
+  var fields={'hw-temperature':'--','hw-adc':'--','hw-valve':'--','hw-limit-full':'--','hw-limit-empty':'--','hw-connection':'--','stepperDrv-status-icon':'\u2717','stepperDrv-sg-result':'--','stepperDrv-stall':'--','stepperDrv-motor-busy':'--','stepper-actual-steps':'0'};
   for(var k in fields){var el=document.getElementById(k);if(el)el.textContent=fields[k];}
 }
 
@@ -368,10 +371,11 @@ function connectWs(){
   ws=new WebSocket(url);
   lastMsgTime=Date.now();
 
-  ws.onopen=function(){setConnectionStatus(true);lastMsgTime=Date.now();intervals.check=setInterval(checkConnection,CONFIG.WS_CHECK_INTERVAL_MS);intervals.ping=setInterval(function(){if(!_connAlive||Date.now()-lastMsgTime>3000)pingServer();},CONFIG.WS_PING_INTERVAL_MS);};
+  ws.onopen=function(){setConnectionStatus(true);lastMsgTime=Date.now();ws.send(JSON.stringify({type:'sub'}));intervals.check=setInterval(checkConnection,CONFIG.WS_CHECK_INTERVAL_MS);intervals.ping=setInterval(function(){if(!_connAlive||Date.now()-lastMsgTime>3000)pingServer();},CONFIG.WS_PING_INTERVAL_MS);};
 
   ws.onmessage=function(e){
     lastMsgTime=Date.now();if(!_connAlive)setConnectionStatus(true);
+    console.log('[WS] raw:', e.data);
     try{
       var data=JSON.parse(e.data);
       if(data.event&&data.event==='log'&&data.data){
@@ -386,7 +390,9 @@ function connectWs(){
           renderWsLog();
         }
       }
-    }catch(err){}
+    }catch(err){
+      console.error('[WS] onmessage error:', err, err.stack);
+    }
   };
 
   ws.onclose=function(){setConnectionStatus(false);if(wsReconnectTimer)clearTimeout(wsReconnectTimer);wsReconnectTimer=setTimeout(connectWs,3000);};
@@ -407,7 +413,7 @@ function formatWsEntry(e){
   var vol=(b&&b.vl!=null)?b.vl.toFixed(2)+' ml':'--';
   var speed=(b&&b.spd!=null)?b.spd.toFixed(1)+' ml/min':'--';
   var tempStr=(e.temp!=null)?e.temp.toFixed(1)+'&#176;C':'--';
-  var mvStr=(e.mv!=null)?Number(e.mv).toFixed(1)+' mV':'--';
+  var mvStr=(e.electrode_mv!=null)?Number(e.electrode_mv).toFixed(1)+' mV':'--';
   return '<tr>'+cell(ts)+cell(buretteStatus)+cell(vol,'Volume')+cell(speed,'Speed')+cell(tempStr)+cell(mvStr)+cell(valveLabel(e.vlv))+'</tr>';
 }
 
@@ -438,11 +444,13 @@ function updateUI(data){
   if(APP_STATE.logs.baseDate===null&&data.ts){APP_STATE.logs.baseDate=new Date();APP_STATE.logs.baseMillis=data.ts;}
   setText('hw-temperature',data.temp!==null&&data.temp!==undefined?data.temp.toFixed(1)+' \u00b0C':'--');
   setText('hw-adc',data.mv!==undefined?data.mv+' mV':'--');
-  setText('hw-electrode',data.mv!==undefined?data.mv+' mV':'--');
+  setText('hw-electrode',data.electrode_mv!==undefined?data.electrode_mv+' mV':'--');
   if(data.usbSerialConnected!==undefined){__connUsb=data.usbSerialConnected;updateConnectionStatus();}
   if(data.bleConnected!==undefined){__connBle=data.bleConnected;updateConnectionStatus();}
   if(data.vlv!==undefined){APP_STATE.valve.position=({'in':'input','out':'output','unk':'unknown'})[data.vlv]||data.vlv;document.getElementById('hw-valve').textContent=APP_STATE.valve.position;}
   if(data.brt){updateStepperUI({status:data.brt.sts,volume_ml:data.brt.vl,speed_ml_min:data.brt.spd});}
+  if(data.full!==undefined)document.getElementById('hw-limit-full').textContent=data.full?'Activated':'--';
+  if(data.empty!==undefined)document.getElementById('hw-limit-empty').textContent=data.empty?'Activated':'--';
 }
 
 function updateDebugUI(data){
@@ -451,7 +459,7 @@ function updateDebugUI(data){
   var set=function(id,v){var el=document.getElementById(id);if(el)el.textContent=v??'--';};
   if(diff('usbConnected')){__connUsb=cur.usbConnected;updateConnectionStatus();}
   if(diff('bleConnected')){__connBle=cur.bleConnected;updateConnectionStatus();}
-  if(diff('drvConnected')){var el=document.getElementById('stepperDrv-status-icon');if(el){el.style.display='';el.className='badge bg-'+(cur.drvConnected?'success':'danger')+' ms-1';el.textContent=cur.drvConnected?'&#10003;':'&#10007;';}}
+  if(diff('drvConnected')){var el=document.getElementById('stepperDrv-status-icon');if(el){el.style.display='';el.className='badge bg-'+(cur.drvConnected?'success':'danger')+' ms-1';el.textContent=cur.drvConnected?'\u2713':'\u2717';}}
   if(diff('ot')||diff('otpw')||diff('drvConnected')){var el=document.getElementById('stepperDrv-overheat');if(el){el.style.display=cur.drvConnected?'':'none';if(cur.ot)el.innerHTML='<span style="color:#dc3545">&#9822;</span>';else if(cur.otpw)el.innerHTML='<span style="color:#ffc107">&#9822;</span>';else if(cur.drvConnected)el.innerHTML='<span style="color:#198754">&#9822;</span>';}}
   if(diff('sgValue'))set('stepperDrv-sg-result',cur.sgValue);
   if(diff('isStalled'))set('stepperDrv-stall',cur.isStalled?'Yes':'No');
@@ -625,7 +633,7 @@ function updateBuretteCalUI(state){
   var spDateEl=document.getElementById("bc-sp-cal-date");spDateEl.textContent=(state.calibration_date>0)?new Date(state.calibration_date*1000).toLocaleString():"--";
 }
 
-function waitForBuretteIdle(){return new Promise(function(resolve){var poll=setInterval(function(){fetch("/api/status").then(function(r){return r.json();}).then(function(data){if(data&&data.state==="idle"){clearInterval(poll);resolve(true);}}).catch(function(){});},500);});}
+function waitForBuretteIdle(timeoutMs){timeoutMs=timeoutMs||30000;return new Promise(function(resolve,reject){var poll=setInterval(function(){fetch("/api/status").then(function(r){return r.json();}).then(function(data){if(data&&data.state==="idle"){clearInterval(poll);resolve(true);}}).catch(function(){});},500);setTimeout(function(){clearInterval(poll);reject(new Error("waitForBuretteIdle timeout after "+timeoutMs+"ms"));},timeoutMs);});}
 
 function runVolumeCalibration(){
   var freq=parseInt(document.getElementById("bc-vol-freq")?document.getElementById("bc-vol-freq").value:0);if(!freq||freq<=0){alert("Enter frequency");return;}
@@ -638,7 +646,7 @@ function runVolumeCalibration(){
         document.getElementById("bc-vol-steps").textContent=(calResult&&calResult.data)?(calResult.data.steps_taken??"--"):"--";
         document.getElementById("bc-vol-calc-btn").disabled=false;
         if(spinner)spinner.classList.add("d-none");if(btnText)btnText.textContent="Run";if(btn)btn.disabled=false;
-      });});
+      });}).catch(function(){if(spinner)spinner.classList.add("d-none");if(btnText)btnText.textContent="Run";if(btn)btn.disabled=false;});
     }else{if(spinner)spinner.classList.add("d-none");if(btnText)btnText.textContent="Run";if(btn)btn.disabled=false;}
   });
 }
@@ -714,7 +722,7 @@ function runSpeedSequence(){
           }
           spinner.classList.add("d-none");runText.textContent="Run";runBtn.disabled=false;calcBtn.disabled=false;resetBtn.disabled=false;
         });
-      });
+      }).catch(function(){spinner.classList.add("d-none");runText.textContent="Run";runBtn.disabled=false;calcBtn.disabled=false;resetBtn.disabled=false;});
     }else{
       spinner.classList.add("d-none");runText.textContent="Run";runBtn.disabled=false;calcBtn.disabled=false;resetBtn.disabled=false;
       sendCommand("burette.cal.get",{}).then(function(sr){if(sr&&sr.status==="ok"&&sr.data)updateBuretteCalUI(sr.data);});
@@ -748,13 +756,13 @@ var _cmdId=0;
 function initTheme(){
   var saved=localStorage.getItem('ecotiter-theme')||'light';
   document.documentElement.setAttribute('data-bs-theme',saved);
-  var icon=document.getElementById('theme-icon');if(icon)icon.textContent=saved==='dark'?'&#9728;':'&#9790;';
+  var icon=document.getElementById('theme-icon');if(icon)icon.textContent=saved==='dark'?'\u2600':'\u263E';
 }
 
 function toggleTheme(){
   var html=document.documentElement;var cur=html.getAttribute('data-bs-theme');var next=cur==='dark'?'light':'dark';
   html.setAttribute('data-bs-theme',next);localStorage.setItem('ecotiter-theme',next);
-  var icon=document.getElementById('theme-icon');if(icon)icon.textContent=next==='dark'?'&#9728;':'&#9790;';
+  var icon=document.getElementById('theme-icon');if(icon)icon.textContent=next==='dark'?'\u2600':'\u263E';
 }
 
 var sendCommand=async function(cmd,params){
@@ -771,12 +779,6 @@ var toggleValve=async function(){
     var r=await fetch('/api/valve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:newPos})});
     if(r.ok){var j=await r.json();if(j.valve){APP_STATE.valve.position=j.valve;setText('hw-valve',j.valve);}}
   }catch(e){}finally{if(btn){btn.disabled=false;btn.textContent='Toggle';}}
-};
-
-var sendCmd=async function(){
-  var input=document.getElementById('cmd-input');var resp=document.getElementById('cmd-response');
-  if(!input||!resp)return;var cmd=input.value.trim();if(!cmd)return;
-  try{var r=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:cmd});resp.value=await r.text();}catch(e){resp.value='Error: '+e.message;}
 };
 
 var sendCmdRaw=async function(cmdBody){
@@ -806,7 +808,7 @@ var initApp=function(){
 };
 
 document.addEventListener('DOMContentLoaded',initApp);
-window.sendCommand=sendCommand;window.sendCmdRaw=sendCmdRaw;window.toggleTheme=toggleTheme;window.toggleValve=toggleValve;window.sendCmd=sendCmd;
+window.sendCommand=sendCommand;window.sendCmdRaw=sendCmdRaw;window.toggleTheme=toggleTheme;window.toggleValve=toggleValve;
 )js"sv;
 
 struct FileEntry {

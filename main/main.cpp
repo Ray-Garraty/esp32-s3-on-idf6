@@ -113,6 +113,9 @@ static void wsLogCallback(const ecotiter::domain::LogEntry& entry) {
     while (*src && static_cast<size_t>(n) < sizeof(buf) - 6) {
         if (*src == '"') { buf[n++] = '\''; }
         else if (*src == '\\') { buf[n++] = '/'; }
+        else if (*src == '\n') { buf[n++] = '\\'; buf[n++] = 'n'; }
+        else if (*src == '\r') { buf[n++] = '\\'; buf[n++] = 'r'; }
+        else if (*src == '\t') { buf[n++] = '\\'; buf[n++] = 't'; }
         else { buf[n++] = *src; }
         ++src;
     }
