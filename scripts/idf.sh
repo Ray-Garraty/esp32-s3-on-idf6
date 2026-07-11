@@ -60,7 +60,7 @@ do_build() {
     idf.py build
     mkdir -p "$PROJECT_DIR/build"
     {
-        echo "BUILD_DATE=$BUILD_DATE"
+        echo "BUILD_DATE=\"$BUILD_DATE\""
         echo "GIT_HASH=$GIT_HASH"
     } > "$PROJECT_DIR/build/.build_meta"
 }
