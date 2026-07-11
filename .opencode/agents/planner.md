@@ -104,7 +104,7 @@ Write testable, verifiable criteria. Each AC must have:
 - Unique ID (`AC-001`, `AC-002`, ...)
 - Clear description (what behavior is expected)
 - Verification method: from this set (visit foreman/Validator for execution):
-  - `automated` — host unit test via `scripts/build.sh test`
+  - `automated` — host unit test via `scripts/idf.sh test`
   - `integration` — automated Python script on real ESP32 (e.g., `scripts/ble_test.py`)
   - `manual` — human confirms physical-world event via user polling
   - `inspection` — code review only

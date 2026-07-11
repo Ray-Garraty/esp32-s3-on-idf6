@@ -195,6 +195,8 @@ extern "C" void app_main(void)
     // Install ESP_LOG capture → LogBuffer (captures all subsequent ESP_LOGI/LOGW/LOGE calls)
     esp_log_set_vprintf(logVprintf);
 
+    ESP_LOGI(TAG, "Build: %s (git: %s)", BUILD_DATE, GIT_HASH);
+
     // ====== Step 1: NVS ======
     puts("DBG: step 1 - nvs_flash_init");
     fflush(stdout);

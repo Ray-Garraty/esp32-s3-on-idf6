@@ -10,7 +10,7 @@ temperature: 0.0
 permission:
   edit: ask
   bash:
-    "scripts/build.sh*": allow
+    "scripts/idf.sh*": allow
     "python3 scripts/*": allow
     "timeout * python3 scripts/*": allow
     "ls /dev/ttyUSB* /dev/ttyACM* /dev/cu.usb*": allow
@@ -92,7 +92,7 @@ lsusb
 ### Step 2: Build Firmware (3–8 min)
 
 ```bash
-scripts/build.sh
+scripts/idf.sh build
 ```
 
 Record:
@@ -105,14 +105,14 @@ If build fails → fail with build log. Return to Implementer.
 ### Step 3: Flash Device (1–2 min)
 
 ```bash
-scripts/build.sh flash /dev/ttyUSB0
+scripts/idf.sh flash
 ```
 
 Timeout ≥ 180s. Wait for "Flashing has completed!".
 
 If flash fails:
 1. Try auto-detecting port: `ls /dev/ttyUSB* /dev/ttyACM*`
-2. Retry with detected port: `scripts/build.sh flash <detected_port>`
+2. Retry with detected port: `scripts/idf.sh flash <detected_port>`
 3. If fails twice → fail with error log. Do NOT retry indefinitely.
 
 **CRITICAL:** Incomplete flash causes boot loop (`invalid segment length 0xffffffff`).
@@ -161,11 +161,11 @@ For EACH AC in `verified_plan.content.acceptance_criteria`, dispatch by
 
 #### 5a. automated (host test)
 
-Trust Implementer's report (they already ran `scripts/build.sh test`).
+Trust Implementer's report (they already ran `scripts/idf.sh test`).
 If you suspect a test doesn't actually verify the AC, spot-check:
 
 ```bash
-scripts/build.sh test
+scripts/idf.sh test
 ```
 
 Record: PASS / FAIL with test output.
@@ -317,4 +317,4 @@ rework_context:
 | Trying to diagnose Guru Meditation yourself | That's @debugger's specialty |
 | Bundling 5 manual ACs into one question | User confusion → bad evidence |
 | Paraphrasing user's answer | You lose nuance; keep exact words |
-| Using `idf.py` directly | Use `scripts/build.sh` for all build/flash commands |
+| Using `idf.py` directly | Use `scripts/idf.sh` for all build/flash commands |

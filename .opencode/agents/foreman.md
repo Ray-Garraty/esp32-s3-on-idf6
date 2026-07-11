@@ -145,14 +145,14 @@ Task(@validator, "Validate on real ESP32:\nPlan: <Plan YAML>\nImplementation: <I
 ```
 
 The `@validator` agent will:
-- Build & flash firmware (via `scripts/build.sh`)
+- Build & flash firmware (via `scripts/idf.sh`)
 - Run 30s smoke test (watch for crashes)
 - Execute integration scripts on the device
 - Poll the user via `question` tool for manual ACs
 - Return `ValidationReport` with physical evidence
 
 **Do NOT duplicate hardware validation yourself.** If you catch yourself
-about to run `scripts/build.sh flash` or ask user about physical events — STOP.
+about to run `scripts/idf.sh flash` or ask user about physical events — STOP.
 That's `@validator`'s job.
 
 ### Step 4a: Handle Validation Verdict

@@ -11,11 +11,10 @@ temperature: 0.0
 permission:
   edit: allow
   bash:
-    "scripts/build.sh*": allow
+    "scripts/idf.sh*": allow
     "scripts/lint.sh*": allow
     "scripts/monitor.py*": allow
-    "scripts/smoke_test.py*": allow
-    "scripts/unit_tests.sh*": allow
+    "scripts/monitor.py*": allow
     "scripts/find_port.py*": allow
     "~/.espressif/tools/xtensa-esp-elf/*/bin/xtensa-esp32s3-elf-*": allow
     "timeout * python3 scripts/*": allow
@@ -300,7 +299,7 @@ before `app_main()`.
 #### Technique E: sdkconfig Isolation
 
 1. Revert ALL Phase N+1 sdkconfig changes to Phase N values.
-2. Run `scripts/build.sh reconfigure` to regenerate `sdkconfig` from `sdkconfig.defaults`.
+2. Run `scripts/idf.sh reconfigure` to regenerate `sdkconfig` from `sdkconfig.defaults`.
 3. Flash → does crash stop?
 4. If yes → add changes back one by one, testing each.
 
@@ -480,11 +479,11 @@ This allows `grep -r "\[INVESTIGATION\]"` to find and revert all diagnostic code
 
 | Action | Command |
 |--------|---------|
-| Build | `scripts/build.sh build` (auto‑removes stale `sdkconfig`) |
-| Flash | `scripts/build.sh flash PORT` |
-| Monitor (capture) | `scripts/build.sh monitor PORT` (30s) or `scripts/monitor.py` |
-| Reconfigure | `scripts/build.sh reconfigure` (remove `sdkconfig` + `idf.py reconfigure`) |
-| Smoke test | `scripts/smoke_test.py` |
+| Build | `scripts/idf.sh build` |
+| Flash | `scripts/idf.sh flash PORT` |
+| Monitor (capture) | `scripts/idf.sh monitor PORT` (30s) or `scripts/monitor.py` |
+| Reconfigure | `scripts/idf.sh reconfigure` |
+| Smoke test | `scripts/idf.sh smoke` |
 | Backtrace decode | `xtensa-esp32s3-elf-addr2line -pfiaC -e build/ecotiter.elf <PC1> <PC2> ...` |
 | ELF sections | `xtensa-esp32s3-elf-objdump -h build/ecotiter.elf` |
 | Size | `xtensa-esp32s3-elf-size build/ecotiter.elf` |

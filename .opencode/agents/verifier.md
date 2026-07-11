@@ -165,7 +165,7 @@ Add NEW risks if the Planner missed them:
 
 ### Step 4: AC Testability Audit
 For each AC, classify **verification_method**:
-- **automated** — `scripts/build.sh test` (pure logic, no hardware)
+- **automated** — `scripts/idf.sh test` (pure logic, no hardware)
 - **integration** — automated script on real ESP32 (e.g., `scripts/ble_test.py`, `scripts/uart_test.py`). No human needed during execution, but ESP32 hardware is required.
 - **manual** — requires a human to observe/interact with the physical world (press a limit switch, confirm LED blink, verify motor rotation direction, report what the device did).
 - **inspection** — code structure review (no runtime).

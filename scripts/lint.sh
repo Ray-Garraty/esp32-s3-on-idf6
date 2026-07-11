@@ -72,7 +72,7 @@ EXTRA_ARGS+=" --checks=-readability-*,-cppcoreguidelines-*,-modernize-*,-bugpron
 # --- Check build directories ---
 if [[ ! -f build/compile_commands.json ]]; then
   echo "ERROR: build/compile_commands.json not found. Run 'idf.py build' first."
-  echo "  (or: ./scripts/build.sh)"
+  echo "  (or: ./scripts/idf.sh build)"
   exit 1
 fi
 

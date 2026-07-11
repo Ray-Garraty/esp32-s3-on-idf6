@@ -32,7 +32,7 @@ printf("[INVESTIGATION] main task stack watermark: %u bytes\n",
        wm * sizeof(configSTACK_DEPTH_TYPE));
 ```
 
-Build (`scripts/build.sh build`), flash, monitor.
+Build (`scripts/idf.sh build`), flash, monitor.
 
 **Decision:**
 - Watermark < 2048 bytes → **root cause = stack overflow**. Skip to Phase 4.
@@ -66,7 +66,7 @@ extern "C" void app_main(void) {
 }
 ```
 
-Build (`scripts/build.sh build`), flash, monitor.
+Build (`scripts/idf.sh build`), flash, monitor.
 
 **Decision:**
 - Smoke test boots and stays alive → ESP-IDF init OK, problem is in application code.

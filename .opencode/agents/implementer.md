@@ -2,7 +2,7 @@
 description: >
   Implements code changes per a verified plan. Follows plan scope
   exactly, adds tests for automated acceptance criteria, runs all
-  project checks (scripts/build.sh test, scripts/build.sh tidy, scripts/build.sh build), and
+  project checks (scripts/idf.sh test, scripts/idf.sh tidy, scripts/idf.sh build), and
   produces a detailed implementation inventory.
 mode: subagent
 hidden: true
@@ -52,17 +52,17 @@ Run these commands to verify your changes:
 
 ```bash
 # Host unit tests (all pure logic tests)
-scripts/build.sh test
+scripts/idf.sh test
 
 # Format check
 find main components -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \
   | xargs clang-format --dry-run -Werror
 
 # Lint — zero warnings (clang-tidy via lint.sh)
-scripts/build.sh tidy
+scripts/idf.sh tidy
 
 # Firmware build — verify compilation for target
-scripts/build.sh build
+scripts/idf.sh build
 ```
 
 Fix any failures BEFORE reporting.
@@ -72,7 +72,7 @@ You are responsible for:
 - Firmware build verification
 
 You are NOT responsible for:
-- Flashing the device (Validator does this via `scripts/build.sh flash`)
+- Flashing the device (Validator does this via `scripts/idf.sh flash`)
 - Running integration scripts on hardware (Validator does this)
 - Manual hardware testing (Validator polls the user)
 

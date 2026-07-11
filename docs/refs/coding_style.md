@@ -401,9 +401,9 @@ stepper.moveSteps(STEPS_HOMING, Hz{HOMING_SPEED_HZ});
 - [ ] Every `// CONTRACT:` comment present on low-level operations
 
 ### Testing
-- [ ] `scripts/build.sh test` — all pass
-- [ ] `scripts/build.sh tidy` — 0 warnings
-- [ ] `scripts/build.sh build` — 0 errors, 0 warnings
+- [ ] `scripts/idf.sh test` — all pass
+- [ ] `scripts/idf.sh tidy` — 0 warnings
+- [ ] `scripts/idf.sh build` — 0 errors, 0 warnings
 
 ## Summary
 

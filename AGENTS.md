@@ -238,19 +238,19 @@ EN pin active LOW: `gpio_set_level(en, 0)` in constructor.
 
 | Command | Purpose | Timeout |
 |---------|---------|---------|
-| `scripts/build.sh build` | Build firmware (auto‑removes stale `sdkconfig`) | ≥ 120 s |
-| `scripts/build.sh flash` | Flash firmware | ≥ 60 s |
-| `scripts/build.sh monitor` | Serial monitor (live log) | 30 s |
-| `scripts/smoke_test.py` | Automated smoke test (build + flash + 30s monitor) | 120 s |
-| `scripts/build.sh uart` | UART command test | 60 s |
-| `scripts/build.sh reconfigure` | Remove `sdkconfig` + `idf.py reconfigure` | ≥ 60 s |
-| `scripts/build.sh test` | Host unit tests (Catch2) | 60 s |
-| `scripts/build.sh tidy` | clang-tidy | 60 s |
-| `scripts/build.sh clean` | Remove build dirs | 15 s |
+| `scripts/idf.sh build` | Build firmware (clean build, auto‑removes `sdkconfig`) | ≥ 120 s |
+| `scripts/idf.sh flash` | Flash firmware (auto‑detect port) | ≥ 60 s |
+| `scripts/idf.sh monitor` | Serial monitor (live log, auto‑detect port) | 30 s |
+| `scripts/idf.sh smoke` | Automated smoke test (build + flash + 30s monitor) | 120 s |
+| `scripts/idf.sh uart` | UART command test | 60 s |
+| `scripts/idf.sh reconfigure` | Remove `sdkconfig` + `idf.py reconfigure` | ≥ 60 s |
+| `scripts/idf.sh test` | Host unit tests (Catch2) | 60 s |
+| `scripts/idf.sh tidy` | clang-tidy | 60 s |
+| `scripts/idf.sh clean` | Remove build dirs | 15 s |
 
 ### 4.2 Build Script Mandatory
 
-**NEVER call `idf.py` directly.** Always use `scripts/build.sh` — it wraps
+**NEVER call `idf.py` directly.** Always use `scripts/idf.sh` — it wraps
 ESP-IDF environment setup and provides consistent error handling.
 
 ### 4.3 sdkconfig Policy
@@ -258,12 +258,12 @@ ESP-IDF environment setup and provides consistent error handling.
 Edit only `sdkconfig.defaults` — never `sdkconfig` (auto-generated).
 Never run `idf.py menuconfig`.
 
-**`scripts/build.sh build` always removes stale `sdkconfig` first** — this
+**`scripts/idf.sh build` always does a clean build (removes `build/` + `sdkconfig`)** — this
 forces CMake to regenerate from `sdkconfig.defaults`, exposing config
 mismatches that a stale file would silently hide.
 
 After changing `sdkconfig.defaults`, also available:
-`scripts/build.sh reconfigure` (remove + `idf.py reconfigure` without full
+`scripts/idf.sh reconfigure` (remove + `idf.py reconfigure` without full
 build).
 
 Key defaults: `CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768`,
@@ -320,7 +320,7 @@ t0 main watermark=0  t1 motor watermark=0 ...
 | IllegalInstruction + heap 6 KB largest | DRAM fragment → HTTP alloc fail (LL-004) | Keep event loop handle alive |
 | GPIO init hangs on pins 26-37 | PSRAM/Flash bus conflict (LL-027) | Move GPIOs to safe pins (5,6,7,15) |
 | `esp_phy_load` spinlock at boot | PHY calibration deadlock (LL-031) | Call `phy_deinit()` before BLE init, reinit after |
-| `wifi_init.c:52` `#error "WIFI_RX_BA_WIN > WIFI_DYNAMIC_RX_BUFFER_NUM"` | Stale `sdkconfig` hid changed `sdkconfig.defaults` | `scripts/build.sh build` auto‑removes `sdkconfig`; also fix `WIFI_DYNAMIC_RX_BUFFER_NUM` in defaults |
+| `wifi_init.c:52` `#error "WIFI_RX_BA_WIN > WIFI_DYNAMIC_RX_BUFFER_NUM"` | Stale `sdkconfig` hid changed `sdkconfig.defaults` | `scripts/idf.sh build` auto‑removes stale build dir; also fix `WIFI_DYNAMIC_RX_BUFFER_NUM` in defaults |
 
 ---
 
@@ -366,9 +366,9 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 
 ## 8. FINAL COMMIT CHECKLIST
 
-- [ ] `scripts/build.sh build` — 0 errors, 0 warnings
-- [ ] `scripts/build.sh tidy` — 0 warnings
-- [ ] `scripts/build.sh test` — all pass
+- [ ] `scripts/idf.sh build` — 0 errors, 0 warnings
+- [ ] `scripts/idf.sh tidy` — 0 warnings
+- [ ] `scripts/idf.sh test` — all pass
 - [ ] No `std::abort()` / `std::terminate()` / `assert()` in production
 - [ ] No `std::string` / `std::vector` in main loop or motor hot paths
 - [ ] Every `// NOLINT` has `// CONTRACT:` within preceding 3 lines
@@ -405,7 +405,7 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 | Naked `rmt_channel_handle_t` | RAII wrapper class | coding_style.md §9.5 |
 | Naked `httpd_handle_t` / etc. | RAII wrapper class | coding_style.md §9.5 |
 | Functions returning -1 on error | `std::expected<T, Error>` | coding_style.md §2 |
-| Stale `sdkconfig` hiding config mismatches | `scripts/build.sh build` auto‑removes it | §4.3 |
+| Stale `sdkconfig` hiding config mismatches | `scripts/idf.sh build` does clean build | §4.3 |
 
 ---
 
