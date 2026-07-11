@@ -58,12 +58,25 @@ do_build() {
     GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     export BUILD_DATE GIT_HASH
     echo "Building firmware: $BUILD_DATE (git: $GIT_HASH)"
-    idf.py build
+
+    mkdir -p "$PROJECT_DIR/logs"
+    local build_log="$PROJECT_DIR/logs/build.log"
+    {
+        echo "# WARNING: Do NOT read this file in full with Read tool — file is large (~3000+ lines)."
+        echo "# Use grep/rg/tail/crash_analyzer for targeted search. See AGENTS.md §6.3."
+        echo "# Build: $BUILD_DATE (git: $GIT_HASH)"
+        echo ""
+    } > "$build_log"
+    idf.py build 2>&1 | tee -a "$build_log" | grep -iE '(^Building firmware|^Executing action|warning:|error:|fatal:|FAILED|^Project build complete|Full build log|binary size)' || true
+    local ret=${PIPESTATUS[0]}
+
     mkdir -p "$PROJECT_DIR/build"
     {
         echo "BUILD_DATE=\"$BUILD_DATE\""
         echo "GIT_HASH=$GIT_HASH"
     } > "$PROJECT_DIR/build/.build_meta"
+    echo "Full build log: $build_log"
+    return "$ret"
 }
 
 # Erase entire flash chip
