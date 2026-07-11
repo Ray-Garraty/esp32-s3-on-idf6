@@ -31,12 +31,13 @@ uint32_t StackMonitor::watermarkMain() const noexcept {
 void StackMonitor::logAllWatermarks() const noexcept {
     for (size_t i = 0; i < count_; ++i) {
         UBaseType_t wm = uxTaskGetStackHighWaterMark(handles_[i]);
-        size_t stackWords = stackSizes_[i] / sizeof(configSTACK_DEPTH_TYPE);
-        uint32_t usedWords = stackWords - wm;
-        uint32_t usedPct = (stackWords > 0) ? (usedWords * 100 / stackWords) : 0;
+        uint32_t usedBytes = static_cast<uint32_t>(
+            stackSizes_[i] - static_cast<size_t>(wm));
+        uint32_t usedPct = (stackSizes_[i] > 0)
+            ? (usedBytes * 100 / static_cast<uint32_t>(stackSizes_[i])) : 0;
         ESP_LOGI(TAG, "Thread %s: cfg=%zuB wmark=%u used=%u%%",
                  names_[i], stackSizes_[i],
-                 static_cast<unsigned>(wm * sizeof(configSTACK_DEPTH_TYPE)),
+                 static_cast<unsigned>(wm),
                  static_cast<unsigned>(usedPct));
         if (usedPct > 90) {
             ESP_LOGW(TAG, "Thread %s: LOW STACK! %u%% used",

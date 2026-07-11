@@ -336,7 +336,7 @@ document.getElementById('wifi-form').addEventListener('submit',async function(e)
 
 static constexpr std::string_view STATE_JS = R"js(
 var CONFIG={LOG_MAX_ENTRIES:100,WS_MAX_ENTRIES:5,WS_CHECK_INTERVAL_MS:2000,WS_PING_INTERVAL_MS:2000,WS_TIMEOUT_MS:4000,STEPPER:{DEFAULT_FREQ:300,DEFAULT_STEPS:1000,MAX_FREQ:1000},BC:{MAX_SPEED_ROWS:10,FREQ_PERCENTAGES:[0.25,0.50,0.75]}};
-var APP_STATE={stepper:{direction:'LIQ_OUT',busy:false,enEnabled:false,mode:'continuous'},valve:{position:'input'},logs:{messages:[],wsEntries:[],wsAutoupdate:true,wsRawJson:false,baseDate:null,baseMillis:0},ui:{sgEditMode:false,motorStoppedAt:null,logLevelFilter:'ALL'},calibration:{speedRowCount:0,adcState:null,calibratingIndex:-1}};
+var APP_STATE={stepper:{direction:'LIQ_OUT',busy:false,enEnabled:false,mode:'continuous',pendingCommand:false,stopPending:false},valve:{position:'input'},logs:{messages:[],wsEntries:[],wsAutoupdate:true,wsRawJson:false,baseDate:null,baseMillis:0},ui:{sgEditMode:false,motorStoppedAt:null,logLevelFilter:'ALL'},calibration:{speedRowCount:0,adcState:null,calibratingIndex:-1}};
 var setState=function(path,value,onUpdate){var keys=path.split('.');var target=APP_STATE;for(var i=0;i<keys.length-1;i++)target=target[keys[i]];target[keys[keys.length-1]]=value;if(onUpdate)onUpdate();};
 window.APP_STATE=APP_STATE;window.CONFIG=CONFIG;
 )js"sv;
@@ -536,6 +536,11 @@ function updateDynamicInput(){
 
 function stepperStartStop(){
   var btn=document.getElementById('stepper-start-stop-btn');
+  if(APP_STATE.stepper.pendingCommand){
+    APP_STATE.stepper.stopPending=true;
+    if(btn){btn.disabled=true;btn.textContent='Stopping...';}
+    return;
+  }
   if(APP_STATE.stepper.busy){
     if(btn){btn.disabled=true;btn.textContent='Stopping...';}
     sendCommand('burette.stop',{}).then(function(res){if(!res)showUIError('Failed to stop motor');else if(res.status==='error')console.error('stepperStartStop: stop rejected',JSON.stringify(res));if(btn)btn.disabled=false;});
@@ -545,7 +550,20 @@ function stepperStartStop(){
     if(val<=0){showUIError('Enter value > 0');return;}
     if(btn){btn.disabled=true;btn.textContent='Starting...';}
     var cmd=buildStepperCommand(APP_STATE.stepper.mode,dir,val);
-    sendCommand(cmd.cmd,cmd.params).then(function(res){if(!res)showUIError('Command '+cmd.cmd+' failed');else if(res.status==='error')console.error('stepperStartStop: '+cmd.cmd+' rejected',JSON.stringify(res));if(btn)btn.disabled=false;});
+    APP_STATE.stepper.pendingCommand=true;
+    sendCommand(cmd.cmd,cmd.params).then(function(res){
+      APP_STATE.stepper.pendingCommand=false;
+      if(APP_STATE.stepper.stopPending){
+        APP_STATE.stepper.stopPending=false;
+        sendCommand('burette.stop',{}).then(function(sres){
+          if(!sres)showUIError('Failed to stop motor');
+          else if(sres.status==='error')console.error('stepperStartStop: stop rejected',JSON.stringify(sres));
+          if(btn)btn.disabled=false;
+        });
+        return;
+      }
+      if(!res)showUIError('Command '+cmd.cmd+' failed');else if(res.status==='error')console.error('stepperStartStop: '+cmd.cmd+' rejected',JSON.stringify(res));if(btn)btn.disabled=false;
+    });
   }
 }
 
@@ -654,7 +672,7 @@ function runVolumeCalibration(){
 function calcVolumeCalibration(){
   var mass=parseFloat(document.getElementById("bc-vol-mass")?document.getElementById("bc-vol-mass").value:"0");
   var temp=parseFloat(document.getElementById("bc-vol-temp")?document.getElementById("bc-vol-temp").value:"25");
-  var pressure=parseFloat(document.getElementById("bc-vol-pressure")?document.getElementById("bc-vol-pressure").value:"101.3");
+  var pressure=Math.round(parseFloat(document.getElementById("bc-vol-pressure")?document.getElementById("bc-vol-pressure").value:"101.3")*10)/10;
   if(mass<=0){alert("Enter mass");return;}
   sendCommand("burette.cal.calcVolume",{mass_g:mass,temp_c:temp,pressure_kpa:pressure}).then(function(result){
     if(result&&result.status==="ok"&&result.data){var d=result.data;
