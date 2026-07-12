@@ -12,6 +12,7 @@ idf_component_register(
         esp_system
         esp_timer
         esp_hal_wdt
+        esp_hal_uart
         freertos
         soc
         domain

@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp"
+    SRCS "main.cpp" "version.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         diag
@@ -16,13 +16,14 @@ idf_component_register(
 )
 
 # Build metadata — injected by scripts/idf.sh via env vars, or auto-generated
+# Written to a generated header so only version.cpp recompiles on timestamp changes.
 if(DEFINED ENV{BUILD_DATE})
-    set(BUILD_DATE $ENV{BUILD_DATE})
+    set(BUILD_DATE "$ENV{BUILD_DATE}")
 else()
     string(TIMESTAMP BUILD_DATE "%Y-%m-%d %H:%M:%S")
 endif()
 if(DEFINED ENV{GIT_HASH})
-    set(GIT_HASH $ENV{GIT_HASH})
+    set(GIT_HASH "$ENV{GIT_HASH}")
 else()
     execute_process(COMMAND git rev-parse --short HEAD
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -33,11 +34,12 @@ else()
         set(GIT_HASH "unknown")
     endif()
 endif()
-
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    BUILD_DATE="${BUILD_DATE}"
-    GIT_HASH="${GIT_HASH}"
-    APP_VERSION="${PROJECT_VER}"
-)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/version_build.h"
+    "#pragma once\n"
+    "#define BUILD_DATE \"${BUILD_DATE}\"\n"
+    "#define GIT_HASH \"${GIT_HASH}\"\n"
+    "#define APP_VERSION \"${PROJECT_VER}\"\n"
+    )
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")

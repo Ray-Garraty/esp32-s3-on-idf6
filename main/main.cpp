@@ -1,6 +1,6 @@
 #include <cstdio>
 #include <cstring>
-#include "driver/uart.h"
+#include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -27,6 +27,7 @@
 #include "infrastructure/network/ble_notify_thread.hpp"
 #include "infrastructure/storage/nvs.hpp"
 #include "interface/broadcast.hpp"
+#include "version.h"
 #include "interface/serial.hpp"
 #include "domain/log_buffer.hpp"
 
@@ -47,11 +48,6 @@ static uint64_t extractCmdId(const char* data) {
 
 static constexpr auto TAG = "main";
 
-// LL-031: PHY RF calibration holds gpio_spinlock for 10-200ms asynchronously
-// after BT init. This constant controls how long we wait for it to complete
-// before any GPIO operations (motor task, LED, etc.).
-static constexpr TickType_t PHY_CALIBRATION_WAIT_TICKS = pdMS_TO_TICKS(1000);
-
 // Fix 2: DRAM pre-check — must be called before every xTaskCreate
 static void logDramBeforeTask(const char* name, size_t stackSize)
 {
@@ -63,22 +59,6 @@ static void logDramBeforeTask(const char* name, size_t stackSize)
         ESP_LOGW(TAG, "DRAM pressure! Largest free block %lu < needed %lu", (unsigned long)largest,
                  (unsigned long)(stackSize + 4096));
     }
-}
-
-// Fix 1: GPIO spinlock deadlock prevention
-// Wait for asynchronous PHY calibration to release gpio_spinlock before any
-// gpio_config/gpio_set_direction/gpio_set_level call (LL-031).
-// GR-1: blocking delay OK at boot (not in main loop).
-static void ensureGpioReady()
-{
-    ESP_LOGI(TAG, "PHY wait: sleeping %lu ms for gpio_spinlock release...",
-             (unsigned long)(PHY_CALIBRATION_WAIT_TICKS * portTICK_PERIOD_MS));
-    puts("DBG: PHY wait start");
-    fflush(stdout);
-    vTaskDelay(PHY_CALIBRATION_WAIT_TICKS);
-    puts("DBG: PHY wait done");
-    fflush(stdout);
-    ESP_LOGI(TAG, "PHY wait complete — GPIO spinlock should be released");
 }
 
 // Struct for passing parameters to net_owner task
@@ -113,9 +93,13 @@ static int logVprintf(const char* fmt, va_list args) {
         uint32_t ts = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
         ecotiter::domain::LogBuffer::instance().push(ts, level, buf);
     }
-    // Forward to UART through direct driver write (stable after UART reinit)
+    // LL-026: use fwrite/fflush instead of uart_write_bytes — the UART driver
+    // (esp_driver_uart) is not installed at the time ESP_LOGI is first called
+    // from app_main. uart_write_bytes requires uart_driver_install(), while
+    // fwrite/fflush uses the VFS layer with uart_tx_chars (HAL, no driver needed).
     if (n > 0) {
-        uart_write_bytes(UART_NUM_0, buf, static_cast<size_t>(n));
+        fwrite(buf, 1, static_cast<size_t>(n), stdout);
+        fflush(stdout);
     }
     return n;
 }
@@ -154,7 +138,47 @@ static void wsLogCallback(const ecotiter::domain::LogEntry& entry) {
     }
 }
 
-// GR-3: net_owner thread — WiFi init → HTTP server → BLE init → PHY wait → process loop
+// Centralised GPIO init — runs in app_main BEFORE any task creation.
+// All gpio_config/gpio_set_direction calls are here to avoid spinlock
+// deadlock with PHY calibration (LL-031). Drivers only use gpio_set_level
+// and gpio_get_level which do not take gpio_spinlock.
+static void configureGpioPins() {
+    using namespace ecotiter;
+    // DIR pin (GPIO5) — safe
+    gpio_set_direction(config::PIN_DIR, GPIO_MODE_OUTPUT);
+    gpio_set_level(config::PIN_DIR, 0);
+
+    // EN pin (GPIO13) — safe (moved from GPIO27: LL-027 PSRAM D3)
+    gpio_set_direction(config::PIN_EN, GPIO_MODE_OUTPUT);
+    gpio_set_level(config::PIN_EN, 0);  // Active LOW: enable driver
+
+    // VALVE pin (GPIO14)
+    gpio_set_direction(config::PIN_VALVE, GPIO_MODE_OUTPUT);
+    gpio_set_level(config::PIN_VALVE, 0);  // Default: input position
+
+    // FULL endstop (GPIO7) — input with pull-down, pos-edge interrupt
+    gpio_config_t fullConf = {};
+    fullConf.pin_bit_mask = (1ULL << config::PIN_LIMIT_FULL);
+    fullConf.mode = GPIO_MODE_INPUT;
+    fullConf.pull_up_en = GPIO_PULLUP_DISABLE;
+    fullConf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    fullConf.intr_type = GPIO_INTR_POSEDGE;
+    ESP_ERROR_CHECK(gpio_config(&fullConf));
+
+    // EMPTY endstop (GPIO15) — input, floating, pos-edge interrupt
+    gpio_config_t emptyConf = {};
+    emptyConf.pin_bit_mask = (1ULL << config::PIN_LIMIT_EMPTY);
+    emptyConf.mode = GPIO_MODE_INPUT;
+    emptyConf.pull_up_en = GPIO_PULLUP_DISABLE;
+    emptyConf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    emptyConf.intr_type = GPIO_INTR_POSEDGE;
+    ESP_ERROR_CHECK(gpio_config(&emptyConf));
+
+    // Install ISR service once (for all limit switch pins)
+    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
+}
+
+// GR-3: net_owner thread — WiFi init → HTTP server → BLE init → process loop
 extern "C" void netTaskEntry(void* pvParameters) {
     auto* params = static_cast<NetTaskParams*>(pvParameters);
     puts("DBG: netTaskEntry START"); fflush(stdout);
@@ -170,6 +194,16 @@ extern "C" void netTaskEntry(void* pvParameters) {
         vTaskDelete(nullptr);
         return;
     }
+
+    // LL-044: Wait for homing to complete before starting WiFi AP.
+    // WiFi AP + active RMT homing cause interrupt storm on UNICORE
+    // (CPU hangs in _xt_lowint1 → tick freezes → RWDT 6s timeout).
+    puts("DBG: waiting for homing..."); fflush(stdout);
+    while (!ecotiter::domain::gHomingDone.load(std::memory_order_acquire)) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    puts("DBG: homing done, starting AP"); fflush(stdout);
+
     wifiManager.startAP();
 
     // Attempt STA connection from NVS credentials
@@ -204,15 +238,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
         }
     }
 
-    // LL-031: PHY calibration holds gpio_spinlock for 10-200ms after BT init.
-    // Wait for it to release before any gpio_config/gpio_set_level operations.
-    // GR-1: Blocking delay OK in worker thread (not main loop).
-    ensureGpioReady();
-
-    // LL-038: async log worker — deferred to after all boot init is complete
-    // to avoid race with stale LogBuffer entries queued during early boot.
-    // LL-038: async log worker — 8KB stack (LWIP send() via httpd_ws_send_frame_async
-    // is MISLEADING — it's synchronous and uses ~2KB stack internally, LL-043).
+    // LL-038: async log worker
     xTaskCreate(ecotiter::domain::LogBuffer::workerTaskEntry,
                 "log_worker", 8192 / sizeof(configSTACK_DEPTH_TYPE),
                 nullptr, 0, nullptr);
@@ -225,13 +251,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
 
 extern "C" void app_main(void)
 {
-    puts("BOOT OK: ecotiter v" APP_VERSION " [" BUILD_DATE "] (git: " GIT_HASH ")");
-    fflush(stdout);
-
-    // [INVESTIGATION] S1: stack watermark baseline
-    auto wm = uxTaskGetStackHighWaterMark(nullptr);
-    printf("[INVESTIGATION] S1: main task stack watermark: %u bytes\n",
-           static_cast<unsigned>(wm * sizeof(configSTACK_DEPTH_TYPE)));
+    std::printf("BOOT OK: ecotiter v%s [%s] (git: %s)\n", ecotiter::app_version, ecotiter::build_date, ecotiter::git_hash);
     fflush(stdout);
 
     using namespace ecotiter;
@@ -242,7 +262,7 @@ extern "C" void app_main(void)
     // Install ESP_LOG capture → LogBuffer (captures all subsequent ESP_LOGI/LOGW/LOGE calls)
     esp_log_set_vprintf(logVprintf);
 
-    ESP_LOGI(TAG, "Build: %s (git: %s)", BUILD_DATE, GIT_HASH);
+    ESP_LOGI(TAG, "Build: %s (git: %s)", ecotiter::build_date, ecotiter::git_hash);
 
     // ====== Step 1: NVS ======
     puts("DBG: step 1 - nvs_flash_init");
@@ -284,11 +304,11 @@ extern "C" void app_main(void)
     // If ANY task holds a spinlock > 6s (or the system freezes entirely),
     // RWDT fires → RESET_SYSTEM → reboot with RTCWDT_SYS_RESET in boot log.
     // Configured BEFORE BLE init so it covers the PHY calibration window too.
-    puts("DBG: step 5 - RWDT init");
+    puts("DBG: step 5 - RWDT DISABLED");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::RtcWdt, std::memory_order_release);
-    diag::RtcWatchdog rtcWdt;
-    diag::gRtcWdt = &rtcWdt;
+    // diag::RtcWatchdog rtcWdt;
+    diag::gRtcWdt = nullptr;
 
     // ====== Step 6: BLE object construction (init deferred to net_owner) ======
     // GR-3: BLE init moved to net_owner thread after HTTP server to ensure
@@ -300,12 +320,15 @@ extern "C" void app_main(void)
     domain::gBootProgress.store(domain::BootProgress::BleInit, std::memory_order_release);
     infrastructure::network::BleManager bleManager;
 
-    // ====== Step 7: PHY wait deferred to net_owner ======
-    // PHY calibration wait (ensureGpioReady) now runs in net_owner thread
-    // after BLE init, since BLE init itself is now in net_owner.
-    puts("DBG: step 7 - PHY wait deferred to net_owner");
+    // ====== Step 7: GPIO init (all gpio_config/gpio_set_direction) ======
+    // Centralized before any task creation to avoid PHY calibration
+    // gpio_spinlock deadlock (LL-031).
+    puts("DBG: step 7 - configureGpioPins");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::PhyWait, std::memory_order_release);
+    configureGpioPins();
+    puts("DBG: gpio config done");
+    fflush(stdout);
 
     // ====== Step 7b: RGB LED ======
     infrastructure::drivers::RgbLed rgbLed(config::PIN_LED_RGB);
@@ -401,7 +424,8 @@ extern "C" void app_main(void)
 
         // Feed RWDT every main loop iteration (10ms).
         // If ANY task holds a spinlock > 6s, RWDT fires → RESET_SYSTEM.
-        rtcWdt.feed();
+        // [INVESTIGATION] RWDT disabled
+        // rtcWdt.feed();
 
         scheduler.tick();
 
@@ -696,3 +720,4 @@ extern "C" void app_main(void)
         vTaskDelayUntil(&lastWake, PACING_TICK);
     }
 }
+

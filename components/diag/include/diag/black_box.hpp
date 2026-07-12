@@ -37,7 +37,8 @@ public:
 
     void init() noexcept;
     void record(Event e) noexcept;
-    void dump() const noexcept; // called from panic handler
+    void dump() const noexcept; // uses printf — not safe when UART driver is broken
+    void dump(void (*write)(const char*)) const noexcept; // panic-safe: writes via callback
 
     BlackBox(const BlackBox&) = delete;
     BlackBox& operator=(const BlackBox&) = delete;

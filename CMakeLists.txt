@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
+# ccache acceleration — picked up by ESP-IDF's project.cmake via RULE_LAUNCH_COMPILE
+if(DEFINED ENV{IDF_CCACHE_ENABLE} OR DEFINED ENV{CCACHE_ENABLE})
+    set(CCACHE_ENABLE 1)
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 set(CMAKE_CXX_STANDARD 23)

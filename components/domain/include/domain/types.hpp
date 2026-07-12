@@ -95,6 +95,10 @@ inline std::atomic<bool>     gMotorIsMoving{false};
 inline std::atomic<bool>     gHasPendingResult{false};
 inline std::atomic<uint64_t> gLastCmdId{0};
 
+// Homing completion flag — net_owner waits for this before starting WiFi AP
+// (WiFi AP + active RMT homing cause interrupt storm on UNICORE, LL-044)
+inline std::atomic<bool> gHomingDone{false};
+
 // Boot progress tracking — diagnostic heartbeat for serial monitor
 // Set once at each init step. If the device hangs, the last value is visible
 // on the serial monitor without a working WDT (LL-032: spinlock deadlocks

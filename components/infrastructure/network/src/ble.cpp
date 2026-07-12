@@ -115,6 +115,7 @@ BleManager::~BleManager() {
 }
 
 std::expected<void, domain::AppError> BleManager::init() {
+    puts("DBG: BLE init ENTER"); fflush(stdout);
     if (initialized_) return {};
 
     size_t freeHeap = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);

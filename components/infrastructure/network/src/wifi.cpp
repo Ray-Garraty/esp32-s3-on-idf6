@@ -169,7 +169,8 @@ void WifiManager::startAP() {
     }
 
     apActive_ = true;
-    startDnsServer();
+    // [INVESTIGATION] Exp F: DNS server disabled
+    // startDnsServer();
     ESP_LOGI(TAG, "AP started: %s (192.168.4.1)", apSsid_);
 }
 

@@ -223,6 +223,43 @@ Failure (2026-07-12): `CONFIG_FREERTOS_UNICORE=y` caused RTCWDT_SYS_RST
 boot loops on WiFi AP start. 3 debugger sessions and ~3 hours wasted before
 the root cause was identified.
 
+### GR-13: SUB-AGENT MUST STOP AND ESCALATE AFTER 3 FAILED ITERATIONS
+
+Sub-agents executing tasks autonomously MUST follow this protocol:
+
+1. **Escalation threshold**: After 3 consecutive failed attempts at any
+   subtask (e.g., a build fails, a tool returns unexpected results, an
+   investigation finds no answer), STOP. Report to orchestrator with:
+   - What was tried
+   - What was found so far
+   - What help is needed to proceed
+
+2. **No scope creep**: NEVER fix a discovered problem without asking first.
+   Report the finding, propose a fix, wait for authorisation. Deviating
+   from the task spec without approval invalidates all changes.
+
+3. **Static analysis before full builds**: If investigating a build issue
+   requires more than 2 full builds, switch to static analysis (compare
+   build.ninja, check generated files, verify compiler flags in the log).
+
+4. **Stay on task**: After every 10 tool calls, check: "am I still working
+   on the original goal?" If not — realign or escalate.
+
+5. **Time budget**: If a single investigation exceeds 15 minutes without
+   producing actionable output, stop and escalate.
+
+```yaml
+# Violation example (LL-046):
+# Task: measure build times + add timing to script.
+# Agent ran 13 full builds (~40 min of waiting), discovered the root cause
+# (BUILD_DATE poisons ccache), started refactoring CMakeLists.txt without
+# asking, and delivered zero output. 5596-line session log, 0 useful results.
+```
+
+Failure (2026-07-12): Sub-agent ses_0a9c received a well-scoped task but
+ran 13 full builds, 100+ tool calls, and 0 useful output. Session log:
+.opencode/tmp/session-ses_0a9c.md (5596 lines). See LL-046 for full analysis.
+
 ---
 
 ## 2. PRE-FLIGHT CHECKLIST (Copy Before Codegen)
@@ -325,6 +362,12 @@ Key defaults: `CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768`,
 
 Partition table in `partitions.csv` — do not change without approval.
 Component deps via CMake: `main`, `nlohmann_json`, `catch2`.
+
+### 4.5 ccache Build Acceleration
+
+- **ccache** used automatically (`IDF_CCACHE_ENABLE=1`). Clean builds after the
+  first one take 1–2 min instead of 5–10. To verify: `ccache -s | grep "Hits:"`.
+  Stats printed at end of every build.
 
 ---
 
@@ -501,6 +544,9 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 | Naked `httpd_handle_t` / etc. | RAII wrapper class | coding_style.md §9.5 |
 | Functions returning -1 on error | `std::expected<T, Error>` | coding_style.md §2 |
 | `CONFIG_FREERTOS_UNICORE=y` committed | GR-12: `=n` mandatory for WiFi/BLE | GR-12 |
+| Sub-agent investigates >3 builds without escalating | Stop, report to orchestrator | GR-13 |
+| Sub-agent refactors code outside task scope | Report finding, ask first | GR-13 |
+| Sub-agent spends >15 min without output | Stop and escalate | GR-13 |
 | Stale `sdkconfig` hiding config mismatches | `scripts/idf.sh build` does clean build | §4.3 |
 
 ---
@@ -511,7 +557,7 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 |----------|---------|
 | docs/refs/project.md | HW pinout, thread/stack budget, init order, network stack, NVS, API |
 | docs/refs/coding_style.md | C++23 conventions, error hierarchy, RAII, memory budget, low-level ops |
-| docs/lessons_learned/ | Crash patterns & fixes (LL-001–LL-004) |
+| docs/lessons_learned/ | Crash patterns & fixes (LL-001–LL-046) |
 | docs/protocols/embedded_boot_crash.md | S1–S5 Occam's Razor Protocol |
 | docs/protocols/heap_corruption.md | Heap triage (often misdiagnosed stack overflow) |
 | docs/protocols/stack_overflow.md | Stack triage + watermark checks |

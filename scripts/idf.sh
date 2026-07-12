@@ -11,6 +11,8 @@ if [ -f "$IDF_PATH/export.sh" ]; then
     export IDF_PATH
     source "$IDF_PATH/export.sh" > /dev/null 2>&1
 fi
+export IDF_CCACHE_ENABLE=1
+export CCACHE_ENABLE=1
 
 # File-based mutex: only one idf.sh instance at a time (like Cargo)
 LOCKDIR="$PROJECT_DIR/.idf_lock"
@@ -61,32 +63,76 @@ resolve_port() {
 do_build() {
     rm -rf "$PROJECT_DIR/build"
     rm -f "$PROJECT_DIR/sdkconfig" "$PROJECT_DIR/sdkconfig.old"
+
     BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S')
     GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     export BUILD_DATE GIT_HASH
     echo "Building firmware: $BUILD_DATE (git: $GIT_HASH)"
 
+    # --- ccache config for clean-build pattern ---
+    export CCACHE_BASEDIR="$PROJECT_DIR"
+    export CCACHE_NOHASHDIR=1
+    export CCACHE_SLOPPINESS="time_macros,include_file_mtime,include_file_ctime,file_macro,locale,pch_defines"
+    export CCACHE_COMPILERCHECK=content
+    # --------------------------------------------
+
     mkdir -p "$PROJECT_DIR/logs"
     local build_log="$PROJECT_DIR/logs/build.log"
     {
-        echo "# WARNING: Do NOT read this file in full with Read tool — file is large (~3000+ lines)."
-        echo "# Use grep/rg/tail/crash_analyzer for targeted search. See AGENTS.md §6.3."
         echo "# Build: $BUILD_DATE (git: $GIT_HASH)"
         echo ""
     } > "$build_log"
-    timeout 180 idf.py build 2>&1 | tee -a "$build_log" | grep -iE '(^Building firmware|^Executing action|warning:|error:|fatal:|FAILED|^Project build complete|Full build log|binary size)' || true
-    local ret=${PIPESTATUS[0]}
-    if [ $ret -eq 124 ]; then
-        echo "❌ Build timed out (180s)"
+
+    local build_timeout=300
+    local idf_exit=0
+
+    BUILD_START=$(date +%s)
+    timeout "$build_timeout" idf.py build 2>&1 | tee -a "$build_log" | \
+        grep -iE '(^Building firmware|^Executing action|warning:|error:|fatal:|FAILED|^Project build complete|Full build log|binary size)' || true
+    idf_exit=${PIPESTATUS[0]}
+    BUILD_END=$(date +%s)
+
+    local elapsed=$((BUILD_END - BUILD_START))
+    local elapsed_str="$((elapsed / 60))m $((elapsed % 60))s"
+
+    # Determine outcome
+    local outcome=""
+    local exit_code=0
+    if [ $idf_exit -eq 124 ]; then
+        outcome="TIMEOUT"
+        exit_code=124
+    elif [ $idf_exit -ne 0 ]; then
+        outcome="FAILED (exit $idf_exit)"
+        exit_code=$idf_exit
+    elif [ ! -f "$PROJECT_DIR/build/ecotiter.bin" ]; then
+        outcome="FAILED (binary not created)"
+        exit_code=1
+    else
+        # Write build metadata
+        mkdir -p "$PROJECT_DIR/build"
+        {
+            echo "BUILD_DATE=\"$BUILD_DATE\""
+            echo "GIT_HASH=$GIT_HASH"
+        } > "$PROJECT_DIR/build/.build_meta"
+        outcome="SUCCESS"
     fi
 
-    mkdir -p "$PROJECT_DIR/build"
-    {
-        echo "BUILD_DATE=\"$BUILD_DATE\""
-        echo "GIT_HASH=$GIT_HASH"
-    } > "$PROJECT_DIR/build/.build_meta"
-    echo "Full build log: $build_log"
-    return "$ret"
+    # Summary — last line is the unambiguous verdict
+    echo ""
+    echo "=== BUILD RESULT ==="
+    echo "  Time:    $elapsed_str"
+    if command -v ccache &>/dev/null; then
+        ccache -s 2>/dev/null | grep -E "Hits:|Cache size" || true
+    fi
+    echo "  Outcome: $outcome"
+    if [ "$outcome" = "SUCCESS" ]; then
+        echo "  ✅ Build succeeded"
+    else
+        echo "  ❌ Build failed: $outcome"
+    fi
+    echo "  Log:     $build_log"
+
+    return "$exit_code"
 }
 
 # Erase entire flash chip

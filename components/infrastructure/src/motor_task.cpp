@@ -384,7 +384,12 @@ void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     bool timedOut = false;
 
     while (!homed && !timedOut) {
-        if (diag::gRtcWdt) diag::gRtcWdt->feed();
+        if (diag::gRtcWdt) {
+            diag::gRtcWdt->feed();
+            puts("DBG: RWDT fed in homing"); fflush(stdout);
+        } else {
+            puts("DBG: gRtcWdt IS NULL!"); fflush(stdout);
+        }
         assert_rmt_preconditions();
 
         if (domain::gStopFull.load(std::memory_order_acquire)) {
@@ -529,10 +534,6 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     }
     puts("DBG: motor queue created"); fflush(stdout);
 
-    gpio_set_direction(config::PIN_VALVE, GPIO_MODE_OUTPUT);
-    gpio_set_level(config::PIN_VALVE, 0);
-    puts("DBG: valve GPIO initialized"); fflush(stdout);
-
     puts("DBG: before StepperMotor ctor (gpio 21,5,27)"); fflush(stdout);
     StepperMotor stepper(config::PIN_STEP, config::PIN_DIR, config::PIN_EN);
     puts("DBG: after StepperMotor ctor"); fflush(stdout);
@@ -541,10 +542,6 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     LimitSwitch emptySwitch(config::PIN_LIMIT_EMPTY,
                             domain::gStopEmpty, false);
     puts("DBG: after LimitSwitch emptySwitch ctor"); fflush(stdout);
-
-    puts("DBG: PHY inter-GPIO safety delay start"); fflush(stdout);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    puts("DBG: PHY inter-GPIO safety delay done"); fflush(stdout);
 
     puts("DBG: before LimitSwitch fullSwitch ctor (gpio 7)"); fflush(stdout);
     LimitSwitch fullSwitch(config::PIN_LIMIT_FULL,
@@ -582,6 +579,7 @@ extern "C" void motorTaskEntry(void* pvParameters) {
 
     puts("DBG: before run_homing"); fflush(stdout);
     run_homing(stepper, fullSwitch);
+    domain::gHomingDone.store(true, std::memory_order_release);
 
     gSmResult = {SmResult::Type::None, 0, 0.0f, {}, 0};
 
