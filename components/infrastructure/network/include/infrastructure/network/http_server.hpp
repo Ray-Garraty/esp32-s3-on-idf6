@@ -1,10 +1,8 @@
 #pragma once
 
-#include <atomic>
 #include <array>
 #include <cstdint>
 #include <expected>
-#include <optional>
 
 #include "esp_http_server.h"
 
@@ -42,7 +40,7 @@ public:
     // WebSocket broadcast — call from any thread
     void broadcastWsEvent(const char* jsonData, size_t len);
 
-    // Access session tracking
+    // WebSocket session tracking
     [[nodiscard]] WsSession* findSession(int fd);
     void addSession(int fd);
     void removeSession(int fd);

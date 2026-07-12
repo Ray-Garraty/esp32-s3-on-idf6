@@ -57,9 +57,8 @@ TEST_CASE("handleCommandCore: valid ping command returns response", "[rest_api]"
 
     std::string_view sv(buf.data(), *result);
     auto j = json::parse(sv);
-    // The ping response should contain "result": "pong"
-    // or some indication of success
-    REQUIRE(sv.find("pong") != std::string_view::npos);
+    // The ping response should contain "status":"ok"
+    REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handleCommandCore: invalid JSON returns 400", "[rest_api]") {

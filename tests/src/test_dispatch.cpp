@@ -7,13 +7,13 @@
 using namespace ecotiter::application;
 using namespace ecotiter::domain;
 
-TEST_CASE("dispatch: serial.ping returns pong", "[dispatch]") {
+TEST_CASE("dispatch: serial.ping returns ok", "[dispatch]") {
   Command cmd{CommandType::SerialPing};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("\"result\":\"pong\"") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("dispatch: fill returns AckThen", "[dispatch]") {
@@ -53,18 +53,18 @@ TEST_CASE("dispatch: rinse with cycles returns AckThen", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("dispatch: stop returns AckThen", "[dispatch]") {
+TEST_CASE("dispatch: stop returns Single", "[dispatch]") {
   Command cmd{CommandType::Stop};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
-TEST_CASE("dispatch: emergencyStop returns AckThen", "[dispatch]") {
+TEST_CASE("dispatch: emergencyStop returns Single", "[dispatch]") {
   Command cmd{CommandType::EmergencyStop};
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("dispatch: getStatus returns JSON", "[dispatch]") {
@@ -74,7 +74,7 @@ TEST_CASE("dispatch: getStatus returns JSON", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Single);
   REQUIRE(rsp->bodySize > 0);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("\"state\"") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("dispatch: setDirection returns error without param", "[dispatch]") {

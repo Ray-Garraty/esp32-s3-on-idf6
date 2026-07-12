@@ -13,14 +13,9 @@ std::expected<CommandResponse, domain::AppError> handleGetStatus(
     domain::ValvePosition valvePos, float mv,
     domain::Direction dir, uint32_t speed,
     uint32_t accel, float volumeMl) {
-  CommandResponse rsp;
-  rsp.kind = ResponseKind::Single;
-  size_t off = 0;
   bool volumeIsNull = (state == domain::BuretteState::Homing);
-  serializeStatusJson(rsp.body, off, state, tempCX100,
-                      valvePos, mv, dir, speed, accel, volumeMl, volumeIsNull);
-  rsp.bodySize = off;
-  return rsp;
+  return makeStatusResponse(0, state, tempCX100, valvePos, mv,
+                            dir, speed, accel, volumeMl, volumeIsNull);
 }
 
 std::expected<CommandResponse, domain::AppError> handleGetFormattedLogs() {

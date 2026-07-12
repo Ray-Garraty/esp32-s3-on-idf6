@@ -8,7 +8,11 @@ namespace ecotiter::interface {
 namespace {
 
 const char* valveStr(domain::ValvePosition v) {
-    return (v == domain::ValvePosition::Input) ? "in" : "out";
+    switch (v) {
+        case domain::ValvePosition::Input:  return "in";
+        case domain::ValvePosition::Output: return "out";
+        default:                            return "unk";
+    }
 }
 
 const char* brtStsStr(domain::BuretteState s) {
@@ -26,7 +30,7 @@ const char* brtStsStr(domain::BuretteState s) {
 
 } // anonymous namespace
 
-std::string_view serializeBroadcast(
+std::string_view serializeBroadcastCompact(
     const BroadcastEvent& evt,
     domain::memory::ResponseBuffer& buf) {
 
@@ -45,15 +49,57 @@ std::string_view serializeBroadcast(
     if (evt.brt == domain::BuretteState::Homing) {
         vlStr = "null";
     } else {
-        std::snprintf(vlBuf, sizeof(vlBuf), "%.1f",
+        std::snprintf(vlBuf, sizeof(vlBuf), "%.2f",
             static_cast<double>(evt.volumeMl));
         vlStr = vlBuf;
     }
 
     int n = std::snprintf(buf.data(), buf.size(),
-        R"({"ts":%lu,"temp":%s,"mv":%u,"electrode_mv":%u,"vlv":"%s",)"
-        R"("brt":{"sts":"%s","vl":%s,"spd":%.1f},)"
-        R"("full":%s,"empty":%s,)"
+        R"({"ts":%lu,"temp":%s,"mv":%.1f,"vlv":"%s",)"
+        R"("brt":{"sts":"%s","vl":%s,"spd":%.2f})"
+        R"(})",
+        static_cast<unsigned long>(evt.tick),
+        tempStr,
+        static_cast<double>(evt.mv),
+        valveStr(evt.vlv),
+        brtStsStr(evt.brt),
+        vlStr,
+        static_cast<double>(evt.speedMlMin));
+
+    if (n < 0 || static_cast<size_t>(n) >= buf.size()) {
+        return {};
+    }
+    return std::string_view(buf.data(), static_cast<size_t>(n));
+}
+
+std::string_view serializeBroadcastExtended(
+    const BroadcastEvent& evt,
+    domain::memory::ResponseBuffer& buf) {
+
+    char tempBuf[32];
+    const char* tempStr;
+    if (evt.tempCX100 > -99999) {
+        std::snprintf(tempBuf, sizeof(tempBuf), "%.1f",
+            static_cast<double>(evt.tempCX100) / 100.0);
+        tempStr = tempBuf;
+    } else {
+        tempStr = "null";
+    }
+
+    const char* vlStr;
+    char vlBuf[32];
+    if (evt.brt == domain::BuretteState::Homing) {
+        vlStr = "null";
+    } else {
+        std::snprintf(vlBuf, sizeof(vlBuf), "%.2f",
+            static_cast<double>(evt.volumeMl));
+        vlStr = vlBuf;
+    }
+
+    int n = std::snprintf(buf.data(), buf.size(),
+        R"({"ts":%lu,"temp":%s,"mv":%.1f,"vlv":"%s",)"
+        R"("brt":{"sts":"%s","vl":%s,"spd":%.2f},)"
+        R"("limitSwitch":{"full":%s,"empty":%s},)"
         R"("usbSerialConnected":%s,"bleConnected":%s,)"
         R"("stepperDrv":{"isConnected":%s,"otpw":%s,"ot":%s,)"
         R"("motor":{"stallGuard":{"value":%u,"isStalled":%s,"threshold":%u},"isMoving":%s}},)"
@@ -61,8 +107,7 @@ std::string_view serializeBroadcast(
         R"(})",
         static_cast<unsigned long>(evt.tick),
         tempStr,
-        static_cast<unsigned>(evt.mv),
-        static_cast<unsigned>(evt.electrodeMv),
+        static_cast<double>(evt.mv),
         valveStr(evt.vlv),
         brtStsStr(evt.brt),
         vlStr,
@@ -81,7 +126,6 @@ std::string_view serializeBroadcast(
         static_cast<unsigned long>(evt.stepsTaken));
 
     if (n < 0 || static_cast<size_t>(n) >= buf.size()) {
-        // Truncation or error — return empty view
         return {};
     }
     return std::string_view(buf.data(), static_cast<size_t>(n));

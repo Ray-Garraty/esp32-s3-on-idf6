@@ -90,6 +90,8 @@ struct Command {
   // For adc.cal.measure
   std::optional<float> refMv;
 
+  uint64_t id{0};
+
   // For cal.calcSpeed
   static constexpr size_t MAX_MEASUREMENTS = 16;
   struct {
@@ -112,6 +114,7 @@ enum class ResponseKind : uint8_t {
 
 struct CommandResponse {
   ResponseKind kind = ResponseKind::Single;
+  uint64_t id{0};
   domain::memory::ResponseBuffer body{};
   size_t bodySize{0};
 };
@@ -126,9 +129,9 @@ struct CommandResponse {
     domain::memory::ResponseBuffer& buf);
 
 // Convenience: build a single-value response from a json-like payload
-CommandResponse makeSingleResponse(std::string_view payload, size_t size);
-CommandResponse makeErrorResponse(std::string_view message);
 CommandResponse makeAckThenResponse();
+CommandResponse makeErrorResponse(std::string_view message);
+CommandResponse makeSingleResponse(std::string_view payload, size_t size);
 
 // Build JSON response fragments for common types
 void appendCmdField(domain::memory::ResponseBuffer& buf, size_t& offset,
@@ -139,5 +142,11 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
                          domain::Direction dir, uint32_t speed,
                          uint32_t accel, float volumeMl,
                          bool volumeIsNull = false);
+CommandResponse makeStatusResponse(uint64_t id,
+                                   domain::BuretteState state, int32_t tempCX100,
+                                   domain::ValvePosition valvePos, float mv,
+                                   domain::Direction dir, uint32_t speed,
+                                   uint32_t accel, float volumeMl,
+                                   bool volumeIsNull = false);
 
 } // namespace ecotiter::application

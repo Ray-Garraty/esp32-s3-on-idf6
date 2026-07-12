@@ -12,7 +12,6 @@ struct BroadcastEvent {
     uint32_t tick;
     int32_t tempCX100;
     uint16_t mv;
-    uint16_t electrodeMv;
     domain::ValvePosition vlv;
     domain::BuretteState brt;
     float volumeMl;
@@ -31,9 +30,13 @@ struct BroadcastEvent {
     uint32_t stepsTaken;
 };
 
-// Serialize BroadcastEvent to a pre-allocated JSON buffer.
-// Returns a string_view into buf, or empty view on truncation.
-[[nodiscard]] std::string_view serializeBroadcast(
+// Compact broadcast for Serial/BLE (legacy format_status_response_doc)
+[[nodiscard]] std::string_view serializeBroadcastCompact(
+    const BroadcastEvent& evt,
+    domain::memory::ResponseBuffer& buf);
+
+// Extended broadcast for WebSocket (legacy sse_broadcast_all)
+[[nodiscard]] std::string_view serializeBroadcastExtended(
     const BroadcastEvent& evt,
     domain::memory::ResponseBuffer& buf);
 

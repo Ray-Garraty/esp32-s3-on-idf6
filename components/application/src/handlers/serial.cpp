@@ -9,12 +9,9 @@
 namespace ecotiter::application::handlers::serial {
 
 std::expected<CommandResponse, domain::AppError> handlePing() {
-  CommandResponse rsp;
-  rsp.kind = ResponseKind::Single;
-  rsp.bodySize = static_cast<size_t>(
-      std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"cmd":"serial.ping","result":"pong"})"));
-  return rsp;
+  return makeSingleResponse(
+      std::string_view(R"({"status":"ok"})"),
+      std::string_view(R"({"status":"ok"})").size());
 }
 
 } // namespace ecotiter::application::handlers::serial

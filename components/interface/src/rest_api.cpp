@@ -48,13 +48,8 @@ std::expected<size_t, int> handleCommandCore(
 
     auto cmd = application::parseCommand(body);
     if (!cmd) {
-        const char* detail =
-            cmd.error() == domain::ProtocolError::InvalidJson ? "Invalid JSON" :
-            cmd.error() == domain::ProtocolError::UnknownCommand ? "Unknown command" :
-            cmd.error() == domain::ProtocolError::MissingParam ? "Missing parameter" :
-            "Protocol error";
         int n = std::snprintf(buf.data(), buf.size(),
-            R"({"error":"invalid_command","detail":"%s"})", detail);
+            R"({"status":"error","message":"invalid_params"})");
         if (n < 0) return std::unexpected(500);
         return std::unexpected(400);
     }
@@ -62,7 +57,7 @@ std::expected<size_t, int> handleCommandCore(
     auto rsp = application::dispatch(*cmd);
     if (!rsp) {
         int n = std::snprintf(buf.data(), buf.size(),
-            R"({"error":"dispatch_failed"})");
+            R"({"status":"error","message":"start_failed"})");
         if (n < 0) return std::unexpected(500);
         return std::unexpected(500);
     }
@@ -132,6 +127,10 @@ std::expected<size_t, int> handleValvePostCore(
 #ifdef ESP_PLATFORM
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "infrastructure/motor_task.hpp"
 
 static constexpr auto TAG = "rest_api";
 
@@ -171,24 +170,117 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req) {
     }
     bodyLen = static_cast<size_t>(ret);
 
-    domain::memory::ResponseBuffer rspBuf{};
-    auto result = handleCommandCore(
-        std::string_view(body.data(), bodyLen), rspBuf);
-    if (!result) {
-        if (result.error() == 400) {
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_status(req, "400 Bad Request");
-            httpd_resp_send(req, rspBuf.data(),
-                static_cast<ssize_t>(std::strlen(rspBuf.data())));
-        } else {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "dispatch failed");
-        }
+    auto sv = std::string_view(body.data(), bodyLen);
+    auto cmd = application::parseCommand(sv);
+    if (!cmd) {
+        const char* detail = "Protocol error";
+        domain::memory::ResponseBuffer buf{};
+        std::snprintf(buf.data(), buf.size(),
+            R"({"status":"error","message":"%s"})", detail);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, buf.data(), HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
 
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, rspBuf.data(), static_cast<ssize_t>(*result));
-    return ESP_OK;
+    auto rsp = application::dispatch(*cmd);
+    if (!rsp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "dispatch failed");
+        return ESP_FAIL;
+    }
+
+    // For synchronous commands (Single, Error), return immediately
+    if (rsp->kind != application::ResponseKind::AckThen) {
+        domain::memory::ResponseBuffer rspBuf{};
+        auto serialized = application::serializeToBuffer(*rsp, rspBuf);
+        if (!serialized) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "serialize failed");
+            return ESP_FAIL;
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, rspBuf.data(), static_cast<ssize_t>(*serialized));
+        return ESP_OK;
+    }
+
+    // AckThen: reset result and wait for motor task completion
+    infrastructure::gSmResult = {infrastructure::SmResult::Type::None, 0, 0.0f, {}, 0};
+    static constexpr TickType_t CMD_TIMEOUT_TICKS = pdMS_TO_TICKS(60000);
+    TickType_t startTick = xTaskGetTickCount();
+
+    while (true) {
+        TickType_t now = xTaskGetTickCount();
+        if (now - startTick >= CMD_TIMEOUT_TICKS) {
+            domain::memory::ResponseBuffer buf{};
+            std::snprintf(buf.data(), buf.size(),
+                R"({"status":"error","message":"watchdog_timeout"})");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "408 Request Timeout");
+            httpd_resp_send(req, buf.data(), HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+
+        auto resultType = infrastructure::gSmResult.type;
+        if (resultType != infrastructure::SmResult::Type::None) {
+            domain::memory::ResponseBuffer buf{};
+            size_t off = 0;
+            uint64_t resultId = rsp->id;
+
+            switch (resultType) {
+                case infrastructure::SmResult::Type::RinseComplete:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                            static_cast<unsigned long long>(resultId)));
+                    break;
+                case infrastructure::SmResult::Type::CalDoseComplete:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
+                            static_cast<unsigned long long>(resultId),
+                            static_cast<double>(
+                                static_cast<float>(infrastructure::gSmResult.stepsTaken) / 7730.0f)));
+                    break;
+                case infrastructure::SmResult::Type::CalSpeedComplete:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"speed_ml_min":%.2f}})",
+                            static_cast<unsigned long long>(resultId),
+                            static_cast<double>(infrastructure::gSmResult.measuredSpeedMlMin)));
+                    break;
+                case infrastructure::SmResult::Type::CalSpeedSeqComplete:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                            static_cast<unsigned long long>(resultId)));
+                    break;
+                case infrastructure::SmResult::Type::Error:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"error","message":"start_failed"})",
+                            static_cast<unsigned long long>(resultId)));
+                    break;
+                default:
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                            static_cast<unsigned long long>(resultId)));
+                    break;
+            }
+
+            // Clear result for next command
+            infrastructure::gSmResult = {infrastructure::SmResult::Type::None, 0, 0.0f, {}, 0};
+
+            httpd_resp_set_type(req, "application/json");
+            if (off > 0) {
+                httpd_resp_send(req, buf.data(), static_cast<ssize_t>(off));
+            } else {
+                httpd_resp_send(req, R"({"status":"error"})", HTTPD_RESP_USE_STRLEN);
+            }
+            return ESP_OK;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }
 
 esp_err_t ecotiter::interface::valve_get_handler(httpd_req_t* req) {

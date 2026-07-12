@@ -11,6 +11,7 @@
 
 #include "interface/rest_api.hpp"
 #include "interface/webui.hpp"
+#include "application/scheduler.hpp"
 #include "domain/types.hpp"
 #include "domain/memory.hpp"
 #include "domain/json_utils.hpp"
@@ -192,9 +193,76 @@ esp_err_t api_ping_handler(httpd_req_t* req) {
     return interface::ping_handler(req);
 }
 
+static void ipToStr(uint32_t ip, char* out, size_t outSize) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(&ip);
+    std::snprintf(out, outSize, "%u.%u.%u.%u",
+        static_cast<unsigned>(b[0]), static_cast<unsigned>(b[1]),
+        static_cast<unsigned>(b[2]), static_cast<unsigned>(b[3]));
+}
+
 esp_err_t api_status_handler(httpd_req_t* req) {
     diag::FfiGuard guard(82);
-    return interface::status_handler(req);
+
+    auto state = domain::gBuretteState.load(std::memory_order_acquire);
+    int32_t tempCX100 = domain::gTempCX100.load(std::memory_order_acquire);
+    uint16_t mv = domain::gLastMv.load(std::memory_order_acquire);
+    auto valvePos = domain::gValvePosition.load(std::memory_order_acquire);
+    float volumeMl = domain::gVolumeMl.load(std::memory_order_acquire);
+    float speed = domain::gSpeedMlMin.load(std::memory_order_acquire);
+    uint32_t tick = application::gTick.load(std::memory_order_acquire);
+
+    const char* stateStr = "";
+    switch (state) {
+        case domain::BuretteState::Idle:      stateStr = "idle"; break;
+        case domain::BuretteState::Homing:    stateStr = "working"; break;
+        case domain::BuretteState::Filling:   stateStr = "working"; break;
+        case domain::BuretteState::Emptying:  stateStr = "working"; break;
+        case domain::BuretteState::Dosing:    stateStr = "working"; break;
+        case domain::BuretteState::Rinsing:   stateStr = "working"; break;
+        case domain::BuretteState::Stopping:  stateStr = "working"; break;
+        case domain::BuretteState::Error:     stateStr = "error"; break;
+    }
+
+    const char* valveStr = (valvePos == domain::ValvePosition::Input) ? "input" : "output";
+
+    bool tempConnected = (tempCX100 > -99999);
+    float tempC = tempConnected
+        ? static_cast<float>(tempCX100) / 100.0f
+        : 0.0f;
+
+    char ipBuf[16] = "192.168.4.1";
+    auto* server = static_cast<HttpServer*>(req->user_ctx);
+    if (server && server->wifiManager()) {
+        auto staIp = server->wifiManager()->getSTAIP();
+        if (staIp) {
+            ipToStr(*staIp, ipBuf, sizeof(ipBuf));
+        }
+    }
+
+    domain::memory::ResponseBuffer buf{};
+    int n = std::snprintf(buf.data(), buf.size(),
+        R"({"ts":%lu,"meta":{"ip":"%s"},)"
+        R"("sensors":{"temperature":{"is_connected":%s,"celsius_val":%.1f},"electrode":{"mv":%u}},)"
+        R"("valve":{"position":"%s"},)"
+        R"("burette":{"status":"%s","volume_ml":%.2f,"speed_ml_min":%.2f})"
+        R"(})",
+        static_cast<unsigned long>(tick),
+        ipBuf,
+        tempConnected ? "true" : "false",
+        static_cast<double>(tempC),
+        static_cast<unsigned>(mv),
+        valveStr,
+        stateStr,
+        static_cast<double>(volumeMl),
+        static_cast<double>(speed));
+
+    httpd_resp_set_type(req, "application/json");
+    if (n > 0) {
+        httpd_resp_send(req, buf.data(), static_cast<ssize_t>(n));
+    } else {
+        httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
+    }
+    return ESP_OK;
 }
 
 esp_err_t api_command_handler(httpd_req_t* req) {

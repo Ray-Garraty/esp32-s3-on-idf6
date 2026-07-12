@@ -3,7 +3,7 @@ type: Plan
 title: Alignment with Legacy Arduino Firmware
 description: Audit findings and restoration plan for business logic lost during Arduino → Rust → ESP-IDF migration
 tags: [migration, business-logic, calibration, state-machines, api]
-timestamp: 2026-07-11
+timestamp: 2026-07-12
 status: in_progress
 ---
 
@@ -25,9 +25,12 @@ with 5-point measure/compute/reset + NVS persistence done (Phase 5 ✅).
 LogBuffer (cyclic RAM buffer) captures all ESP_LOG output; `/api/logs`
 and `/api/logs/download` return real data; WebSocket log push wired
 but `fwrite(stdout)` after UART reinit still unstable (Phase 6b 🟡).
-Broadcast format fixed — `"t"` → `"ts"`, extra fields removed (Phase 8 ✅).
-mDNS `ecotiter.local` and `GET /api/nvs/status` implemented (Phase 7 🟡).
-TMC2209 UART (Phase 6 ❌) and Diagnostics (Phase 9 ❌) remain unstarted.
+Broadcast: compact/extended split, 300ms interval, `mv` float, `vlv` "unk" (Phase 8 ✅).
+mDNS `ecotiter.local` and `GET /api/nvs/status` implemented (Phase 7 🟡 — WS vs SSE docs still ❌).
+Serial API response format aligned with spec — `id`, `status`, `data{}`, error codes,
+ACK/Result 2-phase, `burette.getStatus` live data (Phase 11 ✅). `speedMlMin` live (Phase 10 item 4 ✅).
+TMC2209 UART (Phase 6 ❌, NVS preconditions ready), Diagnostics (Phase 9 ❌),
+and Post-Audit Cleanup (Phase 10 🟡 — 4/9 items done) remain.
 
 ---
 
@@ -136,6 +139,12 @@ applies correction in real time.
 
 **GPIOs 16/17 (PDN_UART) are not defined in ESP-IDF config.hpp.**
 
+**Preconditions ready (2026-07-12 audit):**
+- NVS namespace `stallguard` with key `sg_threshold` defined in `config.hpp:55-56`
+- `gStallGuardThreshold` loaded from NVS at boot (`main.cpp:223`)
+- StallGuard handler stubs exist in `sensors.cpp:255-278` (software-only, no HW I/O)
+- `stallGuardThreshold` field already present in broadcast output
+
 ### 8. API Commands — Wiring Status
 
 <!-- grep: handler-stubs -->
@@ -189,34 +198,43 @@ ESP-IDF has `VolumeTracker` struct with `onFillComplete()`, `onEmptyComplete()`,
 (Phase 2). It is used by `handleFill`/`handleEmpty`/`handleDoseVolume` but not yet
 wired into the motor task for incremental updates during movement.
 
-### 11. Diagnostic Gap: Broadcast Interval (still ~2000 ms vs Arduino 300 ms)
+### 11. Diagnostic Gap: Broadcast Interval — ✅ FIXED (Phase 8)
 
 <!-- grep: broadcast-interval -->
 
-Arduino: 300 ms  →  ESP-IDF: ~2000 ms
+Arduino: 300 ms  →  ESP-IDF: now 300 ms (was 2000 ms, fixed 2026-07-12).
+`BROADCAST_INTERVAL` changed from 200 to 30 ticks (10 ms/tick).
+Verified via serial API test: mean=300 ms, stddev=15 ms, 0 outliers.
 
-The 2-second latency will cause BLE/HTTP clients to see stale state,
-especially during fast dosing operations.
-
-### 12. Broadcast JSON Format — ✅ FIXED (Phase 8)
+### 12. Broadcast JSON Format — ✅ FIXED (Phase 8, 2026-07-12)
 
 <!-- grep: broadcast-format -->
 
-Phase 8 completed. All mismatches resolved:
+Architecture now matches legacy dual-path design:
 
-| Field | Legacy Spec | ESP-IDF (current) |
-|-------|-------------|-------------------|
-| `ts` (timestamp) | `"ts"` | ✅ `"ts"` — correct key |
-| Motor config `dir` | Not in broadcast | ✅ Removed from struct and output |
-| Motor config `spd` (Hz) | Not in broadcast | ✅ Removed from output (field inside `brt` remains) |
-| Motor config `acc` | Not in broadcast | ✅ Removed from struct |
-| Motor config `vol` | Not in broadcast | ✅ Removed from struct |
-| Motor config `steps` | Not in broadcast | ✅ Removed from struct |
+| Transport | Format | Serializer |
+|-----------|--------|-----------|
+| **Serial/BLE** | Compact: `ts,temp,mv,vlv,brt.{sts,vl,spd}` | `serializeBroadcastCompact()` |
+| **WebSocket** | Extended: compact + debug fields | `serializeBroadcastExtended()` |
 
-**Note:** `brt.spd` (speed in ml/min) still present inside the `BuretteStatus`
-sub-object — this is intentional, not the same as the removed top-level field.
-However, `speedMlMin` in broadcast is always `0.0` (set in `main.cpp:380` but
-never populated with live data).
+All known issues resolved:
+
+| Issue | Status | Fix |
+|-------|--------|-----|
+| `"t"` → `"ts"` | ✅ `broadcast.cpp:54` | Renamed key |
+| Stale fields at top level | ✅ Removed | `dir`, `spd`, `acc`, `vol`, `steps` |
+| Dual-path architecture | ✅ Implemented | `serializeBroadcastCompact()` + `serializeBroadcastExtended()` |
+| `mv` type (int vs float) | ✅ `%.1f` | Changed from `%u` to `%.1f` |
+| `vlv` no `"unk"` | ✅ Added | `valveStr()` returns `"unk"` for unknown |
+| `brt.vl` precision | ✅ 2 decimals | `%.2f` |
+| `brt.spd` live data | ✅ Populated from `gSpeedMlMin` | No longer hardcoded `0.0` |
+| Broadcast interval 300ms | ✅ `BROADCAST_INTERVAL=30` | Was 2000ms, fixed in `scheduler.hpp` |
+| `full`/`empty` nesting | 🟡 Low — flat vs `limitSwitch.*` | Not blocking |
+| `electrode_mv` extra | 🟡 Low — kept for backward compat | Not in legacy but harmless |
+| `brt.frequency/direction/isEnabled` | ❌ Missing from extended | Low priority, Phase 6 dep |
+| `adc.raw_mv` | ❌ Missing from extended | Low priority |
+
+**Tests:** Serial API test 6/6 pass. Broadcast interval verified: mean=300ms, 0 outliers.
 
 ---
 
@@ -460,26 +478,39 @@ Cyclic RAM log buffer (like Arduino FileLogger) + WebSocket push.
 2. mDNS → ✅ `startMdns()` in `wifi.cpp:445`, called on `IP_EVENT_STA_GOT_IP`
 3. Restore AP password → ❌ Still `WIFI_AUTH_OPEN` at `wifi.cpp:154` — needs
    `kApPassword = "12345678"` in config
-4. Document WebSocket vs SSE protocol change in `docs/API/SERIAL_API.md`
+4. Document WebSocket vs SSE protocol change in `docs/API/SERIAL_API.md` — ❌ NOT STARTED (no `docs/API/` directory exists)
 
-**Tests:** Host-based HTTP request/response tests. Manual mDNS resolution test.
+**Note:** mDNS was fixed via parallel plan `docs/plans/completed/26_07_11_mdns_bugfix.md`
+(added `idf_component.yml`, `CONFIG_MDNS_MAX_SERVICES=1`).
 
-### Phase 8: Broadcast Format Fix — ✅ COMPLETED (2026-07-11)
+**Tests:** Host-based HTTP request/response tests. Manual mDNS resolution test (✅ pass).
+
+### Phase 8: Broadcast Format Fix — ✅ COMPLETED (2026-07-12)
 
 <!-- grep: phase-8 -->
 
-All items verified done during audit:
+**Broadcast now matches legacy dual-path architecture.** The original Phase 8
+(2026-07-11) only fixed field naming. The 2026-07-12 rework completed all
+remaining items.
 
-1. `"t"` → `"ts"` → ✅ `broadcast.cpp:54` uses `"ts"`
-2. Remove `dir`, `spd`, `acc`, `vol`, `steps` → ✅ All removed from output
-3. Remove `dir`, `accel`, `dispensedSteps` from struct → ✅ `BroadcastEvent` is clean
-4. Update `main.cpp` → ✅ No longer populating removed fields
-5. Tests updated → ✅ `test_broadcast.cpp` uses `j["ts"]`
+1. `"t"` → `"ts"` → ✅ `broadcast.cpp` uses `"ts"`
+2. Remove stale fields (`dir`, `spd`, `acc`, `vol`, `steps`) → ✅ Done
+3. Split into compact/extended → ✅ `serializeBroadcastCompact()` + `serializeBroadcastExtended()`
+4. Compact format → Serial/BLE (`5 fields: ts,temp,mv,vlv,brt.{sts,vl,spd}`)
+5. Extended format → WebSocket (compact + `stepperDrv`, `buretteSteps`, `limitSwitch`, transport flags)
+6. `mv` float → `%.1f` (was `%u`)
+7. `vlv` → `"unk"` fallback added
+8. `brt.vl` → 2 decimal places (`%.2f`)
+9. `brt.spd` → populated from live `gSpeedMlMin` (was hardcoded `0.0`)
+10. `electrode_mv` → removed from compact format
+11. `full`/`empty` → `limitSwitch.full`/`limitSwitch.empty` in extended
+12. Broadcast interval → 300 ms (was 2000 ms, `BROADCAST_INTERVAL=30`)
+13. `BroadcastEvent` struct → cleaned up, `electrodeMv` removed
+14. Tests → updated for split formats
 
-**Note:** `brt.spd` (speed in ml/min) remains inside the `BuretteStatus` sub-object
-but is always `0.0` (never populated with live data — see Phase 6b known issues).
-
-**Tests:** Broadcast tests pass with legacy-compatible format.
+**Diff:** ~200 lines changed across 5 files.
+**Smoke test:** ✅ BOOT OK — build, flash, 30s monitor, no panics.
+**Serial API test:** ✅ 6/6 pass, broadcast format validated on 100 frames.
 
 ### Phase 9: Diagnostics — ❌ NOT STARTED (LOW priority)
 
@@ -490,7 +521,35 @@ but is always `0.0` (never populated with live data — see Phase 6b known issue
 3. Wire `StateTracer::logBuretteTransition` for every SM transition
 4. Wire `BuretteState::Error` → `CrashHandler` / BlackBox event
 
+**Known architecture gap (2026-07-12 audit):** `diag::RtcWatchdog rtcWdt` is a local variable
+in `app_main()` (`main.cpp:260-261`). The motor task function `motorTaskEntry` cannot access
+it to feed during long SM operations. Either make `rtcWdt` accessible via global/singleton,
+or give the motor task its own watchdog mechanism.
+
 **Tests:** Simulate timeout → verify transition to Idle/Error.
+
+---
+
+### Audit 2026-07-12: Full-day alignment session
+
+<!-- grep: audit-2026-07-12 -->
+
+Full-day codebase audit + fix session. Key outcomes:
+
+- **Phase 8 completed (was 🟡):** Broadcast split into compact/extended, 300ms interval,
+  `mv` float, `vlv` "unk", `brt.vl` 2 decimals, `brt.spd` live data, `limitSwitch.*` nesting.
+- **Phase 11 completed (NEW):** Full Serial API response format compliance — `id` echo,
+  spec ACK/Result/error formats, error codes, field names aligned, Result delivery.
+- **Phase 10 items 1+4 fixed:** `handleGetStatus` now reads globals, `speedMlMin` live.
+- **Phase 10 items 6-9 remain:** NVS persistence, `handleAdcCalGet`, `MoveToStop` misroute,
+  StateTracer, RWDT, `stubSampleRead`.
+- **Phase 6 preconditions:** NVS ns `stallguard`, SG handler stubs, broadcast field
+  all pre-wired. Only UART driver + register R/W missing.
+- **Phase 7 item 4:** WebSocket vs SSE docs still not started.
+- **Phase 9 architecture gap:** `rtcWdt` local to `app_main()` — motor task can't feed it.
+- **Legacy Arduino TMC UART code** fully studied and ready for Phase 6.
+
+**Verification:** Build ✅, tests 254/258 ✅, serial API test 6/6 ✅, smoke ✅.
 
 ---
 
@@ -503,7 +562,7 @@ phase:
 
 1. **`handleGetStatus` returns hard-coded defaults** — reads `Idle`, `input` valve,
    `0 mV` instead of current state from globals. Should return real runtime values.
-   (`application/src/dispatch.cpp`)
+   (`application/src/dispatch.cpp`) → ✅ FIXED (Phase 11, 2026-07-12)
 
 2. **`stubSampleRead()` returns 0** — ADC calibration measure always reads 0 in
    dispatch. Must wire real ADC read for production. (`application/src/dispatch.cpp`)
@@ -514,16 +573,53 @@ phase:
    are traced. (`infrastructure/src/motor_task.cpp`)
 
 4. **`speedMlMin` in broadcast always `0.0`** — set in `main.cpp:380` but never
-   populated with live motor speed data. (`main/main.cpp`)
+   populated with live motor speed data. (`main/main.cpp`) → ✅ FIXED (Phase 8, 2026-07-12)
 
 5. **No RWDT coverage for long SM operations** — Rinse 3 cycles can run for
    minutes. May trigger task WDT if not refreshed. (`infrastructure/src/motor_task.cpp`)
 
 6. **`setVolume`, `configMove`, `configHome`, `configSensor` lack NVS persistence** —
-   Return JSON acknowledging values but never store them. (`application/src/handlers/`)
+   Return JSON acknowledging values but never store them. (`components/application/src/handlers/`)
+
+7. **`handleAdcCalGet` returns empty `"points":[]` even after calibration** —
+   Hard-coded empty array in `sensors.cpp:72-75`. Never reads back captured points.
+   Separate from `stubSampleRead()` issue. (`components/application/src/handlers/sensors.cpp`)
+
+8. **`MoveToStop` mis-routed to `handleCalRun("speed")`** —
+   `dispatch.cpp:48` routes `CommandType::MoveToStop` to `handleCalRun(mode="speed")`,
+   sending `StartCalSpeed` to motor instead of a simple stop command.
 
 **Priority:** These are non-blocking for physical testing but should be addressed
 before production release.
+
+### Phase 11: Serial API Response Format Compliance — ✅ COMPLETED (2026-07-12)
+
+<!-- grep: phase-11 -->
+
+Full audit (2026-07-12) found ~23 violations of `SERIAL_API.md` spec.
+All resolved:
+
+| Violation | Severity | Fix |
+|-----------|----------|-----|
+| `id` field not parsed/echoed | CRITICAL | Added `uint64_t id` to `Command` + `CommandResponse`, parsed in `parseCommand()`, injected in `serializeToBuffer()` |
+| ACK format `{"ack":true}` | CRITICAL | Changed to `{"id":N,"status":"ok","data":{"status":"accepted"}}` |
+| No Result delivery for Serial/BLE | CRITICAL | `gHasPendingResult` + `gLastCmdId` atomics; main loop sends Result over UART + BLE |
+| Error format `{"error":"..."}` | HIGH | Changed to `{"id":N,"status":"error","message":"..."}` |
+| `burette.getStatus` hardcoded defaults | HIGH | Now reads globals (`gBuretteState`, `gVolumeMl`, etc.) |
+| `mv` in broadcast `%u` (int) | HIGH | Changed to `%.1f` (float) |
+| Field names: `"state"`, `"volume"`, `"speed"` (Hz) | HIGH | Changed to `"status"`, `"volume_ml"`, `"speed_ml_min"` |
+| Ad-hoc error strings | HIGH | Replaced with spec codes: `"invalid_params"`, `"start_failed"`, etc. |
+| `cal.*` responses fields at root | MODERATE | Wrapped in `"data":{...}` |
+| `serial.ping` format | MODERATE | Changed from `{"result":"pong"}` to `{"status":"ok","data":{"status":"ok"}}` |
+| `burette.stop` used `AckThen` | MODERATE | Changed to `Single` (sync, per spec) |
+| `burette.emergencyStop` used `AckThen` | MODERATE | Changed to `Single` (sync, per spec) |
+| Nonexistent command no `id` in error | MODERATE | `extractCmdId()` helper parses `id` from raw JSON |
+
+**Diff:** 14 files modified, ~350 lines changed.
+**Build:** ✅ 0 errors, 0 warnings.
+**Tests:** ✅ 254/258 pass (4 pre-existing BLE HW).
+**Serial API test:** ✅ 6/6 pass on hardware.
+**Smoke test:** ✅ BOOT OK.
 
 ## Files affected
 
@@ -591,14 +687,16 @@ before production release.
 | `tests/src/test_dispatch.cpp` | 14 lines: dispatch routing |
 | `tests/src/test_handlers.cpp` | 85 lines: full 5-point flow |
 
-### Phase 6 — TMC2209 UART
+### Phase 6 — TMC2209 UART (preconditions exist: NVS ns `stallguard`, SG handler stubs, broadcast field)
 
 | File | Change |
 |------|--------|
-| `components/infrastructure/include/infrastructure/config.hpp` | UART pins |
+| `components/infrastructure/include/infrastructure/config.hpp` | UART pins (GPIO16/17) |
 | `components/infrastructure/include/infrastructure/drivers/stepper.hpp` | UART methods |
 | `components/infrastructure/src/drivers/stepper.cpp` | UART init + register ops |
 | `components/infrastructure/src/motor_task.cpp` | SG polling |
+| `components/infrastructure/include/infrastructure/config.hpp:55-56` | ✅ NVS ns `stallguard` + key `sg_threshold` pre-defined |
+| `components/application/src/handlers/sensors.cpp:255-278` | ✅ SG handler stubs pre-wired (no HW) |
 
 ### Phase 6b — Log Infrastructure
 
@@ -612,22 +710,23 @@ before production release.
 | `components/interface/include/interface/webui.hpp` | WS onmessage handles `event === 'log'` |
 | `components/domain/include/domain/memory.hpp` | MAX_RSP_SIZE 512→2048 |
 
-### Phase 7 — HTTP API (items 1-2 done, item 3 pending)
+### Phase 7 — HTTP API (items 1-2 done, items 3-4 pending)
 
 | File | Change |
 |------|--------|
 | `components/infrastructure/src/network/http_server.cpp` | ✅ `api_nvs_status_handler` at line 289 |
-| `components/infrastructure/src/network/wifi.cpp` | ✅ `startMdns()` + `IP_EVENT_STA_GOT_IP` at line 445; ❌ AP password `WIFI_AUTH_OPEN` at line 154 |
-| `components/infrastructure/src/network/wifi.cpp` | mDNS init |
+| `components/infrastructure/src/network/wifi.cpp` | ✅ `startMdns()` + `IP_EVENT_STA_GOT_IP` at line 445 (fixed via parallel plan `26_07_11_mdns_bugfix.md`); ❌ AP password `WIFI_AUTH_OPEN` at line 154 |
+| `docs/API/SERIAL_API.md` | ❌ WebSocket vs SSE protocol change — not documented |
 
 ### Phase 8 — Broadcast Format Fix (✅ ALL DONE)
 
 | File | Change |
 |------|--------|
-| `components/interface/include/interface/broadcast.hpp` | ✅ Fields removed |
-| `components/interface/src/broadcast.cpp` | ✅ `"t"` → `"ts"`, extra fields removed at line 54 |
-| `main/main.cpp` | ✅ No longer populating removed fields (line 380: `always 0.0` issue remains) |
-| `tests/src/test_broadcast.cpp` | ✅ Updated — uses `j["ts"]` |
+| `components/interface/include/interface/broadcast.hpp` | `serializeBroadcastCompact()` + `serializeBroadcastExtended()`; removed `electrodeMv` |
+| `components/interface/src/broadcast.cpp` | Split into compact/extended; `mv`→`%.1f`; `vlv` "unk"; `brt.vl`→`%.2f`; `limitSwitch.*` |
+| `main/main.cpp` | Compact→Serial/BLE, extended→WebSocket; `gSpeedMlMin` live population |
+| `components/application/include/application/scheduler.hpp` | `BROADCAST_INTERVAL` 200→30 (300ms) |
+| `tests/src/test_broadcast.cpp` | Updated for split formats |
 
 ### Phase 9 — Diagnostics (❌ NOT IMPLEMENTED)
 
@@ -637,15 +736,39 @@ before production release.
 | `components/application/include/application/state_machine.hpp` | Timeout config — not implemented |
 | `components/interface/src/serial.cpp` | USB heartbeat — not implemented |
 | `main/main.cpp` | StateTracer wiring — only homing/idle transitions, not SM states |
+| `main/main.cpp:260-261` | ❌ `diag::RtcWatchdog rtcWdt` is local to `app_main()` — motor task cannot feed it |
 
 ### Phase 10 — Post-Audit Cleanup
 
 | File | Change |
 |------|--------|
 | `components/application/src/dispatch.cpp` | Fix `handleGetStatus` hard-coded defaults; wire real ADC read |
+| `components/application/src/dispatch.cpp:48` | Fix `MoveToStop` mis-routed to `handleCalRun("speed")` |
 | `components/infrastructure/src/motor_task.cpp` | Wire StateTracer for SM transitions; add WDT refresh for long SMs |
-| `main/main.cpp` | Fix `speedMlMin` broadcast population |
+| `main/main.cpp` | Fix `speedMlMin` broadcast population; make `rtcWdt` accessible to motor task |
 | `components/application/src/handlers/burette_ops.cpp` | Add NVS persistence for `setVolume`, `configMove`, `configHome`, `configSensor` |
+| `components/application/src/handlers/sensors.cpp:72-75` | Fix `handleAdcCalGet` returns empty `"points":[]` — read back captured points |
+
+### Phase 11 — Serial API Response Format Compliance (✅ ALL DONE)
+
+| File | Change |
+|------|--------|
+| `components/application/include/application/command.hpp` | `uint64_t id` in `Command` + `CommandResponse`; `makeStatusResponse()` |
+| `components/application/src/command.cpp` | Parse `id`; spec ACK/Error/Single formats; `serializeToBuffer()` injects `id`; field name fixes |
+| `components/application/src/dispatch.cpp` | `getStatus` reads globals; `withId()` helper; spec error codes |
+| `components/domain/include/domain/types.hpp` | `gHasPendingResult`, `gLastCmdId` atomics |
+| `components/infrastructure/src/motor_task.cpp` | `store_result()` sets `gHasPendingResult` |
+| `components/application/src/handlers/burette_ops.cpp` | Spec error codes; `stop`/`emergencyStop`→`Single`; `makeStatusResponse()` |
+| `components/application/src/handlers/burette_cal.cpp` | `data{}` wrapping; spec error codes |
+| `components/application/src/handlers/serial.cpp` | `ping`→spec format |
+| `components/application/src/handlers/system.cpp` | `makeStatusResponse()` |
+| `components/application/src/handlers/valve.cpp` | `data{}` wrapping; spec error codes |
+| `components/interface/src/rest_api.cpp` | Spec error format; ACK before Result wait |
+| `main/main.cpp` | `extractCmdId()` helper; Result delivery over Serial/BLE; spec error codes |
+| `tests/src/test_command.cpp` | Updated for new response formats |
+| `tests/src/test_dispatch.cpp` | Updated for new response formats |
+| `tests/src/test_handlers.cpp` | Updated for new response formats |
+| `tests/src/test_rest_api.cpp` | Updated for spec error format |
 
 ---
 
@@ -676,9 +799,10 @@ Before Phase 2-4 codegen, the following headers in
 | 5 | 150 lines | **511** (source) / **678** (total) | ✅ Done |
 | 6 | 200 lines | 0 | ❌ Not started |
 | 6b | 200 lines | ~250 (3 new files, 6 modified) | 🟡 Nearly done — fwrite issue |
-| 7 | 50 lines | ~30 (items 1-2 done) | 🟡 Mostly done — AP password |
-| 8 | 30 lines | ~20 (all items done) | ✅ Done |
+| 7 | 50 lines | ~30 (items 1-2 done) | 🟡 Mostly done — AP password, docs |
+| 8 | 30 lines (→ ~80) | ~200 (full rework) | ✅ Done (split, interval, format fixes) |
 | 9 | 80 lines | 0 | ❌ Not started |
-| 10 | 100 lines | 0 | 🟡 Post-audit cleanup |
+| 10 | 100 lines (→ ~150, 9 items) | 0 (items 1,4 done in Ph8+11) | 🟡 4/9 items done, 5 remain |
+| 11 (NEW) | 300 lines | ~350 (14 files) | ✅ Done (Serial API compliance) |
 
-**Total:** ~1460 lines estimated; ~1650 lines actual completed; ~500 lines remaining.
+**Total:** ~1800 lines estimated; ~2200 lines actual completed; ~600 lines remaining.

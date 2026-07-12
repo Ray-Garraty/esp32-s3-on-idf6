@@ -133,6 +133,7 @@ void store_result(SmResult::Type type, int32_t stepsTaken = 0,
         gSmResult.results[i] = results[i];
     }
     domain::gBuretteState.store(BuretteState::Idle, std::memory_order_release);
+    domain::gHasPendingResult.store(true, std::memory_order_release);
 }
 
 void run_rinse_sm(StepperMotor& stepper,
@@ -497,9 +498,17 @@ extern "C" void motorTaskEntry(void* pvParameters) {
         if (xQueueReceive(gMotorCmdQueue, &cmd, pdMS_TO_TICKS(100))) {
             switch (cmd.type) {
 
-            case MotorCommandType::MoveSteps:
+            case MotorCommandType::MoveSteps: {
+                int32_t stepsBefore = stepper.position().value;
                 execute_move_steps(stepper, cmd.steps);
+                int32_t stepsTaken = static_cast<int32_t>(
+                    stepper.position().value) - stepsBefore;
+                if (stepsTaken < 0) stepsTaken = -stepsTaken;
+                gSmResult.type = SmResult::Type::None; // reuse None as generic "done"
+                gSmResult.stepsTaken = stepsTaken;
+                domain::gHasPendingResult.store(true, std::memory_order_release);
                 break;
+            }
 
             case MotorCommandType::Stop: {
                 ESP_LOGI(TAG, "Stop requested");

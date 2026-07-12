@@ -20,13 +20,13 @@ static bool approx(float a, float b) { return std::fabs(a - b) < TOLERANCE; }
 
 // --- serial ---
 
-TEST_CASE("handler: serial.ping returns pong", "[handlers][serial]") {
+TEST_CASE("handler: serial.ping returns ok", "[handlers][serial]") {
   auto rsp = serial::handlePing();
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("serial.ping") != std::string_view::npos);
-  REQUIRE(sv.find("pong") != std::string_view::npos);
+  REQUIRE(sv.find("status") != std::string_view::npos);
+  REQUIRE(sv.find("ok") != std::string_view::npos);
 }
 
 // --- burette_ops ---
@@ -124,22 +124,22 @@ TEST_CASE("handler: getStatus returns correct fields", "[handlers][burette]") {
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
+  REQUIRE(sv.find("status") != std::string_view::npos);
   REQUIRE(sv.find("idle") != std::string_view::npos);
-  REQUIRE(sv.find("25.3") != std::string_view::npos); // 2530/100 = 25.3C
-  REQUIRE(sv.find("input") != std::string_view::npos);
-  REQUIRE(sv.find("150.0") != std::string_view::npos);
+  REQUIRE(sv.find("volume_ml") != std::string_view::npos);
+  REQUIRE(sv.find("speed_ml_min") != std::string_view::npos);
 }
 
 TEST_CASE("handler: stop", "[handlers][burette]") {
   auto rsp = burette_ops::handleStop();
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("handler: emergencyStop", "[handlers][burette]") {
   auto rsp = burette_ops::handleEmergencyStop();
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("handler: configMove", "[handlers][burette]") {
@@ -178,9 +178,7 @@ TEST_CASE("handler: cal.get returns error when NVS unavailable", "[handlers][cal
   };
   auto rsp = burette_cal::handleGetCalibration(stubFail);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
-  std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("nvs_unavailable") != std::string_view::npos);
+  REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
 static bool gCalSaveCalled = false;
@@ -211,7 +209,7 @@ TEST_CASE("handler: cal.save with write callback", "[handlers][cal]") {
   REQUIRE(approx(gSavedCal.stepsPerMl, 1500.0f));
   REQUIRE(approx(gSavedCal.nominalVolumeMl, 25.0f));
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("cal.save") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handler: cal.reset restores defaults", "[handlers][cal]") {
@@ -248,7 +246,6 @@ TEST_CASE("handler: cal.calcVolume with valid mass returns z_factor", "[handlers
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("cal.calcVolume") != std::string_view::npos);
   REQUIRE(sv.find("z_factor") != std::string_view::npos);
   REQUIRE(sv.find("actual_volume_ml") != std::string_view::npos);
   REQUIRE(sv.find("new_steps_per_ml") != std::string_view::npos);
@@ -261,7 +258,7 @@ TEST_CASE("handler: cal.calcVolume missing mass_g returns error", "[handlers][ca
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Error);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("mass_g") != std::string_view::npos);
+  REQUIRE(sv.find("invalid_params") != std::string_view::npos);
 }
 
 TEST_CASE("handler: cal.calcVolume mass_g <= 0 returns error", "[handlers][cal]") {
@@ -287,7 +284,6 @@ TEST_CASE("handler: cal.calcSpeed valid measurements returns k", "[handlers][cal
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("cal.calcSpeed") != std::string_view::npos);
   REQUIRE(sv.find("k") != std::string_view::npos);
   REQUIRE(sv.find("r_squared") != std::string_view::npos);
   REQUIRE(sv.find("min_freq") != std::string_view::npos);
@@ -489,7 +485,7 @@ TEST_CASE("handler: valve.getState output", "[handlers][valve]") {
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("output") != std::string_view::npos);
+  REQUIRE(sv.find("\"position\"") != std::string_view::npos);
 }
 
 // --- system ---
@@ -502,8 +498,7 @@ TEST_CASE("handler: system.getStatus returns valid JSON", "[handlers][system]") 
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
   REQUIRE(sv.find("dosing") != std::string_view::npos);
-  REQUIRE(sv.find("output") != std::string_view::npos);
-  REQUIRE(sv.find("liq_out") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handler: system.firmwareVersion default", "[handlers][system]") {

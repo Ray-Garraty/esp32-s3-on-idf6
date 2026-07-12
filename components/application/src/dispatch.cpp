@@ -29,122 +29,139 @@ std::expected<CommandResponse, domain::AppError> dispatch(
 
   using namespace handlers;
 
+  // Helper to copy cmd.id into the response after dispatch
+  auto withId = [&](std::expected<CommandResponse, domain::AppError>&& rsp)
+      -> std::expected<CommandResponse, domain::AppError> {
+    if (rsp) {
+      rsp->id = cmd.id;
+    }
+    return std::move(rsp);
+  };
+
   switch (cmd.type) {
 
     // --- Burette operations ---
     case CommandType::Fill:
-      return burette_ops::handleFill();
+      return withId(burette_ops::handleFill());
     case CommandType::Empty:
-      return burette_ops::handleEmpty();
+      return withId(burette_ops::handleEmpty());
     case CommandType::DoseVolume:
-      return burette_ops::handleDoseVolume(cmd.volume, cmd.speedMlMin);
+      return withId(burette_ops::handleDoseVolume(cmd.volume, cmd.speedMlMin));
     case CommandType::Rinse:
-      return burette_ops::handleRinse(
+      return withId(burette_ops::handleRinse(
           cmd.volume ? std::optional<uint32_t>{
-              static_cast<uint32_t>(cmd.volume->value)} : std::nullopt);
+              static_cast<uint32_t>(cmd.volume->value)} : std::nullopt));
     case CommandType::Stop:
-      return burette_ops::handleStop();
+      return withId(burette_ops::handleStop());
     case CommandType::MoveToStop:
-      return burette_ops::handleCalRun(
-          std::optional<std::string_view>{"speed"}, std::nullopt, std::nullopt);
+      return withId(burette_ops::handleCalRun(
+          std::optional<std::string_view>{"speed"}, std::nullopt, std::nullopt));
     case CommandType::EmergencyStop:
-      return burette_ops::handleEmergencyStop();
+      return withId(burette_ops::handleEmergencyStop());
     case CommandType::GetStatus:
-      // Status requires current state — returns generic stub
-      return burette_ops::handleGetStatus(
-          domain::BuretteState::Idle, 0,
-          domain::ValvePosition::Input, 0.0f,
-          domain::Direction::LiqIn, domain::DEFAULT_SPEED_HZ,
-          domain::DEFAULT_ACCEL_HZ_PER_S, domain::DEFAULT_VOLUME_ML);
+      return withId(burette_ops::handleGetStatus(
+          domain::gBuretteState.load(std::memory_order_acquire),
+          domain::gTempCX100.load(std::memory_order_acquire),
+          domain::gValvePosition.load(std::memory_order_acquire),
+          static_cast<float>(domain::gLastMv.load(std::memory_order_acquire)),
+          domain::gDirection.load(std::memory_order_acquire),
+          domain::gSpeed.load(std::memory_order_acquire),
+          domain::gAccel.load(std::memory_order_acquire),
+          domain::gVolumeMl.load(std::memory_order_acquire)));
     case CommandType::MoveSteps:
-      return burette_ops::handleMoveSteps(cmd.steps);
+      return withId(burette_ops::handleMoveSteps(cmd.steps));
     case CommandType::SetDirection:
-      return burette_ops::handleSetDirection(cmd.direction);
+      return withId(burette_ops::handleSetDirection(cmd.direction));
     case CommandType::SetSpeed:
-      return burette_ops::handleSetSpeed(cmd.speed);
+      return withId(burette_ops::handleSetSpeed(cmd.speed));
     case CommandType::SetAccel:
-      return burette_ops::handleSetAccel(cmd.accel);
+      return withId(burette_ops::handleSetAccel(cmd.accel));
     case CommandType::SetVolume:
-      return burette_ops::handleSetVolume(cmd.targetVolume);
+      return withId(burette_ops::handleSetVolume(cmd.targetVolume));
     case CommandType::ConfigMove:
-      return burette_ops::handleConfigMove(cmd.configMoveSpeed, cmd.configMoveAccel);
+      return withId(burette_ops::handleConfigMove(cmd.configMoveSpeed, cmd.configMoveAccel));
     case CommandType::ConfigHome:
-      return burette_ops::handleConfigHome(cmd.configHomeSpeed);
+      return withId(burette_ops::handleConfigHome(cmd.configHomeSpeed));
     case CommandType::ConfigSensor:
-      return burette_ops::handleConfigSensor(cmd.configSensorValue);
+      return withId(burette_ops::handleConfigSensor(cmd.configSensorValue));
 
     // --- Calibration ---
     case CommandType::CalGet:
-      return burette_cal::handleGetCalibration(readCal);
+      return withId(burette_cal::handleGetCalibration(readCal));
     case CommandType::CalCalcVolume:
-      return burette_cal::handleCalcVolume(
-          cmd.steps, cmd.massG, cmd.temperature, cmd.pressure, readCal);
+      return withId(burette_cal::handleCalcVolume(
+          cmd.steps, cmd.massG, cmd.temperature, cmd.pressure, readCal));
     case CommandType::CalCalcSpeed:
-      return burette_cal::handleCalcSpeed(
+      return withId(burette_cal::handleCalcSpeed(
           cmd.measurements.freqs, cmd.measurements.speeds,
-          cmd.measurements.count, readCal);
+          cmd.measurements.count, readCal));
     case CommandType::CalSave:
-      return burette_cal::handleSaveCalibration(
+      return withId(burette_cal::handleSaveCalibration(
           cmd.volume ? std::optional<float>{cmd.volume->value} : std::nullopt,
           cmd.targetVolume ? std::optional<float>{cmd.targetVolume->value} : std::nullopt,
-          writeCal);
+          writeCal));
     case CommandType::CalReset:
-      return burette_cal::handleResetCalibration(writeCal);
+      return withId(burette_cal::handleResetCalibration(writeCal));
     case CommandType::CalRun:
-      return burette_ops::handleCalRun(
+      return withId(burette_ops::handleCalRun(
           cmd.mode ? std::optional<std::string_view>{*cmd.mode} : std::nullopt,
           cmd.freqHz,
-          cmd.speedMlMin);
+          cmd.speedMlMin));
     case CommandType::CalGetResult:
-      return burette_cal::handleGetCalResult(readCal);
+      return withId(burette_cal::handleGetCalResult(readCal));
     case CommandType::CalRunSpeedSeq:
-      return burette_cal::handleRunCalibration(
+      return withId(burette_cal::handleRunCalibration(
           cmd.freqsArray, cmd.freqsCount,
-          cmd.speedMlMin.value_or(20.0f));
+          cmd.speedMlMin.value_or(20.0f)));
 
     // --- Sensors ---
     case CommandType::TempRead:
-      return sensors::handleReadTemperature(0);
+      return withId(sensors::handleReadTemperature(0));
     case CommandType::AdcCalGet:
-      return sensors::handleAdcCalGet(stubAdcCalRead);
+      return withId(sensors::handleAdcCalGet(stubAdcCalRead));
     case CommandType::AdcCalSave:
-      return sensors::handleAdcCalSave(std::nullopt, std::nullopt, stubAdcCalWrite);
+      return withId(sensors::handleAdcCalSave(std::nullopt, std::nullopt, stubAdcCalWrite));
     case CommandType::AdcCalMeasure:
-      return sensors::handleAdcCalMeasure(cmd.refMv, stubSampleRead, stubAdcCalWrite);
+      return withId(sensors::handleAdcCalMeasure(cmd.refMv, stubSampleRead, stubAdcCalWrite));
     case CommandType::AdcCalCompute:
-      return sensors::handleAdcCalCompute(stubAdcCalWrite);
+      return withId(sensors::handleAdcCalCompute(stubAdcCalWrite));
     case CommandType::AdcCalReset:
-      return sensors::handleAdcCalReset(stubAdcCalWrite);
+      return withId(sensors::handleAdcCalReset(stubAdcCalWrite));
     case CommandType::StallGuardGet:
-      return sensors::handleStallGuardGet(0);
+      return withId(sensors::handleStallGuardGet(0));
     case CommandType::StallGuardSetThreshold:
-      return sensors::handleStallGuardSetThreshold(cmd.sgThreshold);
+      return withId(sensors::handleStallGuardSetThreshold(cmd.sgThreshold));
 
     // --- Valve ---
     case CommandType::ValveSetPosition:
-      return valve::handleSetPosition(cmd.valvePos);
+      return withId(valve::handleSetPosition(cmd.valvePos));
     case CommandType::ValveGetState:
-      return valve::handleGetState(domain::ValvePosition::Input);
+      return withId(valve::handleGetState(
+          domain::gValvePosition.load(std::memory_order_acquire)));
 
     // --- System ---
     case CommandType::SystemGetStatus:
-      return system::handleGetStatus(
-          domain::BuretteState::Idle, 0,
-          domain::ValvePosition::Input, 0.0f,
-          domain::Direction::LiqIn, domain::DEFAULT_SPEED_HZ,
-          domain::DEFAULT_ACCEL_HZ_PER_S, domain::DEFAULT_VOLUME_ML);
+      return withId(system::handleGetStatus(
+          domain::gBuretteState.load(std::memory_order_acquire),
+          domain::gTempCX100.load(std::memory_order_acquire),
+          domain::gValvePosition.load(std::memory_order_acquire),
+          static_cast<float>(domain::gLastMv.load(std::memory_order_acquire)),
+          domain::gDirection.load(std::memory_order_acquire),
+          domain::gSpeed.load(std::memory_order_acquire),
+          domain::gAccel.load(std::memory_order_acquire),
+          domain::gVolumeMl.load(std::memory_order_acquire)));
     case CommandType::SystemGetFormattedLogs:
-      return system::handleGetFormattedLogs();
+      return withId(system::handleGetFormattedLogs());
     case CommandType::SystemReadLog:
-      return system::handleReadLog();
+      return withId(system::handleReadLog());
     case CommandType::SystemReboot:
-      return system::handleReboot();
+      return withId(system::handleReboot());
     case CommandType::SystemFirmwareVersion:
-      return system::handleFirmwareVersion(std::nullopt);
+      return withId(system::handleFirmwareVersion(std::nullopt));
 
     // --- Serial ---
     case CommandType::SerialPing:
-      return serial::handlePing();
+      return withId(serial::handlePing());
   }
 
   return std::unexpected(domain::AppError::Protocol);

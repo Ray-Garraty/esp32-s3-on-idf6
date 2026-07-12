@@ -82,6 +82,7 @@ inline std::atomic<Direction> gDirection{Direction::LiqIn};
 inline std::atomic<uint32_t> gSpeed{DEFAULT_SPEED_HZ};
 inline std::atomic<uint32_t> gAccel{DEFAULT_ACCEL_HZ_PER_S};
 inline std::atomic<float> gVolumeMl{DEFAULT_VOLUME_ML};
+inline std::atomic<float> gSpeedMlMin{0.0f};
 inline std::atomic<bool> gStopFull{false};
 inline std::atomic<bool> gStopEmpty{false};
 inline std::atomic<uint32_t> gDispensedSteps{0};
@@ -89,6 +90,10 @@ inline std::atomic<bool>     gUsbHandshakeReceived{false};
 inline std::atomic<bool>     gBleError{false};
 inline std::atomic<uint8_t>  gStallGuardThreshold{0};
 inline std::atomic<bool>     gMotorIsMoving{false};
+
+// Result delivery for serial/BLE — motor task sets these on completion
+inline std::atomic<bool>     gHasPendingResult{false};
+inline std::atomic<uint64_t> gLastCmdId{0};
 
 // Boot progress tracking — diagnostic heartbeat for serial monitor
 // Set once at each init step. If the device hangs, the last value is visible

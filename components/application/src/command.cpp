@@ -120,6 +120,13 @@ std::expected<Command, domain::ProtocolError> parseCommand(
   Command cmd{};
   cmd.type = type;
 
+  {
+    auto it = j.find("id");
+    if (it != j.end() && it->is_number_unsigned()) {
+      cmd.id = it->get<uint64_t>();
+    }
+  }
+
   // Parse optional parameters
   auto readFloat = [&](const char* key) -> std::optional<domain::Ml> {
     auto it = j.find(key);
@@ -257,6 +264,25 @@ std::expected<size_t, domain::ProtocolError> serializeToBuffer(
     return size_t{0};
   }
   if (rsp.bodySize > 0 && rsp.bodySize <= buf.size()) {
+    // Inject id into the body: insert "id":N, after the opening {
+    if (rsp.id != 0 && rsp.body[0] == '{') {
+      char idStr[32];
+      int idLen = std::snprintf(idStr, sizeof(idStr), R"({"id":%llu,)",
+                                static_cast<unsigned long long>(rsp.id));
+      size_t payloadSize = rsp.bodySize;
+      size_t totalSize = static_cast<size_t>(idLen) + payloadSize - 1;
+      if (totalSize < buf.size()) {
+        // Build: {"id":N,<rest_of_body_without_first_brace>
+        std::memcpy(buf.data(), idStr, static_cast<size_t>(idLen));
+        std::memcpy(buf.data() + idLen, rsp.body.data() + 1,
+                    payloadSize - 1);
+        if (totalSize < buf.size()) {
+          buf[totalSize] = '\0';
+        }
+        return totalSize;
+      }
+    }
+    // Fallback: copy as-is
     std::memcpy(buf.data(), rsp.body.data(), rsp.bodySize);
     if (rsp.bodySize < buf.size()) {
       buf[rsp.bodySize] = '\0';
@@ -272,11 +298,12 @@ std::expected<size_t, domain::ProtocolError> serializeToBuffer(
       break;
     case ResponseKind::Error:
       offset = static_cast<size_t>(
-          std::snprintf(buf.data(), buf.size(), R"({"error":"unknown"})"));
+          std::snprintf(buf.data(), buf.size(), R"({"status":"error","message":"unknown"})"));
       break;
     case ResponseKind::AckThen:
       offset = static_cast<size_t>(
-          std::snprintf(buf.data(), buf.size(), R"({"ack":true})"));
+          std::snprintf(buf.data(), buf.size(),
+                        R"({"status":"ok","data":{"status":"accepted"}})"));
       break;
     default:
       break;
@@ -287,10 +314,10 @@ std::expected<size_t, domain::ProtocolError> serializeToBuffer(
 CommandResponse makeSingleResponse(std::string_view payload, size_t size) {
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
-  rsp.bodySize = (std::min)(size, domain::memory::MAX_RSP_SIZE);
-  if (rsp.bodySize > 0) {
-    std::memcpy(rsp.body.data(), payload.data(), rsp.bodySize);
-  }
+  rsp.bodySize = static_cast<size_t>(
+      std::snprintf(rsp.body.data(), rsp.body.size(),
+                    R"({"status":"ok","data":%.*s})",
+                    static_cast<int>(size), payload.data()));
   return rsp;
 }
 
@@ -299,8 +326,7 @@ CommandResponse makeErrorResponse(std::string_view message) {
   rsp.kind = ResponseKind::Error;
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"error":")"));
-  // Append message, escaping minimally
+                    R"({"status":"error","message":")"));
   for (size_t i = 0; i < message.size() && rsp.bodySize < rsp.body.size() - 2; ++i) {
     char c = message[i];
     if (c == '"' || c == '\\') {
@@ -319,7 +345,8 @@ CommandResponse makeAckThenResponse() {
   CommandResponse rsp;
   rsp.kind = ResponseKind::AckThen;
   rsp.bodySize = static_cast<size_t>(
-      std::snprintf(rsp.body.data(), rsp.body.size(), R"({"ack":true})"));
+      std::snprintf(rsp.body.data(), rsp.body.size(),
+                    R"({"status":"ok","data":{"status":"accepted"}})"));
   return rsp;
 }
 
@@ -359,24 +386,43 @@ void serializeStatusJson(domain::memory::ResponseBuffer& buf, size_t& offset,
     case domain::BuretteState::Error:     stateStr = "error"; break;
   }
 
-  const char* valveStr = (valvePos == domain::ValvePosition::Input) ? "input" : "output";
-  const char* dirStr = (dir == domain::Direction::LiqIn) ? "liq_in" : "liq_out";
+  (void)valvePos;
+  (void)dir;
+  (void)tempCX100;
 
-  float tempC = (tempCX100 > -99999)
-      ? static_cast<float>(tempCX100) / 100.0f
-      : 0.0f;
-
-  w(R"({"state":"%s","temperature":%.1f,"valve":"%s","mv":%.1f,)",
-    stateStr, static_cast<double>(tempC), valveStr, static_cast<double>(mv));
   if (volumeIsNull) {
-    w(R"("direction":"%s","speed":%lu,"accel":%lu,"volume":null})",
-      dirStr, static_cast<unsigned long>(speed),
-      static_cast<unsigned long>(accel));
+    w(R"("status":"%s","volume_ml":null,"speed_ml_min":%.1f)",
+      stateStr, static_cast<double>(0.0));
   } else {
-    w(R"("direction":"%s","speed":%lu,"accel":%lu,"volume":%.1f})",
-      dirStr, static_cast<unsigned long>(speed),
-      static_cast<unsigned long>(accel), static_cast<double>(volumeMl));
+    w(R"("status":"%s","volume_ml":%.2f,"speed_ml_min":%.1f)",
+      stateStr, static_cast<double>(volumeMl), static_cast<double>(0.0));
   }
+}
+
+CommandResponse makeStatusResponse(uint64_t id,
+                                   domain::BuretteState state, int32_t tempCX100,
+                                   domain::ValvePosition valvePos, float mv,
+                                   domain::Direction dir, uint32_t speed,
+                                   uint32_t accel, float volumeMl,
+                                   bool volumeIsNull) {
+  CommandResponse rsp;
+  rsp.kind = ResponseKind::Single;
+  rsp.id = id;
+  size_t off = 0;
+  off = static_cast<size_t>(
+      std::snprintf(rsp.body.data(), rsp.body.size(),
+                    R"({"status":"ok","data":{)"));
+  serializeStatusJson(rsp.body, off, state, tempCX100,
+                      valvePos, mv, dir, speed, accel, volumeMl, volumeIsNull);
+  if (off < rsp.body.size() - 1) {
+    rsp.body[off++] = '}';
+    rsp.body[off++] = '}';
+  }
+  if (off < rsp.body.size()) {
+    rsp.body[off] = '\0';
+  }
+  rsp.bodySize = off;
+  return rsp;
 }
 
 } // namespace ecotiter::application

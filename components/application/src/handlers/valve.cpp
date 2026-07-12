@@ -11,14 +11,14 @@ namespace ecotiter::application::handlers::valve {
 std::expected<CommandResponse, domain::AppError> handleSetPosition(
     std::optional<domain::ValvePosition> pos) {
   if (!pos) {
-    return makeErrorResponse("valve.setPosition requires 'position' param");
+    return makeErrorResponse("invalid_params");
   }
   const char* posStr = (*pos == domain::ValvePosition::Input) ? "input" : "output";
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"cmd":"valve.setPosition","position":"%s"})", posStr));
+                    R"({"status":"ok","data":{"position":"%s"}})", posStr));
   return rsp;
 }
 
@@ -29,7 +29,7 @@ std::expected<CommandResponse, domain::AppError> handleGetState(
   rsp.kind = ResponseKind::Single;
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"cmd":"valve.getState","position":"%s"})", posStr));
+                    R"({"status":"ok","data":{"position":"%s"}})", posStr));
   return rsp;
 }
 

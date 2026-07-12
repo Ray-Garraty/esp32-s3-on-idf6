@@ -280,7 +280,7 @@ TEST_CASE("makeAckThenResponse", "[command]") {
   REQUIRE(rsp.kind == ResponseKind::AckThen);
   REQUIRE(rsp.bodySize > 0);
   std::string_view sv(rsp.body.data(), rsp.bodySize);
-  REQUIRE(sv.find("\"ack\"") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("makeErrorResponse", "[command]") {
@@ -297,7 +297,7 @@ TEST_CASE("serializeToBuffer: AckThen fills buffer", "[command]") {
   REQUIRE(result);
   REQUIRE(*result > 0);
   std::string_view sv(buf.data(), *result);
-  REQUIRE(sv.find("ack") != std::string_view::npos);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("serializeToBuffer: NoResponse produces empty", "[command]") {

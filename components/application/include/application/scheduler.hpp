@@ -12,7 +12,7 @@ inline std::atomic<uint32_t> gTick{0};
 class TickScheduler {
 public:
     // Tick intervals (at 10ms per increment):
-    static constexpr uint32_t BROADCAST_INTERVAL = 200;   // 2s (200 ticks × 10ms)
+    static constexpr uint32_t BROADCAST_INTERVAL = 30;    // 300ms (30 ticks × 10ms)
     static constexpr uint32_t SAMPLE_INTERVAL    = 10;    // 100ms
     static constexpr uint32_t WATERMARK_INTERVAL = 100;   // 1s
     static constexpr uint32_t MAINT_INTERVAL     = 6000;  // 60s

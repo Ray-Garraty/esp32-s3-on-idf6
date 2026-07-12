@@ -29,6 +29,21 @@
 #include "interface/serial.hpp"
 #include "domain/log_buffer.hpp"
 
+// Manual JSON id extractor — avoids nlohmann dependency in main.cpp
+static uint64_t extractCmdId(const char* data) {
+    const char* p = std::strstr(data, "\"id\":");
+    if (!p) return 0;
+    p += 5;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (*p < '0' || *p > '9') return 0;
+    uint64_t val = 0;
+    while (*p >= '0' && *p <= '9') {
+        val = val * 10 + static_cast<uint64_t>(*p - '0');
+        ++p;
+    }
+    return val;
+}
+
 static constexpr auto TAG = "main";
 
 static constexpr auto BOOT_OK_MARKER = "BOOT_OK_MARKER";
@@ -394,16 +409,20 @@ extern "C" void app_main(void)
             auto brtState = ecotiter::domain::gBuretteState.load(std::memory_order_acquire);
             bool motorMoving = brtState != ecotiter::domain::BuretteState::Idle;
             ecotiter::domain::gMotorIsMoving.store(motorMoving, std::memory_order_release);
+            ecotiter::domain::gSpeedMlMin.store(
+                ecotiter::domain::gSpeed.load(std::memory_order_acquire) > 0 ? 10.0f : 0.0f,
+                std::memory_order_release);
 
             ecotiter::interface::BroadcastEvent evt{
                 .tick = ecotiter::application::gTick.load(std::memory_order_acquire),
                 .tempCX100 = ecotiter::domain::gTempCX100.load(std::memory_order_acquire),
                 .mv = ecotiter::domain::gLastMv.load(std::memory_order_acquire),
-                .electrodeMv = ecotiter::domain::gLastMv.load(std::memory_order_acquire),
                 .vlv = ecotiter::domain::gValvePosition.load(std::memory_order_acquire),
                 .brt = brtState,
                 .volumeMl = ecotiter::domain::gVolumeMl.load(std::memory_order_acquire),
-                .speedMlMin = 0.0f,
+                .speedMlMin = motorMoving
+                    ? ecotiter::domain::gSpeedMlMin.load(std::memory_order_acquire)
+                    : 0.0f,
                 .limitFull = ecotiter::domain::gStopFull.load(std::memory_order_acquire),
                 .limitEmpty = ecotiter::domain::gStopEmpty.load(std::memory_order_acquire),
                 .usbSerialConnected = ecotiter::domain::gUsbHandshakeReceived.load(std::memory_order_acquire),
@@ -417,18 +436,28 @@ extern "C" void app_main(void)
                 .motorIsMoving = motorMoving,
                 .stepsTaken = ecotiter::domain::gDispensedSteps.load(std::memory_order_acquire)};
 
-            ecotiter::domain::memory::ResponseBuffer buf{};
-            auto sv = ecotiter::interface::serializeBroadcast(evt, buf);
-            if (!sv.empty())
+            // Compact format → Serial + BLE
             {
-                serial.write(sv);
-                serial.write({"\n", 1});
-                if (bleManager.isConnected())
+                ecotiter::domain::memory::ResponseBuffer buf{};
+                auto sv = ecotiter::interface::serializeBroadcastCompact(evt, buf);
+                if (!sv.empty())
                 {
-                    std::string_view bleSv(sv.data(), sv.size());
-                    std::ignore = bleManager.sendNotification(bleSv);
-                    std::ignore = bleManager.sendNotification({"\n", 1});
+                    serial.write(sv);
+                    serial.write({"\n", 1});
+                    if (bleManager.isConnected())
+                    {
+                        std::string_view bleSv(sv.data(), sv.size());
+                        std::ignore = bleManager.sendNotification(bleSv);
+                        std::ignore = bleManager.sendNotification({"\n", 1});
+                    }
                 }
+            }
+
+            // Extended format → WebSocket
+            {
+                ecotiter::domain::memory::ResponseBuffer buf{};
+                auto sv = ecotiter::interface::serializeBroadcastExtended(evt, buf);
+                if (!sv.empty())
                 {
                     auto* hs = gHttpServerForWs.load(std::memory_order_acquire);
                     if (hs) {
@@ -511,6 +540,12 @@ extern "C" void app_main(void)
                     auto rsp = ecotiter::application::dispatch(*cmd);
                     if (rsp)
                     {
+                        // Save cmd id for result correlation
+                        if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
+                        {
+                            ecotiter::domain::gLastCmdId.store(
+                                cmd->id, std::memory_order_release);
+                        }
                         sendResponse(*rsp);
                     }
                     else
@@ -520,7 +555,9 @@ extern "C" void app_main(void)
                 }
                 else
                 {
-                    sendResponse(ecotiter::application::makeErrorResponse("parse failed"));
+                    auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
+                    errRsp.id = extractCmdId(bleItem.data);
+                    sendResponse(errRsp);
                 }
             }
         }
@@ -539,6 +576,11 @@ extern "C" void app_main(void)
                 auto rsp = ecotiter::application::dispatch(*cmd);
                 if (rsp)
                 {
+                    if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
+                    {
+                        ecotiter::domain::gLastCmdId.store(
+                            cmd->id, std::memory_order_release);
+                    }
                     sendResponse(*rsp);
                 }
                 else
@@ -548,8 +590,90 @@ extern "C" void app_main(void)
             }
             else
             {
-                sendResponse(ecotiter::application::makeErrorResponse("parse failed"));
+                auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
+                errRsp.id = extractCmdId(line->data());
+                sendResponse(errRsp);
             }
+        }
+
+        // Deliver pending motor result over Serial/BLE
+        if (ecotiter::domain::gHasPendingResult.load(std::memory_order_acquire))
+        {
+            uint64_t resultId = ecotiter::domain::gLastCmdId.load(std::memory_order_acquire);
+            auto& smResult = infrastructure::gSmResult;
+
+            ecotiter::domain::memory::ResponseBuffer buf{};
+            size_t off = 0;
+
+            // Use None type as generic "move done" for basic operations
+            if (smResult.type == infrastructure::SmResult::Type::None && smResult.stepsTaken > 0)
+            {
+                auto cal = ecotiter::infrastructure::storage::calibrationRead();
+                float volDispensed = cal
+                    ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
+                    : 0.0f;
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
+                        static_cast<unsigned long long>(resultId),
+                        static_cast<double>(volDispensed)));
+            }
+            else if (smResult.type == infrastructure::SmResult::Type::RinseComplete)
+            {
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"cycles_completed":1}})",
+                        static_cast<unsigned long long>(resultId)));
+            }
+            else if (smResult.type == infrastructure::SmResult::Type::CalDoseComplete)
+            {
+                auto cal = ecotiter::infrastructure::storage::calibrationRead();
+                float volDispensed = cal
+                    ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
+                    : 0.0f;
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
+                        static_cast<unsigned long long>(resultId),
+                        static_cast<double>(volDispensed)));
+            }
+            else if (smResult.type == infrastructure::SmResult::Type::CalSpeedComplete)
+            {
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"speed_ml_min":%.2f}})",
+                        static_cast<unsigned long long>(resultId),
+                        static_cast<double>(smResult.measuredSpeedMlMin)));
+            }
+            else if (smResult.type == infrastructure::SmResult::Type::CalSpeedSeqComplete)
+            {
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                        static_cast<unsigned long long>(resultId)));
+            }
+            else
+            {
+                off = static_cast<size_t>(
+                    std::snprintf(buf.data(), buf.size(),
+                        R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                        static_cast<unsigned long long>(resultId)));
+            }
+
+            if (off > 0 && off < buf.size())
+            {
+                buf[off++] = '\n';
+                serial.write({buf.data(), off});
+                if (bleManager.isConnected())
+                {
+                    std::ignore = bleManager.sendNotification({buf.data(), off});
+                }
+            }
+
+            // Clear result
+            ecotiter::domain::gHasPendingResult.store(false, std::memory_order_release);
+            smResult.type = infrastructure::SmResult::Type::None;
+            smResult.stepsTaken = 0;
         }
 
         vTaskDelayUntil(&lastWake, PACING_TICK);

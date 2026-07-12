@@ -53,7 +53,7 @@ std::expected<CommandResponse, domain::AppError> handleFill() {
   domain::gBuretteState.store(domain::BuretteState::Filling, std::memory_order_release);
 
   auto cal = infrastructure::storage::calibrationRead();
-  if (!cal) return makeErrorResponse("calibration not available");
+  if (!cal) return makeErrorResponse("start_failed");
 
   int32_t steps = static_cast<int32_t>(cal->nominalVolumeMl * cal->stepsPerMl + 0.5f);
   domain::gDirection.store(domain::Direction::LiqIn, std::memory_order_release);
@@ -72,7 +72,7 @@ std::expected<CommandResponse, domain::AppError> handleEmpty() {
   domain::gBuretteState.store(domain::BuretteState::Emptying, std::memory_order_release);
 
   auto cal = infrastructure::storage::calibrationRead();
-  if (!cal) return makeErrorResponse("calibration not available");
+  if (!cal) return makeErrorResponse("start_failed");
 
   float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
   int32_t steps = static_cast<int32_t>(curVol * cal->stepsPerMl + 0.5f);
@@ -93,15 +93,15 @@ std::expected<CommandResponse, domain::AppError> handleDoseVolume(
     std::optional<domain::Ml> volume,
     std::optional<float> speedMlMin) {
   if (!volume) {
-    return makeErrorResponse("doseVolume requires 'volume' param");
+    return makeErrorResponse("invalid_params");
   }
   auto cal = infrastructure::storage::calibrationRead();
-  if (!cal) return makeErrorResponse("calibration not available");
+  if (!cal) return makeErrorResponse("start_failed");
 
   float currentVol = domain::gVolumeMl.load(std::memory_order_acquire);
   auto plan = domain::planDose(volume->value, currentVol, *cal);
   if (!plan.valid) {
-    return makeErrorResponse("volume out of range [0.01, 50.0]");
+    return makeErrorResponse("invalid_params");
   }
 
   uint32_t speedHz = domain::gSpeed.load(std::memory_order_acquire);
@@ -128,10 +128,10 @@ std::expected<CommandResponse, domain::AppError> handleDoseVolume(
 std::expected<CommandResponse, domain::AppError> handleRinse(
     std::optional<uint32_t> cycles) {
   if (!cycles || *cycles == 0) {
-    return makeErrorResponse("rinse requires 'cycles' param > 0");
+    return makeErrorResponse("invalid_params");
   }
   auto cal = infrastructure::storage::calibrationRead();
-  if (!cal) return makeErrorResponse("calibration not available");
+  if (!cal) return makeErrorResponse("start_failed");
 
   domain::gBuretteState.store(domain::BuretteState::Rinsing, std::memory_order_release);
 
@@ -148,11 +148,11 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(
     std::optional<float> freqHz,
     std::optional<float> speedMlMin) {
   if (!mode) {
-    return makeErrorResponse("cal.run requires 'mode' param (dose|speed)");
+    return makeErrorResponse("invalid_params");
   }
 
   auto cal = infrastructure::storage::calibrationRead();
-  if (!cal) return makeErrorResponse("calibration not available");
+  if (!cal) return makeErrorResponse("start_failed");
 
   auto state = domain::gBuretteState.load(std::memory_order_acquire);
   bool isBusy = (state != domain::BuretteState::Idle);
@@ -177,12 +177,7 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(
     if (plan.rejectReason == domain::sm::CalRunRejectReason::BuretteBusy) {
       reason = "burette_busy";
     }
-    CommandResponse rsp;
-    rsp.kind = ResponseKind::Single;
-    rsp.bodySize = static_cast<size_t>(
-        std::snprintf(rsp.body.data(), rsp.body.size(),
-                      R"({"cmd":"cal.run","error":"%s"})", reason));
-    return rsp;
+    return makeErrorResponse(reason);
   }
 
   domain::gBuretteState.store(domain::BuretteState::Dosing, std::memory_order_release);
@@ -209,7 +204,9 @@ std::expected<CommandResponse, domain::AppError> handleStop() {
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::Stop;
   sendMotorCommand(std::move(cmd));
-  return makeAckThenResponse();
+  return makeSingleResponse(
+      std::string_view(R"({"status":"stopped"})"),
+      std::string_view(R"({"status":"stopped"})").size());
 }
 
 std::expected<CommandResponse, domain::AppError> handleEmergencyStop() {
@@ -217,7 +214,9 @@ std::expected<CommandResponse, domain::AppError> handleEmergencyStop() {
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::EmergencyStop;
   sendMotorCommand(std::move(cmd));
-  return makeAckThenResponse();
+  return makeSingleResponse(
+      std::string_view(R"({"status":"emergency_stopped"})"),
+      std::string_view(R"({"status":"emergency_stopped"})").size());
 }
 
 std::expected<CommandResponse, domain::AppError> handleGetStatus(
@@ -225,20 +224,15 @@ std::expected<CommandResponse, domain::AppError> handleGetStatus(
     domain::ValvePosition valvePos, float mv,
     domain::Direction dir, uint32_t speed,
     uint32_t accel, float volumeMl) {
-  CommandResponse rsp;
-  rsp.kind = ResponseKind::Single;
-  size_t off = 0;
   bool volumeIsNull = (state == domain::BuretteState::Homing);
-  serializeStatusJson(rsp.body, off, state, tempCX100,
-                      valvePos, mv, dir, speed, accel, volumeMl, volumeIsNull);
-  rsp.bodySize = off;
-  return rsp;
+  return makeStatusResponse(0, state, tempCX100, valvePos, mv,
+                            dir, speed, accel, volumeMl, volumeIsNull);
 }
 
 std::expected<CommandResponse, domain::AppError> handleMoveSteps(
     std::optional<domain::Steps> steps) {
   if (!steps) {
-    return makeErrorResponse("moveSteps requires 'steps' param");
+    return makeErrorResponse("invalid_params");
   }
   infrastructure::MotorCommand cmd{};
   cmd.type = infrastructure::MotorCommandType::MoveSteps;
@@ -250,7 +244,7 @@ std::expected<CommandResponse, domain::AppError> handleMoveSteps(
 std::expected<CommandResponse, domain::AppError> handleSetDirection(
     std::optional<domain::Direction> dir) {
   if (!dir) {
-    return makeErrorResponse("setDirection requires 'direction' param");
+    return makeErrorResponse("invalid_params");
   }
   domain::gDirection.store(*dir, std::memory_order_release);
   infrastructure::MotorCommand cmd{};
@@ -263,7 +257,7 @@ std::expected<CommandResponse, domain::AppError> handleSetDirection(
 std::expected<CommandResponse, domain::AppError> handleSetSpeed(
     std::optional<uint32_t> speedHz) {
   if (!speedHz) {
-    return makeErrorResponse("setSpeed requires 'speed' param");
+    return makeErrorResponse("invalid_params");
   }
   domain::gSpeed.store(*speedHz, std::memory_order_release);
   infrastructure::MotorCommand cmd{};
@@ -276,7 +270,7 @@ std::expected<CommandResponse, domain::AppError> handleSetSpeed(
 std::expected<CommandResponse, domain::AppError> handleSetAccel(
     std::optional<uint32_t> accelSteps) {
   if (!accelSteps) {
-    return makeErrorResponse("setAccel requires 'accel' param");
+    return makeErrorResponse("invalid_params");
   }
   domain::gAccel.store(*accelSteps, std::memory_order_release);
   infrastructure::MotorCommand cmd{};
@@ -289,7 +283,7 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(
 std::expected<CommandResponse, domain::AppError> handleSetVolume(
     std::optional<domain::Ml> volume) {
   if (!volume) {
-    return makeErrorResponse("setVolume requires 'targetVolume' param");
+    return makeErrorResponse("invalid_params");
   }
   return makeCmdResponse("setVolume",
                          R"(,"volume":%.1f)",
@@ -323,7 +317,7 @@ std::expected<CommandResponse, domain::AppError> handleConfigMove(
 std::expected<CommandResponse, domain::AppError> handleConfigHome(
     std::optional<uint32_t> speed) {
   if (!speed) {
-    return makeErrorResponse("configHome requires 'homeSpeed' param");
+    return makeErrorResponse("invalid_params");
   }
   return makeCmdResponse("configHome",
                          R"(,"homeSpeed":%lu)",
@@ -333,7 +327,7 @@ std::expected<CommandResponse, domain::AppError> handleConfigHome(
 std::expected<CommandResponse, domain::AppError> handleConfigSensor(
     std::optional<uint32_t> value) {
   if (!value) {
-    return makeErrorResponse("configSensor requires 'sensorValue' param");
+    return makeErrorResponse("invalid_params");
   }
   return makeCmdResponse("configSensor",
                          R"(,"sensorValue":%lu)",
