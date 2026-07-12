@@ -1,504 +1,412 @@
 #!/usr/bin/env python3
 """
-BLE + USB Serial dual monitor for Autosampler firmware.
+BLE API Format Validation Test.
 
-Connects to ESP32 over USB serial (to see firmware logs in real time)
-AND over BLE simultaneously. Useful for debugging BLE connection issues
-by correlating ESP32-side logs with BLE-side events.
+Validates JSON command/response format over BLE NUS (Nordic UART Service),
+collects broadcast notifications, and diagnoses timing.
 
 Usage:
-    python scripts/ble_serial_test.py                         # auto-detect COM + full test
-    python scripts/ble_serial_test.py --port COM5             # specify COM port
-    python scripts/ble_serial_test.py --scan-only             # scan BLE only, no connect
-    python scripts/ble_serial_test.py --interactive           # type BLE commands manually
-    python scripts/ble_serial_test.py --cmd "CMD:SYS:VERSION\n"  # single command, then exit
-    python scripts/ble_serial_test.py --no-reset              # skip DTR reset on serial
+    python3 scripts/testing/ble_test.py                          # auto-detect serial + BLE
+    python3 scripts/testing/ble_test.py --no-serial              # BLE only, no serial log
+    python3 scripts/testing/ble_test.py -p /dev/ttyUSB0          # specify serial port
+
+Exit code: 0 = PASS, 1 = FAIL.
 """
 
+import argparse
 import asyncio
-import re
+import datetime
+import json
+import math
 import sys
-import os
 import time
 import threading
-import argparse
-from datetime import datetime, timezone, timedelta
+from collections import deque
 from pathlib import Path
-from bleak import BleakScanner, BleakClient
 
-sys.path.insert(0, str(Path(__file__).parent))
-from find_port import find_esp32_port
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
+sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(PROJECT_DIR))
+sys.path.insert(0, str(PROJECT_DIR / "utils"))
+
+from boot_detect import BootDetector, BOOT_OK_MARKER, wait_for_boot
+from broadcast_validator import validate_broadcast_format, diagnose_broadcast_intervals
 
 try:
     import serial
 except ImportError:
-    print("ERROR: pyserial not installed. Run: pip install pyserial", flush=True)
+    serial = None
+
+try:
+    from bleak import BleakBackend, BleakScanner, BleakClient
+except ImportError:
+    print("ERROR: bleak not installed. Run: pip install bleak")
     sys.exit(1)
 
-# EcoTiter NUS (Nordic UART Service) UUIDs
+from find_port import find_esp32_port
+
+# BLE UUIDs
 SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dc0000"
 CHAR_CMD_UUID = "6e400002-b5a3-f393-e0a9-e50e24dc0000"   # RX (write)
 CHAR_RESP_UUID = "6e400003-b5a3-f393-e0a9-e50e24dc0000"  # TX (notify)
-CHAR_STATUS_UUID = "6e400003-b5a3-f393-e0a9-e50e24dc0000" # same as TX for EcoTiter
 
+# Timing
 SCAN_TIMEOUT = 15.0
-CONNECT_TIMEOUT = 60.0
 SCAN_RETRIES = 3
-RETRY_DELAY_S = 3
-RESPONSE_TIMEOUT_S = 15
-DONE_TIMEOUT_S = 15
-TOTAL_TIMEOUT = 240
+CONNECT_TIMEOUT = 60.0
+CMD_TIMEOUT_S = 5
+BROADCAST_COLLECT_S = 30
+BOOT_TIMEOUT_S = 15
 SERIAL_BAUD = 115200
 
-RESP_RE = re.compile(r'^(ACK|ERR|DONE):(\w+)(?::(.*))?')
-MSK = timezone(timedelta(hours=3))
-
-# ── coloured prefixes ──────────────────────────────────────────────
-SERIAL_TAG = "\033[36m[SERIAL]\033[0m"   # cyan
-BLE_TAG    = "\033[33m[BLE]   \033[0m"   # yellow
-BLE_SEND   = "\033[33m[BLE ->]\033[0m"   # yellow send
-BLE_RECV   = "\033[33m[BLE <-]\033[0m"   # yellow recv
-ERR_TAG    = "\033[31m[ERROR] \033[0m"   # red
-OK_TAG     = "\033[32m[OK]    \033[0m"   # green
-SCAN_TAG   = "\033[35m[SCAN]  \033[0m"   # magenta
+PASS = 0
+FAIL = 0
+log_file = None
+boot_detector = BootDetector()
 
 
-def timestamp():
-    return datetime.now(MSK).strftime("[%H:%M:%S]")
+def status(msg: str) -> None:
+    global log_file
+    print(msg, flush=True)
+    if log_file:
+        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        log_file.write(f"[{ts}] {msg}\n")
+        log_file.flush()
 
 
-def log(tag, msg):
-    print(f"{timestamp()} {tag} {msg}", flush=True)
+def log(msg: str) -> None:
+    global log_file
+    if log_file:
+        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        log_file.write(f"[{ts}] {msg}\n")
+        log_file.flush()
 
 
-# ── serial reader thread ────────────────────────────────────────────
-class SerialReader(threading.Thread):
-    """Reads serial output from ESP32 in a background thread."""
+def pass_msg(msg: str) -> None:
+    global PASS
+    PASS += 1
+    status(f"  ==> PASS: {msg}")
 
-    def __init__(self, port: str, baud: int = SERIAL_BAUD, do_reset: bool = True):
-        super().__init__(daemon=True)
-        self.port = port
-        self.baud = baud
-        self.do_reset = do_reset
-        self.ser = None
-        self._done = threading.Event()
 
-    def stop(self):
-        self._done.set()
+def fail_msg(msg: str) -> None:
+    global FAIL
+    FAIL += 1
+    status(f"  ==> FAIL: {msg}")
 
-    def run(self):
+
+def serial_reader_thread(ser, buf: deque, stop_event: threading.Event) -> None:
+    """Background serial reader — feeds raw lines into buf for optional boot detection."""
+    partial = b""
+    while not stop_event.is_set():
         try:
-            self.ser = serial.Serial(
-                port=self.port,
-                baudrate=self.baud,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=0.5,
-            )
-        except serial.SerialException as e:
-            log(ERR_TAG, f"Cannot open {self.port}: {e}")
-            return
-
-        log(SERIAL_TAG, f"Connected to {self.port} @ {self.baud} baud")
-
-        if self.do_reset:
-            log(SERIAL_TAG, "Resetting ESP32 (DTR pulse)...")
-            self.ser.dtr = False
-            self.ser.rts = False
-            time.sleep(0.1)
-            self.ser.dtr = True
-            self.ser.rts = True
-            time.sleep(0.1)
-            self.ser.dtr = False
-            self.ser.rts = False
-            time.sleep(0.5)
-            self.ser.reset_input_buffer()
-            log(SERIAL_TAG, "ESP32 reset complete — awaiting boot logs")
-
-        buf = ""
-        while not self._done.is_set():
-            try:
-                if self.ser.in_waiting:
-                    data = self.ser.read(self.ser.in_waiting).decode("utf-8", errors="replace")
-                    buf += data
-                    while "\n" in buf:
-                        line, buf = buf.split("\n", 1)
-                        line = line.strip("\r")
-                        if line:
-                            log(SERIAL_TAG, line)
-                else:
-                    time.sleep(0.01)
-            except serial.SerialException:
-                log(SERIAL_TAG, "Connection lost")
-                break
-            except Exception as e:
-                log(ERR_TAG, f"Serial read error: {e}")
-                break
-
-        if self.ser and self.ser.is_open:
-            self.ser.close()
+            if ser.in_waiting:
+                data = ser.read(ser.in_waiting)
+                partial += data
+                while b"\n" in partial:
+                    line, partial = partial.split(b"\n", 1)
+                    line_str = line.decode("utf-8", errors="replace").strip("\r")
+                    if line_str:
+                        buf.append(line_str)
+            else:
+                time.sleep(0.005)
+        except serial.SerialException:
+            break
+        except Exception:
+            break
 
 
-# ── BLE test logic ──────────────────────────────────────────────────
-class BleSerialTest:
-    def __init__(self, serial_reader: SerialReader, interactive: bool = False):
-        self.serial_reader = serial_reader
-        self.interactive = interactive
+# ── BLE Test Class ──────────────────────────────────────────────────────
+
+class BleApiTest:
+    def __init__(self):
+        self.client: BleakClient | None = None
         self.target_device = None
-        self.target_info = None
-        self.client = None
-        self.resp_queue = asyncio.Queue()
-        self.status_queue = asyncio.Queue()
-        self.failed_steps = []
-
-    def _parse_response(self, raw):
-        m = RESP_RE.match(raw.strip())
-        if not m:
-            return None
-        return {
-            'type': m.group(1),
-            'command': m.group(2),
-            'detail': m.group(3) or ''
-        }
+        self.resp_queue: asyncio.Queue = asyncio.Queue()
+        self.broadcasts: list[tuple[dict, float]] = []
+        self._collecting = False
 
     def on_notification(self, sender, data):
         raw = data.decode(errors="replace").strip()
-        self.resp_queue.put_nowait(raw)
+        if self._collecting:
+            # During collection phase, everything is a broadcast
+            try:
+                obj = json.loads(raw)
+                if "id" not in obj and "cmd" not in obj:
+                    self.broadcasts.append((obj, time.monotonic()))
+            except json.JSONDecodeError:
+                pass
+        else:
+            # During command phase, put in response queue
+            self.resp_queue.put_nowait(raw)
 
-    def on_status_notification(self, sender, data):
-        raw = data.decode(errors="replace").strip()
-        self.status_queue.put_nowait(raw)
+    async def scan(self) -> bool:
+        for attempt in range(1, SCAN_RETRIES + 1):
+            status(f"BLE scan attempt {attempt}/{SCAN_RETRIES}...")
+            devices = await BleakScanner.discover(
+                timeout=SCAN_TIMEOUT, return_adv=True, use_cached=False
+            )
+            if not devices:
+                continue
+            for addr, (device, adv) in devices.items():
+                name = device.name or ""
+                svc_uuids = [str(u) for u in (adv.service_uuids or [])]
+                if "EcoTiter" in name or SERVICE_UUID in svc_uuids:
+                    self.target_device = device
+                    status(f"Found EcoTiter: {name} ({addr})")
+                    return True
+        return False
 
-    async def _wait_for(self, expected_type, expected_cmd, timeout):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.client and not self.client.is_connected:
-                return False, "Connection lost"
+    async def connect(self) -> bool:
+        if not self.target_device:
+            return False
+        for attempt in range(1, 4):
+            status(f"BLE connect attempt {attempt}/3...")
+            try:
+                self.client = BleakClient(
+                    self.target_device.address, timeout=CONNECT_TIMEOUT,
+                    disconnected_callback=lambda c: status("BLE disconnected")
+                )
+                await self.client.connect()
+                # BlueZ doesn't expose MTU via standard API; workaround from
+                # https://github.com/hbldh/bleak/blob/develop/examples/mtu_size.py
+                if self.client.backend_id == BleakBackend.BLUEZ_DBUS:
+                    await self.client._backend._acquire_mtu()
+                status(f"BLE connected (MTU: {self.client.mtu_size})")
+                # Subscribe to TX notifications
+                resp_char = self.client.services.get_characteristic(CHAR_RESP_UUID)
+                if resp_char:
+                    await self.client.start_notify(resp_char, self.on_notification)
+                return True
+            except Exception as e:
+                status(f"  Connection error: {e}")
+                if self.client and self.client.is_connected:
+                    try:
+                        await self.client.disconnect()
+                    except Exception:
+                        pass
+                self.client = None
+                await asyncio.sleep(3)
+        return False
+
+    async def send_and_expect(
+        self, cmd: str, cmd_id: int,
+        expect_keys: list | None = None,
+        expect_error: bool = False,
+        timeout_s: float = CMD_TIMEOUT_S,
+    ) -> dict | None:
+        payload = json.dumps({"id": cmd_id, "cmd": cmd}) + "\n"
+        log(f"  BLE >>> {payload.strip()}")
+        try:
+            await self.client.write_gatt_char(CHAR_CMD_UUID, payload.encode(), response=False)
+        except Exception as e:
+            fail_msg(f"{cmd}: write failed: {e}")
+            return None
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
             try:
                 raw = await asyncio.wait_for(self.resp_queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 continue
 
-            parsed = self._parse_response(raw)
-            if parsed is None:
-                log(BLE_RECV, raw)
+            log(f"  BLE <<< {raw.strip()}")
+            if not raw.startswith("{"):
+                continue
+            try:
+                resp = json.loads(raw)
+            except json.JSONDecodeError:
                 continue
 
-            log(BLE_RECV, f"{parsed['type']}:{parsed['command']}"
-                f"{' (' + parsed['detail'] + ')' if parsed['detail'] else ''}")
-
-            if parsed['type'] == expected_type and parsed['command'] == expected_cmd:
-                return True, raw
-            if parsed['type'] == 'ERR' and expected_type == 'ERR':
-                return True, raw
-
-        return False, f"Timeout ({timeout}s) waiting for {expected_type}:{expected_cmd}"
-
-    async def send_cmd(self, cmd_str: str, label: str = ""):
-        """Send one BLE command and wait for ACK/ERR response."""
-        label = label or cmd_str.strip()[:40]
-        log(BLE_SEND, cmd_str.strip())
-        try:
-            await self.client.write_gatt_char(
-                CHAR_CMD_UUID, cmd_str.encode(), response=False
-            )
-        except Exception as e:
-            log(ERR_TAG, f"Write failed: {e}")
-            return None
-
-        ok, msg = await self._wait_for(None, None, RESPONSE_TIMEOUT_S)
-        if not ok:
-            # try ACK first
-            ok, msg = await self._wait_for('ACK', label.split()[0] if label else '', 2)
-            if not ok:
-                log(ERR_TAG, f"No response for: {cmd_str.strip()}")
-        return msg
-
-    async def scan(self):
-        for attempt in range(1, SCAN_RETRIES + 1):
-            log(SCAN_TAG, f"Scan attempt {attempt}/{SCAN_RETRIES} (timeout={SCAN_TIMEOUT}s)...")
-            devices = await BleakScanner.discover(
-                timeout=SCAN_TIMEOUT, return_adv=True, use_cached=False
-            )
-
-            if not devices:
-                log(SCAN_TAG, "No devices found")
-                if attempt < SCAN_RETRIES:
-                    await asyncio.sleep(RETRY_DELAY_S)
+            matched = resp.get("id") == cmd_id or resp.get("cmd") == cmd
+            if not matched:
                 continue
 
-            log(SCAN_TAG, f"Found {len(devices)} device(s):")
-            for addr, (device, adv) in devices.items():
-                name = device.name or "(unknown)"
-                rssi = adv.rssi if adv.rssi is not None else "N/A"
-                svc_uuids = [str(u) for u in adv.service_uuids] if adv.service_uuids else []
-                is_target = (
-                    "EcoTiter" in name
-                    or SERVICE_UUID in svc_uuids
-                )
-                marker = "  \033[1m<--- ECOTITER\033[0m" if is_target else ""
-                log(SCAN_TAG, f"  {name:<30} {addr:<36} RSSI={str(rssi):>4}{marker}")
+            st = resp.get("status", "")
+            if expect_error:
+                if st == "error" or "error" in resp.get("result", ""):
+                    pass_msg(f"{cmd}: got expected error")
+                    return resp
+                fail_msg(f"{cmd}: expected error, got status='{st}'")
+                return None
+            elif st == "ok":
+                data = resp.get("data", {})
+                if expect_keys:
+                    missing = [k for k in expect_keys if k not in data]
+                    if missing:
+                        fail_msg(f"{cmd}: missing keys {missing} in data")
+                        return None
+                pass_msg(f"{cmd}: status=ok")
+                return resp
+            elif resp.get("result") == "pong":
+                pass_msg(f"{cmd}: result=pong")
+                return resp
+            else:
+                fail_msg(f"{cmd}: unexpected status='{st}', result='{resp.get('result', '')}'")
+                return None
 
-                if is_target and not self.target_device:
-                    self.target_device = device
-                    self.target_info = (name, addr, rssi)
+        fail_msg(f"{cmd}: no response within {timeout_s}s")
+        return None
 
-            if self.target_device:
-                return True
+    async def collect_broadcasts(self, duration_s: float) -> list[tuple[dict, float]]:
+        self._collecting = True
+        self.broadcasts.clear()
+        status(f"Collecting BLE broadcasts for {duration_s}s...")
+        await asyncio.sleep(duration_s)
+        self._collecting = False
+        status(f"Collected {len(self.broadcasts)} BLE broadcast messages")
+        return self.broadcasts
 
-            if attempt < SCAN_RETRIES:
-                await asyncio.sleep(RETRY_DELAY_S)
-
-        return False
-
-    async def run_test_sequence(self):
-        """EcoTiter BLE test sequence — sends JSON CommandEnvelope and checks logs."""
-        steps = [
-            ("ping",       '{"cmd":"ping"}\n',             3),
-            ("status",     '{"cmd":"status"}\n',           3),
-        ]
-
-        log(OK_TAG, "=== EcoTiter BLE test sequence ===")
-
-        for i, (name, cmd, wait_s) in enumerate(steps, 1):
-            log(BLE_SEND, f"[Step {i}/{len(steps)}] {name}: {cmd.strip()}")
-
+    async def disconnect(self):
+        if self.client and self.client.is_connected:
             try:
-                await self.client.write_gatt_char(
-                    CHAR_CMD_UUID, cmd.encode(), response=False
-                )
-                log(OK_TAG, f"  Wrote {len(cmd)} bytes to RX char")
-            except Exception as e:
-                self.failed_steps.append((i, name, f"Write failed: {e}"))
-                continue
-
-            # Wait a bit for any notification or just to observe serial logs
-            await asyncio.sleep(wait_s)
-
-        log("", "")
-        total = len(steps)
-        passed = total - len(self.failed_steps)
-        if passed == total:
-            log(OK_TAG, f"\033[1m=== ECOTITER BLE TEST: PASSED ({passed}/{total}) ===\033[0m")
-        else:
-            log(ERR_TAG, f"\033[1m=== ECOTITER BLE TEST: FAILED ({passed}/{total}) ===\033[0m")
-            for num, name, reason in self.failed_steps:
-                log(ERR_TAG, f"  Step {num} ({name}): {reason}")
-
-    async def run_interactive(self):
-        """Read JSON commands from stdin and send them via BLE."""
-        log(OK_TAG, "=== Interactive mode (EcoTiter) ===")
-        log(OK_TAG, "Type a JSON command (e.g. {\"cmd\":\"ping\"}) and press Enter.")
-        log(OK_TAG, "Type 'quit' or Ctrl+C to exit.")
-        log("", "")
-
-        loop = asyncio.get_event_loop()
-        while True:
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                if line.lower() in ("quit", "exit", "q"):
-                    break
-
-                if not line.endswith("\n"):
-                    line += "\n"
-
-                log(BLE_SEND, line.strip())
-                try:
-                    await self.client.write_gatt_char(
-                        CHAR_CMD_UUID, line.encode(), response=False
-                    )
-                    log(OK_TAG, f"Sent {len(line)} bytes")
-                except Exception as e:
-                    log(ERR_TAG, f"Write failed: {e}")
-                    continue
-
-                await asyncio.sleep(2)
-
-            except KeyboardInterrupt:
-                log("", "")
-                log(OK_TAG, "Interactive mode ended")
-                break
-
-    async def connect_and_test(self):
-        """Connect to the target BLE device and run tests."""
-        dev = self.target_device
-        name, addr, rssi = self.target_info
-
-        for attempt in range(1, 4):
-            log(BLE_TAG, f"Connect attempt {attempt}/3 to {name} ({addr})...")
-
-            if attempt > 1:
-                self.target_device = None
-                found = await self.scan()
-                if not found:
-                    log(ERR_TAG, "Autosampler not found, aborting")
-                    return
-                dev = self.target_device
-                name, addr, _ = self.target_info
-
-            try:
-                self.client = BleakClient(
-                    dev.address, timeout=CONNECT_TIMEOUT,
-                    disconnected_callback=lambda c: log(BLE_TAG, "*** Disconnected ***")
-                )
-                log(BLE_TAG, "Connecting...")
-                await self.client.connect()
-                log(OK_TAG, f"Connected! MTU: {self.client.mtu_size}")
-
-                resp_char = self.client.services.get_characteristic(CHAR_RESP_UUID)
-                if resp_char:
-                    log(OK_TAG, f"Found TX char ({CHAR_RESP_UUID}), subscribing for notifications...")
-                    await self.client.start_notify(resp_char, self.on_notification)
-                else:
-                    log(BLE_TAG, "TX notify char not found — will listen for notifications on service discovery")
-                    # List available characteristics for debugging
-                    for svc in self.client.services:
-                        for ch in svc.characteristics:
-                            log(BLE_TAG, f"  [{svc.uuid}] {ch.uuid} -> {', '.join(ch.properties)}")
-
-                if self.interactive:
-                    await self.run_interactive()
-                else:
-                    await self.run_test_sequence()
-
-                return
-
-            except asyncio.TimeoutError:
-                log(ERR_TAG, f"Connection timeout — attempt {attempt}/3")
-            except Exception as e:
-                log(ERR_TAG, f"Connection error: {type(e).__name__}: {e}")
-
-            if self.client and self.client.is_connected:
-                try:
-                    await self.client.disconnect()
-                except Exception:
-                    pass
-                self.client = None
-
-            if attempt < 3:
-                await asyncio.sleep(5)
-
-        log(ERR_TAG, "All 3 connection attempts failed")
-
-    async def run(self):
-        """Main entry point: scan, connect, test."""
-        log(OK_TAG, "=== EcoTiter BLE + Serial Test ===")
-
-        if self.target_device:
-            await self.connect_and_test()
-        else:
-            log(ERR_TAG, "No target device found")
+                await self.client.disconnect()
+            except Exception:
+                pass
 
 
-# ── single command mode ─────────────────────────────────────────────
-async def send_single_command(cmd_str: str):
-    """Scan, connect, send one JSON command, disconnect."""
-    log(OK_TAG, f"=== Single command mode: {cmd_str.strip()} ===")
+# ── Main ────────────────────────────────────────────────────────────────
 
-    ble = BleSerialTest(serial_reader=None, interactive=False)
-    found = await ble.scan()
-    if not found:
-        log(ERR_TAG, "EcoTiter not found")
-        return
-
-    dev = ble.target_device
-    name, addr, _ = ble.target_info
-    log(BLE_TAG, f"Connecting to {name} ({addr})...")
-
-    try:
-        ble.client = BleakClient(dev.address, timeout=CONNECT_TIMEOUT)
-        await ble.client.connect()
-        log(OK_TAG, f"Connected! MTU: {ble.client.mtu_size}")
-
-        log(BLE_SEND, cmd_str.strip())
-        await ble.client.write_gatt_char(
-            CHAR_CMD_UUID, cmd_str.encode(), response=False
-        )
-        log(OK_TAG, f"Sent {len(cmd_str)} bytes")
-
-        await asyncio.sleep(5)
-
-    except Exception as e:
-        log(ERR_TAG, f"Error: {e}")
-    finally:
-        if ble.client and ble.client.is_connected:
-            await ble.client.disconnect()
-        log(OK_TAG, "Done")
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="BLE API format validation test")
+    p.add_argument("--no-serial", action="store_true", help="Skip serial boot detection")
+    p.add_argument("-p", "--port", default=None, help="Serial port for boot detection")
+    return p.parse_args()
 
 
-# ── CLI entry point ─────────────────────────────────────────────────
-def main():
-    parser = argparse.ArgumentParser(
-        description="BLE + USB Serial dual monitor for Autosampler firmware"
-    )
-    parser.add_argument("--port", default=None,
-                        help="Serial port (auto-detect if omitted)")
-    parser.add_argument("--baud", type=int, default=SERIAL_BAUD,
-                        help=f"Serial baud rate (default: {SERIAL_BAUD})")
-    parser.add_argument("--no-reset", action="store_true",
-                        help="Skip DTR reset on serial connect")
-    parser.add_argument("--scan-only", action="store_true",
-                        help="Scan BLE only, do not connect")
-    parser.add_argument("--interactive", action="store_true",
-                        help="Interactive command entry mode")
-    parser.add_argument("--cmd", default=None,
-                        help="Send one BLE command and exit")
-    args = parser.parse_args()
+def main() -> int:
+    global PASS, FAIL, log_file, boot_detector
 
-    # ── start serial reader (unless scan-only or single-cmd) ──
-    serial_reader = None
-    if not args.scan_only:
+    args = parse_args()
+
+    log_dir = SCRIPT_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = log_dir / f"ble_api_test_{ts}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    log_file.write(f"BLE API test log — {ts}\n")
+    log_file.write("=" * 60 + "\n")
+    log_file.flush()
+    status(f"Log: {log_path}")
+
+    # ── Optional serial boot detection ──
+    serial_buf: deque = deque()
+    serial_stop = threading.Event()
+    serial_thread = None
+
+    if not args.no_serial:
         port = args.port or find_esp32_port()
-        if port:
-            serial_reader = SerialReader(port, args.baud, not args.no_reset)
-            serial_reader.start()
-            # Give serial time to connect and show boot
-            time.sleep(2)
-        else:
-            log(ERR_TAG, "ESP32 serial port not found "
-                "(specify with --port COMx or check connection)")
-            if not args.cmd and not args.scan_only:
-                log(ERR_TAG, "Continuing with BLE only (no serial output)")
+        if port and serial:
+            status(f"Serial boot detection on {port} @ {SERIAL_BAUD}")
+            try:
+                ser = serial.Serial(port=port, baudrate=SERIAL_BAUD, timeout=0.1)
+                # DTR reset
+                ser.dtr = False; ser.rts = False
+                time.sleep(0.1)
+                ser.dtr = True; ser.rts = True
+                time.sleep(0.1)
+                ser.dtr = False; ser.rts = False
+                time.sleep(0.3)
+                ser.reset_input_buffer()
 
-    # ── run BLE part ───────────────────────────────────────────
-    try:
-        if args.cmd:
-            asyncio.run(send_single_command(args.cmd))
-        else:
-            ble = BleSerialTest(serial_reader=None, interactive=args.interactive)
+                serial_thread = threading.Thread(
+                    target=serial_reader_thread,
+                    args=(ser, serial_buf, serial_stop), daemon=True
+                )
+                serial_thread.start()
 
-            async def run_ble():
-                found = await ble.scan()
-                if args.scan_only:
-                    if found:
-                        n, a, r = ble.target_info
-                        log(OK_TAG, f"Target: {n} ({a}) RSSI={r}")
-                    else:
-                        log(ERR_TAG, "Autosampler not found")
-                    return
-                if found:
-                    ble.target_device = ble.target_device
-                    ble.target_info = ble.target_info
-                    await ble.run()
+                boot_found = wait_for_boot(
+                    serial_buf, boot_detector, timeout_s=BOOT_TIMEOUT_S,
+                    log_fn=lambda line: log(f"  boot line: {line}")
+                )
+                if boot_found:
+                    status(f"Boot detected (marker #{boot_detector.count})")
                 else:
-                    log(ERR_TAG, "Autosampler not found after scan")
+                    status("Boot marker not seen on serial (continuing with BLE)")
+            except Exception as e:
+                status(f"Serial init failed: {e}")
+        else:
+            status("No serial port found — BLE only mode")
 
-            asyncio.run(run_ble())
-    except KeyboardInterrupt:
-        log("", "")
-        log(OK_TAG, "Interrupted by user")
-    finally:
-        if serial_reader:
-            serial_reader.stop()
-            serial_reader.join(timeout=3)
-        log(OK_TAG, "Exiting")
+    # ── BLE scan + connect ──
+    async def run_ble():
+        ble = BleApiTest()
+        
+        found = await ble.scan()
+        if not found:
+            fail_msg("EcoTiter not found via BLE scan")
+            return
+        
+        connected = await ble.connect()
+        if not connected:
+            fail_msg("BLE connection failed")
+            return
+        
+        # ── Command sequence ──
+        status("\n=== BLE: serial.ping ===")
+        await ble.send_and_expect("serial.ping", cmd_id=1, expect_keys=["status"])
+        
+        status("\n=== BLE: burette.getStatus ===")
+        await ble.send_and_expect("burette.getStatus", cmd_id=2,
+                                  expect_keys=["status", "volume_ml", "speed_ml_min"])
+        
+        status("\n=== BLE: burette.cal.get ===")
+        await ble.send_and_expect("burette.cal.get", cmd_id=3,
+                                  expect_keys=["steps_per_ml", "nominal_vol", "speed_coeff",
+                                               "min_freq", "max_freq", "is_default"])
+        
+        status("\n=== BLE: valve.getState ===")
+        await ble.send_and_expect("valve.getState", cmd_id=4, expect_keys=["position"])
+        
+        status("\n=== BLE: nonexistent command (expect error) ===")
+        await ble.send_and_expect("nonexistent", cmd_id=5, expect_error=True)
+        
+        # ── Broadcast collection ──
+        status(f"\n=== BLE broadcast collection ({BROADCAST_COLLECT_S}s) ===")
+        broadcasts = await ble.collect_broadcasts(BROADCAST_COLLECT_S)
+        
+        status("\n=== Broadcast format validation ===")
+        passed, total = validate_broadcast_format(broadcasts, log_fn=log)
+        if total == 0:
+            fail_msg("No broadcast messages received over BLE")
+        elif passed == total:
+            pass_msg(f"All {total} broadcasts conform to spec format")
+        else:
+            fail_msg(f"{passed}/{total} broadcasts conform to spec format")
+        
+        status("\n=== Broadcast interval diagnostics ===")
+        diagnose_broadcast_intervals(broadcasts, log_fn=status)
+        
+        await ble.disconnect()
+
+    asyncio.run(run_ble())
+
+    # ── Reboot check ──
+    if boot_detector.reboot_detected:
+        fail_msg(f"ESP32-S3 reboot detected (BOOT OK: seen {boot_detector.count} times)")
+
+    # ── Cleanup ──
+    serial_stop.set()
+    if serial_thread:
+        serial_thread.join(timeout=3)
+
+    # ── Summary ──
+    total = PASS + FAIL
+    status("\n" + "=" * 50)
+    status(f"RESULTS: {PASS}/{total} passed, {FAIL}/{total} failed")
+
+    if FAIL == 0:
+        status("ALL CHECKS PASSED")
+    else:
+        status("SOME CHECKS FAILED")
+
+    if log_file:
+        log_file.write("=" * 60 + "\n")
+        log_file.write(f"Results: {PASS}/{total} passed, {FAIL}/{total} failed\n")
+        log_file.close()
+
+    return 0 if FAIL == 0 else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

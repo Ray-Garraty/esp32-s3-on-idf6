@@ -8,6 +8,7 @@ then call result() / result_message().
 
 import re
 from enum import IntEnum
+BOOT_OK_MARKER = "BOOT OK:"
 
 
 class ResultCode(IntEnum):
@@ -67,7 +68,7 @@ class SerialClassifier:
                 self._crash_state = self._CRASH_IDLE
             return
 
-        if "BOOT_OK_MARKER" in line or line.startswith("{"):
+        if BOOT_OK_MARKER in line or line.startswith("{"):
             self.found_boot = True
 
     def result(self) -> ResultCode:

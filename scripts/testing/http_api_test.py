@@ -29,6 +29,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_DIR))
+sys.path.insert(0, str(PROJECT_DIR / "utils"))
 
 try:
     import serial as pyserial
@@ -37,13 +38,12 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
+from boot_detect import BootDetector, BOOT_OK_MARKER
 
 SERIAL_BAUD = 115200
 HTTP_TIMEOUT_S = 10
 WS_COLLECT_S = 20
 WS_COUNT_TARGET = 5
-BOOT_MARKER = "HTTP server ready"
-BOOT2_MARKER = "Project name:"
 BOOT_TIMEOUT_S = 20
 
 PASS = 0
@@ -165,6 +165,7 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
     time.sleep(0.3)
     ser.reset_input_buffer()
 
+    detector = BootDetector()
     sta_pattern = re.compile(r"sta ip:\s*(\d+\.\d+\.\d+\.\d+)")
     any_ip = re.compile(r"(\d+\.\d+\.\d+\.\d+)")
     deadline = time.time() + BOOT_TIMEOUT_S
@@ -175,9 +176,10 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
         try:
             line = ser.readline().decode("utf-8", errors="replace").strip()
             if line:
+                detector.add_line(line)
                 for out in dedup.add(f"serial: {line}", ts()):
                     log(f"  {out}")
-            if BOOT_MARKER in line or BOOT2_MARKER in line:
+            if BOOT_OK_MARKER in line:
                 for out in dedup.flush():
                     log(f"  {out}")
                 status("Boot detected, waiting for IP...")
@@ -208,6 +210,8 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
 
     for out in dedup.flush():
         log(f"  {out}")
+    if detector.reboot_detected:
+        log(f"  WARNING: ESP32-S3 reboot detected (BOOT OK: seen {detector.count} times)")
     ser.close()
     if fallback_ap:
         status("")

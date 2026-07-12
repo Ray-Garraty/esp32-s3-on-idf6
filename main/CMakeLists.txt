@@ -37,6 +37,7 @@ endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     BUILD_DATE="${BUILD_DATE}"
     GIT_HASH="${GIT_HASH}"
+    APP_VERSION="${PROJECT_VER}"
 )
 
 target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")

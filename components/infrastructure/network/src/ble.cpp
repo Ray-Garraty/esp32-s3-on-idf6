@@ -13,6 +13,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_att.h"
 #include "host/ble_uuid.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -147,6 +148,8 @@ std::expected<void, domain::AppError> BleManager::init() {
         }
         puts("DBG: BLE - nimble_port_init done"); fflush(stdout);
     }
+
+    ble_att_set_preferred_mtu(256);
 
     ble_svc_gap_init();
     ble_svc_gatt_init();

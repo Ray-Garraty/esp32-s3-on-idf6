@@ -16,7 +16,6 @@ Exit code: 0 = PASS, 1 = FAIL.
 import argparse
 import datetime
 import json
-import math
 import sys
 import threading
 import time
@@ -27,6 +26,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_DIR))
+sys.path.insert(0, str(PROJECT_DIR / "utils"))
 
 try:
     import serial
@@ -36,17 +36,17 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
+from boot_detect import BootDetector, BOOT_OK_MARKER, wait_for_boot as shared_wait_for_boot
+from broadcast_validator import validate_broadcast_format, diagnose_broadcast_intervals
 
 BAUDRATE = 115200
 BOOT_TIMEOUT_S = 15
 CMD_TIMEOUT_S = 5
 BROADCAST_COLLECT_S = 30
-BOOT_MARKER = "HTTP server ready"
-BOOT2_MARKER = "Project name:"
-
 PASS = 0
 FAIL = 0
 log_file = None
+boot_detector = None
 
 
 def status(msg: str) -> None:
@@ -99,6 +99,7 @@ def reader_thread(ser, buf: deque, stop_event: threading.Event) -> None:
 
 
 def wait_for_boot(ser, buf: deque) -> bool:
+    global boot_detector
     status("Waiting for ESP32 boot...")
     deadline = time.time() + BOOT_TIMEOUT_S
     lines_seen = 0
@@ -108,9 +109,10 @@ def wait_for_boot(ser, buf: deque) -> bool:
         while buf:
             line = buf.popleft()
             lines_seen += 1
+            boot_detector.add_line(line)
             for out in dedup.add(line.strip(), ts()):
                 log(f"  boot line: {out}")
-            if BOOT_MARKER in line or BOOT2_MARKER in line:
+            if BOOT_OK_MARKER in line:
                 for out in dedup.flush():
                     log(f"  boot line: {out}")
                 status(f"Boot detected after {lines_seen} lines")
@@ -142,6 +144,7 @@ def send_and_expect(
     while time.time() < deadline:
         while buf:
             line = buf.popleft()
+            boot_detector.add_line(line)
             log(f"  <<< {line}")
             if line.startswith("{"):
                 try:
@@ -188,6 +191,7 @@ def collect_broadcasts(buf: deque, duration_s: float) -> list[tuple[dict, float]
     while time.time() < deadline:
         while buf:
             line = buf.popleft()
+            boot_detector.add_line(line)
             log(f"  broadcast raw: {line}")
             if line.startswith("{"):
                 try:
@@ -202,135 +206,7 @@ def collect_broadcasts(buf: deque, duration_s: float) -> list[tuple[dict, float]
     return results
 
 
-# ── Broadcast format validation ──────────────────────────────────────
 
-SPEC_TOP_KEYS = {"ts", "temp", "mv", "vlv", "brt"}
-BRT_SUB_KEYS = {"sts", "vl", "spd"}
-VLV_VALID = {"in", "out", "unk"}
-BRT_STS_VALID = {"idle", "working", "error"}
-
-
-def validate_broadcast_format(broadcasts: list[tuple[dict, float]]) -> None:
-    if not broadcasts:
-        fail_msg("No broadcast messages received for format validation")
-        return
-
-    spec_ok = 0
-    spec_all = 0
-    for obj, _arrival in broadcasts:
-        spec_issues = _check_spec(obj)
-        extra_keys = set(obj.keys()) - SPEC_TOP_KEYS
-        if extra_keys:
-            log(f"  broadcast extra keys: {sorted(extra_keys)}")
-        if not spec_issues:
-            spec_ok += 1
-        else:
-            for e in spec_issues:
-                log(f"  broadcast spec issue: {e}")
-        spec_all += 1
-
-    if spec_ok == spec_all:
-        pass_msg(f"All {spec_all} broadcasts conform to spec format")
-    else:
-        fail_msg(f"{spec_ok}/{spec_all} broadcasts conform to spec format")
-
-
-def _check_spec(obj: dict) -> list[str]:
-    issues: list[str] = []
-
-    missing_top = SPEC_TOP_KEYS - set(obj.keys())
-    if missing_top:
-        issues.append(f"missing spec top-level keys: {missing_top}")
-        return issues
-
-    if not isinstance(obj["ts"], int) or obj["ts"] < 0:
-        issues.append(f"ts: expected uint32, got {obj['ts']!r}")
-
-    if obj["temp"] is not None and not isinstance(obj["temp"], (int, float)):
-        issues.append(f"temp: expected float|null, got {type(obj['temp']).__name__}")
-
-    if not isinstance(obj["mv"], (int, float)):
-        issues.append(f"mv: expected number, got {type(obj['mv']).__name__}")
-
-    if obj["vlv"] not in VLV_VALID:
-        issues.append(f"vlv: expected in/out/unk, got {obj['vlv']!r}")
-
-    brt = obj["brt"]
-    if not isinstance(brt, dict):
-        issues.append("brt: expected object")
-        return issues
-
-    missing_brt = BRT_SUB_KEYS - set(brt.keys())
-    if missing_brt:
-        issues.append(f"brt missing keys: {missing_brt}")
-    else:
-        if brt["sts"] not in BRT_STS_VALID:
-            issues.append(f"brt.sts: expected idle/working/error, got {brt['sts']!r}")
-        if brt["vl"] is not None and not isinstance(brt["vl"], (int, float)):
-            issues.append(f"brt.vl: expected float|null, got {type(brt['vl']).__name__}")
-        if not isinstance(brt["spd"], (int, float)):
-            issues.append(f"brt.spd: expected number, got {type(brt['spd']).__name__}")
-
-    return issues
-
-
-# ── Broadcast interval diagnostics ───────────────────────────────────
-
-SPEC_INTERVAL_MS = 300
-FIRMWARE_INTERVAL_MS = 2000
-OUTLIER_THRESHOLD_MS = 4000
-
-
-def diagnose_broadcast_intervals(broadcasts: list[tuple[dict, float]]) -> None:
-    if len(broadcasts) < 2:
-        status("  Broadcast interval: too few messages (<2) for analysis")
-        return
-
-    ts_deltas_ms: list[float] = []
-    arrival_deltas_ms: list[float] = []
-
-    for i in range(1, len(broadcasts)):
-        ts_prev = broadcasts[i - 1][0]["ts"]
-        ts_curr = broadcasts[i][0]["ts"]
-        delta_ts = (ts_curr - ts_prev) * 10  # ts is in 10ms ticks
-        if delta_ts > 0:
-            ts_deltas_ms.append(delta_ts)
-
-        arrival_prev = broadcasts[i - 1][1]
-        arrival_curr = broadcasts[i][1]
-        delta_arrival = (arrival_curr - arrival_prev) * 1000
-        if delta_arrival > 0:
-            arrival_deltas_ms.append(delta_arrival)
-
-    status(f"\n=== Broadcast interval diagnostics ({len(broadcasts)} frames) ===")
-
-    _report_deltas("Method A (ts * 10ms)", ts_deltas_ms, "device-side blocking")
-    _report_deltas("Method B (arrival)", arrival_deltas_ms, "connection/read issue")
-
-
-def _report_deltas(label: str, deltas: list[float], issue_hint: str) -> None:
-    if not deltas:
-        status(f"  {label}: no valid deltas")
-        return
-
-    mean = sum(deltas) / len(deltas)
-    variance = sum((d - mean) ** 2 for d in deltas) / len(deltas)
-    stddev = math.sqrt(variance)
-    outliers = [d for d in deltas if d > OUTLIER_THRESHOLD_MS]
-    max_d = max(deltas)
-    min_d = min(deltas)
-
-    status(f"  {label}:")
-    status(f"    Expected (spec): {SPEC_INTERVAL_MS} ms")
-    status(f"    Expected (firmware): ~{FIRMWARE_INTERVAL_MS} ms (known deviation)")
-    status(f"    Actual: min={min_d:.0f}ms  max={max_d:.0f}ms  "
-            f"mean={mean:.0f}ms  stddev={stddev:.0f}ms")
-    status(f"    Outliers (>{OUTLIER_THRESHOLD_MS}ms): {len(outliers)}/{len(deltas)}")
-
-    if max_d > FIRMWARE_INTERVAL_MS * 1.5:
-        status(f"    -> WARN: large gap detected — possible {issue_hint}")
-    else:
-        status(f"    -> OK: no anomalies detected")
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -342,8 +218,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    global PASS, FAIL, log_file
+    global PASS, FAIL, log_file, boot_detector
 
+    boot_detector = BootDetector()
     args = parse_args()
     port = args.port or find_esp32_port()
     if not port:
@@ -459,10 +336,20 @@ def main() -> int:
     broadcasts = collect_broadcasts(buf, BROADCAST_COLLECT_S)
 
     status("\n=== Broadcast format validation ===")
-    validate_broadcast_format(broadcasts)
+    passed, total_b = validate_broadcast_format(broadcasts, log_fn=log)
+    if total_b == 0:
+        fail_msg("No broadcast messages received for format validation")
+    elif passed == total_b:
+        pass_msg(f"All {total_b} broadcasts conform to spec format")
+    else:
+        fail_msg(f"{passed}/{total_b} broadcasts conform to spec format")
 
     status("\n=== Broadcast interval diagnostics ===")
-    diagnose_broadcast_intervals(broadcasts)
+    diagnose_broadcast_intervals(broadcasts, log_fn=status)
+
+    # ── Reboot check ──────────────────────────────────────────────
+    if boot_detector.reboot_detected:
+        fail_msg(f"ESP32-S3 reboot detected (BOOT OK: seen {boot_detector.count} times)")
 
     # ── Summary ───────────────────────────────────────────────────
     stop_event.set()

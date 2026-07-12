@@ -56,7 +56,6 @@ CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_MDNS_MAX_SERVICES=1
 
 # LL-038: HTTP server internal task — default 4096 is too small for WS + JSON
-CONFIG_HTTPD_TASK_STACK_SIZE=12288
 
 # PThread default stack (used by BLE notify thread via std::thread)
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192

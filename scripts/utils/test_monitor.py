@@ -31,7 +31,7 @@ class TestResultPriority(TestSerialClassifierBase):
 
     def test_crash_over_boot(self):
         self.assertResult([
-            'BOOT_OK_MARKER',
+            'BOOT OK:',
             '{"ts":100,"temp":23.4}',
             '=== CRASH ===',
             'exccause=0 name=IllegalInstruction',
@@ -52,7 +52,7 @@ class TestResultPriority(TestSerialClassifierBase):
 
     def test_boot_flag_set_even_if_crash_follows(self):
         c = SerialClassifier()
-        c.add_line('BOOT_OK_MARKER')
+        c.add_line('BOOT OK:')
         c.add_line('I (50) main: running')
         c.add_line('{"ts":100}')
         c.add_line('=== CRASH ===')
@@ -73,14 +73,14 @@ class TestNoOutput(TestSerialClassifierBase):
 
 class TestBootOkMarkers(TestSerialClassifierBase):
     def test_boot_ok_marker_exact(self):
-        self.assertResult(['BOOT_OK_MARKER'], ResultCode.BOOT_OK)
+        self.assertResult(['BOOT OK:'], ResultCode.BOOT_OK)
 
     def test_boot_ok_marker_in_line(self):
-        self.assertResult(['prefix BOOT_OK_MARKER suffix'], ResultCode.BOOT_OK)
+        self.assertResult(['prefix BOOT OK: suffix'], ResultCode.BOOT_OK)
 
     def test_boot_ok_before_logs(self):
         self.assertResult([
-            'BOOT_OK_MARKER',
+            'BOOT OK:',
             'DBG: step 1 - nvs_flash_init',
             'I (30) main: Build: 2026-07-11',
             '{"ts":500,"temp":23.4}',
@@ -234,7 +234,7 @@ class TestResultMessages(TestSerialClassifierBase):
         self.assertEqual(c.result(), ResultCode.CRASH)
 
     def test_message_boot_ok(self):
-        c = self._classify(['BOOT_OK_MARKER'])
+        c = self._classify(['BOOT OK:'])
         self.assertIn("BOOT OK", c.result_message())
         self.assertEqual(c.result(), ResultCode.BOOT_OK)
 
@@ -296,7 +296,7 @@ class TestEdgeCases(TestSerialClassifierBase):
         self.assertResult(['not json { but brace mid'], ResultCode.HUNG)
 
     def test_idempotent_result(self):
-        c = self._classify(['BOOT_OK_MARKER'])
+        c = self._classify(['BOOT OK:'])
         for _ in range(5):
             self.assertEqual(c.result(), ResultCode.BOOT_OK)
             self.assertEqual(c.result_message(), "RESULT: BOOT OK")
@@ -310,7 +310,7 @@ class TestIntegrationRealWorld(TestSerialClassifierBase):
             'ESP-ROM:esp32s3-20210327',
             'Build Apr 27 2021',
             'entry 0x403ce000',
-            'BOOT_OK_MARKER',
+            'BOOT OK: ecotiter v0.1.0 [2026-07-12 12:00:00] (git: abc1234)',
             'DBG: step 1 - nvs_flash_init',
             'DBG: step 2 - blackbox',
             'DBG: step 3 - stack_monitor',
@@ -334,7 +334,7 @@ class TestIntegrationRealWorld(TestSerialClassifierBase):
         self.assertIn("ROM output", c.result_message())
 
     def test_hang_after_entry_no_boot_marker(self):
-        """App entry reached but BOOT_OK_MARKER never printed."""
+        """App entry reached but BOOT OK: never printed."""
         lines = [
             'ESP-ROM:esp32s3-20210327',
             'entry 0x403ce000',
@@ -397,7 +397,7 @@ class TestRegression(TestSerialClassifierBase):
     def test_regression_crash_during_json_emission(self):
         """Crash after JSON output — CRASH takes priority."""
         lines = [
-            'BOOT_OK_MARKER',
+            'BOOT OK:',
             '{"ts":500,"temp":23.4}',
             '=== CRASH ===',
         ]

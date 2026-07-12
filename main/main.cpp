@@ -46,8 +46,6 @@ static uint64_t extractCmdId(const char* data) {
 
 static constexpr auto TAG = "main";
 
-static constexpr auto BOOT_OK_MARKER = "BOOT_OK_MARKER";
-
 // LL-031: PHY RF calibration holds gpio_spinlock for 10-200ms asynchronously
 // after BT init. This constant controls how long we wait for it to complete
 // before any GPIO operations (motor task, LED, etc.).
@@ -216,7 +214,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
 
 extern "C" void app_main(void)
 {
-    puts(BOOT_OK_MARKER);
+    puts("BOOT OK: ecotiter v" APP_VERSION " [" BUILD_DATE "] (git: " GIT_HASH ")");
     fflush(stdout);
 
     using namespace ecotiter;

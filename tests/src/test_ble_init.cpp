@@ -14,7 +14,7 @@
 #include <vector>
 
 // Path from build-tests/ to the ble.cpp source
-static constexpr auto BLE_SRC_PATH = "../components/infrastructure/network/src/ble.cpp";
+static constexpr auto BLE_SRC_PATH = "components/infrastructure/network/src/ble.cpp";
 
 static std::vector<std::string> readFileLines(const std::string& path) {
     std::vector<std::string> lines;
