@@ -8,6 +8,8 @@ RAII, error handling). Violations of CRITICAL rules invalidate all changes.
 
 - **Legacy dir in .gitignore — DO NOT USE Glob for legacy/**: The `legacy/` directory is gitignored, so Glob (`**/*.h`, `**/stepper*`) does NOT find files there. Always use absolute or repo-relative paths with `Read` or `Grep` (rg) for legacy files. See §Legacy Path References below for exact paths.
 
+- **Hybrid monitoring**: CI/automation uses `scripts/monitor.py` (custom — ResultCode, BootDetector, DedupTracker). Interactive debugging uses `idf.py monitor` / `scripts/idf.sh monitor` (auto addr2line, GDBStub, print-filter). Post-mortem → `crash_analyzer.py` + optionally `espcoredump.py`.
+
 ## 1. CRITICAL RULES (Auto-Revert)
 
 ### GR-0: PLATINUM RULE — VERIFY EVERYTHING YOU WROTE
@@ -15,11 +17,15 @@ RAII, error handling). Violations of CRITICAL rules invalidate all changes.
 Before ANY commit, BEFORE declaring any task done, and BEFORE calling any
 other agent or tool — verify everything you produced:
 
-- **Code**: syntax check, build, test, lint. Never assume it works.
+- **Code**: syntax check, **build**, test, lint. Never assume it works.
 - **Scripts**: `bash -n` for shell, `compile()` for Python, etc.
+- **Runtime**: if changes touch firmware or scripts that run on hardware,
+  MUST call `scripts/idf.sh build` (firmware) and/or run the Python script
+  on real hardware. Syntax-only verification is INSUFFICIENT.
 - **Changes**: `git diff` to confirm only intended changes.
 - **Logic**: trace edge cases in your head before claiming correctness.
 - **Agent output**: if another agent made changes, review them before accepting.
+  Rebuild and re-test the modified components.
 
 If you cannot verify (no toolchain, no hardware), say so explicitly.
 Silence = trusted. Only trusted code ships.
@@ -196,6 +202,27 @@ Failure (2026-07-09): Agent wrote `ESP_NETIF_DOMAIN_NAME_SERVER` with wrong
 param type (`uint32_t*`). A 30-second grep of esp-idf-master headers would
 have shown the actual API expects `uint8_t`.
 
+### GR-12: MANDATORY DUAL-CORE MODE — NEVER DISABLE SECOND CORE
+
+ESP32-S3 is a dual-core chip. `CONFIG_FREERTOS_UNICORE` MUST be `n` in
+`sdkconfig.defaults`. Single-core mode causes deterministic spinlock deadlocks
+when WiFi or BLE are enabled (LL-045) — the WiFi driver and WiFi ISR compete
+for the same spinlock on the same core, freezing the tick interrupt and
+triggering RWDT reset.
+
+**Required:** `CONFIG_FREERTOS_UNICORE=n` (dual-core mode).
+
+**Forbidden:** `CONFIG_FREERTOS_UNICORE=y` in any committed configuration.
+
+**Exception:** The `debugger` sub-agent MAY temporarily set `=y` for
+isolation experiments (e.g. to reproduce or rule out a UNICORE-specific bug).
+In that case, the debugger MUST restore `=n` before reporting done. Any
+other sub-agent or human committing `=y` will be reverted automatically.
+
+Failure (2026-07-12): `CONFIG_FREERTOS_UNICORE=y` caused RTCWDT_SYS_RST
+boot loops on WiFi AP start. 3 debugger sessions and ~3 hours wasted before
+the root cause was identified.
+
 ---
 
 ## 2. PRE-FLIGHT CHECKLIST (Copy Before Codegen)
@@ -289,7 +316,7 @@ build).
 Key defaults: `CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768`,
 `CONFIG_ESP_TASK_WDT_INIT=y`, `CONFIG_ESP_TASK_WDT_TIMEOUT_S=10`,
 `CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=12288`,
-`CONFIG_FREERTOS_HZ=1000`,
+`CONFIG_FREERTOS_HZ=1000`, `CONFIG_FREERTOS_UNICORE=n`,
 `CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6`.
 **Constraint:** `WIFI_DYNAMIC_RX_BUFFER_NUM` MUST be ≥ `WIFI_RX_BA_WIN`
 (see Known Patterns §5).
@@ -440,6 +467,7 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 - [ ] Main loop has NO blocking operations (GR-1)
 - [ ] Every RMT motion has a stop flag (GR-2)
 - [ ] Init order follows GR-3 (WiFi → HTTP → BLE)
+- [ ] `CONFIG_FREERTOS_UNICORE=n` (GR-12 — dual-core mandatory)
 - [ ] Pre-Flight Checklist filled before codegen
 - [ ] No raw ESP-IDF pointers cross thread boundaries (GR-5)
 - [ ] 30 s serial smoke test: no Guru Meditation, no WDT, no panics
@@ -472,6 +500,7 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 | Naked `rmt_channel_handle_t` | RAII wrapper class | coding_style.md §9.5 |
 | Naked `httpd_handle_t` / etc. | RAII wrapper class | coding_style.md §9.5 |
 | Functions returning -1 on error | `std::expected<T, Error>` | coding_style.md §2 |
+| `CONFIG_FREERTOS_UNICORE=y` committed | GR-12: `=n` mandatory for WiFi/BLE | GR-12 |
 | Stale `sdkconfig` hiding config mismatches | `scripts/idf.sh build` does clean build | §4.3 |
 
 ---

@@ -118,6 +118,9 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
         deadline = time.time() + timeout
         buf = ""
         dedup = DedupTracker()
+        all_raw_data = bytearray()
+        coredump_buffer = bytearray()
+        capturing_coredump = False
 
         def emit(line: str, ts: str):
             for out in dedup.add(line, ts):
@@ -129,13 +132,23 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
         while time.time() < deadline:
             try:
                 if ser.in_waiting:
-                    data = ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                    raw_data = ser.read(ser.in_waiting)
+                    all_raw_data.extend(raw_data)
+                    if capturing_coredump:
+                        coredump_buffer.extend(raw_data)
+                    data = raw_data.decode("utf-8", errors="replace")
                     buf += data
                     while "\n" in buf:
                         line, buf = buf.split("\n", 1)
                         line = line.strip("\r")
                         if not line:
                             continue
+
+                        # Core dump raw capture: start on CRASH marker, stop on reboot/end
+                        if "=== CRASH ===" in line:
+                            capturing_coredump = True
+                        if "Rebooting..." in line or "!!! EXCEPTION END !!!" in line:
+                            capturing_coredump = False
 
                         # Filter out binary garbage from ROM bootloader preamble.
                         if line[0].isdigit():
@@ -168,6 +181,31 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
 
         ser.close()
         writeline("=== Port closed ===", always_visible=True)
+
+        # Save raw coredump binary from crash capture phase
+        if coredump_buffer and log_path:
+            # Find ELF magic in captured bytes
+            elf_magic = b'\x7fELF'
+            start = coredump_buffer.find(elf_magic)
+            if start >= 0:
+                # Trim preceding noise, find end via reboot markers
+                end = len(coredump_buffer)
+                for marker in [b"rst:", b"ESP-ROM:", b"Rebooting"]:
+                    idx = coredump_buffer.find(marker, start)
+                    if idx >= 0 and idx < end:
+                        end = idx
+                coredump_data = coredump_buffer[start:end]
+                if coredump_data:
+                    dumps_dir = PROJECT_DIR / "dumps"
+                    dumps_dir.mkdir(parents=True, exist_ok=True)
+                    coredump_path = dumps_dir / (log_path.stem + ".coredump")
+                    counter = 1
+                    while coredump_path.exists():
+                        coredump_path = dumps_dir / f"{log_path.stem}_{counter}.coredump"
+                        counter += 1
+                    coredump_path.write_bytes(coredump_data)
+                    writeline(f"=== Core dump saved to {coredump_path} ({len(coredump_data)} bytes) ===",
+                              always_visible=True)
 
         if log_file and log_file.exists() and log_file.stat().st_size == 0:
             log_file.unlink()

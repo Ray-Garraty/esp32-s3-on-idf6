@@ -42,6 +42,8 @@ RE_REGISTER = re.compile(
     r"\b([A-Z]+\d?)\s*:\s*0x([0-9a-fA-F]+)"
 )
 RE_WDT = re.compile(r"rst:0x8\s*\(TG1WDT_SYS_RESET\)")
+RE_RWDT = re.compile(r"rst:0x9\s*\(RTCWDT_SYS_RESET\)")
+RE_SAVED_PC = re.compile(r"Saved PC:\s*(0x[0-9a-fA-F]+)")
 RE_STACK_OVERFLOW = re.compile(
     r"\*\*\*ERROR\*\*\* A stack overflow in task (\S+) has been detected"
 )
@@ -89,8 +91,14 @@ def parse_crash_dump(text: str) -> dict[str, Any]:
     # Detect which format: new === CRASH === format or old Guru Meditation
     if RE_CRASH_HEADER.search(text):
         return _parse_new_format(text)
-    else:
+    if RE_GURU_HEADER.search(text):
         return _parse_old_format(text)
+    # Watchdog-only reset (no CPU exception dump)
+    if RE_WDT.search(text) or RE_RWDT.search(text):
+        return _parse_watchdog(text)
+    if RE_SAVED_PC.search(text):
+        return _parse_watchdog(text)
+    return _parse_unknown(text)
 
 
 def _parse_new_format(text: str) -> dict[str, Any]:
@@ -234,8 +242,60 @@ def _parse_old_format(text: str) -> dict[str, Any]:
     return info
 
 
+def _parse_watchdog(text: str) -> dict[str, Any]:
+    """Parse a watchdog-only reset (no CPU exception dump, only Saved PC)."""
+    info: dict[str, Any] = {
+        "type": "watchdog",
+        "excvaddr": None,
+        "excause": None,
+        "pc": None,
+        "epc1": None,
+        "backtrace_raw": [],
+        "registers": {},
+        "excause_description": None,
+        "wdt_reset": True,
+        "stack_overflow_task": None,
+    }
+    # Detect reset type
+    if RE_RWDT.search(text):
+        info["wdt_type"] = "RTCWDT"
+    elif RE_WDT.search(text):
+        info["wdt_type"] = "TG1WDT"
+    else:
+        info["wdt_type"] = "unknown"
+    # Extract Saved PC
+    m = RE_SAVED_PC.search(text)
+    if m:
+        info["pc"] = int(m.group(1), 16)
+    return info
+
+
+def _parse_unknown(text: str) -> dict[str, Any]:
+    """Fallback for unparseable crash dumps."""
+    info: dict[str, Any] = {
+        "type": "unknown",
+        "excvaddr": None,
+        "excause": None,
+        "pc": None,
+        "epc1": None,
+        "backtrace_raw": [],
+        "registers": {},
+        "excause_description": None,
+        "wdt_reset": False,
+        "stack_overflow_task": None,
+    }
+    # Try to extract any hex PC addresses as last resort
+    for m in RE_HEX_ADDR.finditer(text):
+        info["pc"] = int(m.group(1), 16)
+        break
+    return info
+
+
 def decode_backtrace(info: dict[str, Any], elf_path: str) -> list[dict[str, Any]]:
     """Run addr2line on backtrace PCs."""
+    # Synthetic backtrace for watchdog-only resets (Saved PC)
+    if not info.get("backtrace_raw") and info.get("pc"):
+        info["backtrace_raw"] = [{"pc": info["pc"], "sp": 0}]
     if not info["backtrace_raw"]:
         return []
 
@@ -309,16 +369,25 @@ def decode_backtrace(info: dict[str, Any], elf_path: str) -> list[dict[str, Any]
 
 
 def _find_addr2line() -> str | None:
-    """Find xtensa-esp32-elf-addr2line or xtensa-esp32s3-elf-addr2line."""
-    candidates = ["xtensa-esp32-elf-addr2line", "xtensa-esp32s3-elf-addr2line"]
-    # Check ESP-IDF tools directory
+    """Find addr2line tool in ESP-IDF tools directory or PATH."""
     tools_root = Path.home() / ".espressif" / "tools"
     if tools_root.exists():
-        for name in candidates:
-            for d in sorted(tools_root.rglob(name)):
-                if d.is_file():
-                    return str(d)
+        # Broad rglob — catch any toolchain version (xtensa-esp-elf-addr2line,
+        # xtensa-esp32-elf-addr2line, etc.)
+        for d in sorted(tools_root.rglob("*addr2line*")):
+            if d.is_file() and os.access(str(d), os.X_OK):
+                return str(d)
+        # llvm-symbolizer fallback (esp-clang toolchain)
+        for d in sorted(tools_root.rglob("llvm-symbolizer*")):
+            if d.is_file() and os.access(str(d), os.X_OK):
+                return str(d)
     # Check PATH
+    candidates = [
+        "xtensa-esp-elf-addr2line",
+        "xtensa-esp32-elf-addr2line",
+        "xtensa-esp32s3-elf-addr2line",
+        "llvm-symbolizer",
+    ]
     for p in os.environ.get("PATH", "").split(os.pathsep):
         for name in candidates:
             exe = os.path.join(p, name)
@@ -367,8 +436,12 @@ def classify_crash(
 
     # WDT reset
     if info.get("wdt_reset"):
+        wdt_type = info.get("wdt_type", "TG1WDT")
         classification["category"] = "wdt_timeout"
-        classification["pattern"] = "TG1WDT_SYS_RESET — blocking call in main loop"
+        if wdt_type == "RTCWDT":
+            classification["pattern"] = "RTCWDT_SYS_RESET — complete system hang (even IWDT couldn't fire)"
+        else:
+            classification["pattern"] = "TG1WDT_SYS_RESET — blocking call in main loop"
         classification["confidence"] = "high"
         return classification
 
@@ -496,6 +569,34 @@ def check_lessons_learned(
     return matches
 
 
+def _integrate_espcoredump(info: dict, log_path: str | None) -> dict:
+    """If a .coredump file exists alongside the log, run espcoredump.py info_corefile and merge results."""
+    if not log_path:
+        return info
+    coredump_path = Path("dumps") / (Path(log_path).stem + ".coredump")
+    if not coredump_path.exists():
+        return info
+    elf_path = Path("build/ecotiter.elf")
+    if not elf_path.exists():
+        info["coredump"] = {"error": "ELF not found at build/ecotiter.elf"}
+        return info
+    try:
+        result = subprocess.run([
+            sys.executable, "-m", "esp_coredump", "info_corefile",
+            "--core", str(coredump_path),
+            "--elf", str(elf_path)
+        ], capture_output=True, text=True, timeout=30)
+        info["coredump"] = {
+            "path": str(coredump_path),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        info["coredump"] = {"error": str(e)}
+    return info
+
+
 def generate_report(
     info: dict[str, Any],
     backtrace_decoded: list[dict[str, Any]],
@@ -511,6 +612,7 @@ def generate_report(
             "excause": info.get("excause"),
             "excause_description": info.get("excause_description"),
             "wdt_reset": info.get("wdt_reset", False),
+            "wdt_type": info.get("wdt_type"),
             "stack_overflow_task": info.get("stack_overflow_task"),
             "pc": f"0x{info['pc']:08x}" if info.get("pc") else None,
             "a2": f"0x{info['a2']:08x}" if info.get("a2") is not None else None,
@@ -520,6 +622,10 @@ def generate_report(
         "classification": classification,
         "known_lessons": known_lessons if known_lessons else None,
     }
+
+    # Add coredump info if available (espcoredump integration)
+    if info.get("coredump"):
+        report["coredump"] = info["coredump"]
 
     # Add stack watermarks if available (new format)
     if info.get("stack_watermarks"):
@@ -621,6 +727,10 @@ def main() -> int:
 
     # Parse
     info = parse_crash_dump(text)
+
+    # Integrate espcoredump if a log file was provided
+    if args.log:
+        info = _integrate_espcoredump(info, args.log)
 
     # Decode backtrace
     if args.no_decode:

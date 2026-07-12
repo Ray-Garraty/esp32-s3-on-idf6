@@ -16,6 +16,9 @@ components_esp32.lock
 /scripts/testing/logs/
 /legacy/arduino/
 
+# Core dump files (UART coredump ELF binary)
+/dumps/
+
 # C++ project build artifacts
 /build/
 /build_test/
