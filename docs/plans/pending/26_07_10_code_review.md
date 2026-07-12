@@ -3,14 +3,14 @@ type: Code Review
 title: Codebase compliance review against updated docs
 description: Systematic review of all C++23 source code against the requirements in AGENTS.md, docs/refs/coding_style.md, and docs/refs/project.md
 tags: [review, compliance, gpio, wdt, raii, init-order, rmt]
-timestamp: 2026-07-10
+timestamp: 2026-07-12
 ---
 
 # Code Review: Compliance Against Updated Documentation
 
 Reviewed all source files (`main/`, `components/`) against the updated rules in
 AGENTS.md (2026-07-10), docs/refs/coding_style.md (2026-07-10), and
-docs/refs/project.md (2026-07-10). Audit date: 2026-07-10.
+docs/refs/project.md (2026-07-10). Audit date: 2026-07-10, updated: 2026-07-12.
 
 ## Review checklist
 
@@ -82,7 +82,7 @@ All tasks created via `xTaskCreate` with these stack sizes at `main/main.cpp:217
 | `assert_rmt_preconditions()` before RMT | ✅ PASS | `motor_task.cpp:89,171` |
 | `StackMonitor::register_thread()` for new threads | ✅ PASS | `main/main.cpp:326` (implicit), `netTaskEntry:82`, `temp_thread.cpp:20`, `motor_task.cpp` |
 | `StateTracer::logBuretteTransition()` on state change | ✅ PASS | `motor_task.cpp:68,115,147,190,290` |
-| `HeapSnapshot::assert_can_allocate()` for large allocs | ❌ **NEVER CALLED** | `HeapSnapshot` class exists but `assert_can_allocate()` is never invoked anywhere |
+| `HeapSnapshot::assert_can_allocate()` for large allocs | ❌ **NEVER CALLED** (reconfirmed 2026-07-12) | `HeapSnapshot` class exists but `assert_can_allocate()` is never invoked anywhere |
 | `TickWatchdog` in main loop body | ✅ PASS | `main/main.cpp:291` — RAII wrapper wraps each iteration |
 
 **Issue:** `HeapSnapshot::assert_can_allocate()` is documented as mandatory for
@@ -90,14 +90,18 @@ every allocation > 4 KB (GR-7) but is never called in any source file. Not a
 runtime bug — the HTTP server and BLE handle allocation failures gracefully —
 but violates GR-7 requirement.
 
+❌ STILL OPEN (reconfirmed 2026-07-12) — `HeapSnapshot::canAllocate()` exists at
+`heap_snapshot.hpp:11` but is never called from any source file. Note: the class
+defines `canAllocate()` (not `assert_can_allocate()` as named in AGENTS.md).
+
 ### RAII for ESP-IDF Handles (§9.5) ⚠️ PARTIAL (2 gaps)
 
 | Handle | Wrapped? | File |
 |--------|----------|------|
 | `rmt_channel_handle_t` (stepper) | ✅ `RmtChannel` class | `stepper.hpp:18-33` |
-| `rmt_channel_handle_t` (RGB LED) | ❌ **`void*` cast** | `rgb_led.hpp:31`: `void* channel_{nullptr}` |
-| `rmt_encoder_handle_t` (stepper) | ❌ **Raw pointer** | `stepper.hpp:63`: `rmt_encoder_handle_t encoder_ = nullptr` |
-| `rmt_encoder_handle_t` (RGB LED) | ❌ **`void*` cast** | `rgb_led.hpp:32`: `void* encoder_{nullptr}` |
+| `rmt_channel_handle_t` (RGB LED) | ❌ **`void*` cast** (reconfirmed 2026-07-12) | `rgb_led.hpp:31`: `void* channel_{nullptr}` |
+| `rmt_encoder_handle_t` (stepper) | ❌ **Raw pointer** (reconfirmed 2026-07-12) | `stepper.hpp:63`: `rmt_encoder_handle_t encoder_ = nullptr` |
+| `rmt_encoder_handle_t` (RGB LED) | ❌ **`void*` cast** (reconfirmed 2026-07-12) | `rgb_led.hpp:32`: `void* encoder_{nullptr}` |
 | `httpd_handle_t` | ✅ `HttpServer` class | `http_server.hpp` |
 | `adc_oneshot_unit_handle_t` | ✅ destructor calls `adc_oneshot_del_unit()` | `adc.hpp` |
 | `nvs_handle_t` | ✅ `NvsHandle` class | `nvs.hpp` |
@@ -119,12 +123,10 @@ No `std::mutex::lock()` calls in the codebase. The project uses only
 `std::atomic` and FreeRTOS queues for synchronization — a more restrictive
 pattern than the docs require. This is acceptable.
 
-### sdkconfig / Brownout ❌ FAIL (1 gap)
+### sdkconfig / Brownout ✅ FIXED (2026-07-12)
 
-`CONFIG_BROWNOUT_DET=n` is **NOT** set in `sdkconfig.defaults`. The brownout
-detector is in its default (enabled) state. Both `AGENTS.md §4.3` and
-`project.md §WDT & Brownout` document that it should be disabled. Must be
-added.
+`CONFIG_BROWNOUT_DET=n` added to `sdkconfig.defaults:20` and verified via
+smoke test (`scripts/idf.sh smoke` — clean boot, no brownout resets).
 
 ### WDT Configuration ✅ PASS
 
@@ -193,6 +195,8 @@ private:
     rmt_encoder_handle_t encoder_ = nullptr;  // NAKED — violates §9.5
 ```
 
+❌ STILL OPEN (reconfirmed 2026-07-12) — still raw pointer at `stepper.hpp:63`.
+
 Fix: Wrap in a minimal `RmtEncoder` RAII class alongside `RmtChannel`.
 
 ### 2. `RgbLed` uses `void*` for RMT handles (MEDIUM)
@@ -206,19 +210,38 @@ void* channel_{nullptr};
 void* encoder_{nullptr};
 ```
 
+❌ STILL OPEN (reconfirmed 2026-07-12) — still `void*` at `rgb_led.hpp:31-32`.
+
 Fix: Use proper `rmt_channel_handle_t` / `rmt_encoder_handle_t` types.
 
-### 3. `CONFIG_BROWNOUT_DET=n` missing from `sdkconfig.defaults` (HIGH)
+### 3. `CONFIG_BROWNOUT_DET=n` missing from `sdkconfig.defaults` (HIGH) ✅ FIXED
 
-Brownout detector remains enabled, which can cause unexpected resets during
-WiFi/BLE transient current spikes. Documented as required in AGENTS.md §4.3
-and project.md §WDT & Brownout.
+Added to `sdkconfig.defaults:20`. Verified via `scripts/idf.sh smoke` (2026-07-12)
+— clean boot, no brownout resets, no panics.
 
 ### 4. `HeapSnapshot::assert_can_allocate()` never called (LOW)
 
 GR-7 mandates this call before every allocation > 4 KB, but the function is
 never invoked. No runtime risk (allocs fail gracefully), but code is
 incomplete per GR-7.
+
+❌ STILL OPEN (reconfirmed 2026-07-12) — `HeapSnapshot::canAllocate()` exists but
+is never called. Note: actual method name is `canAllocate()`, not
+`assert_can_allocate()` as documented in AGENTS.md.
+
+## Implementation Steps (Atomic, each followed by smoke test)
+
+Steps ordered by priority. Each step produces buildable firmware; smoke test validates
+the change before proceeding.
+
+| # | Step | Files | Smoke Test | Risk |
+|---|------|-------|------------|------|
+| 1 | ✅ DONE | Add `CONFIG_BROWNOUT_DET=n` to `sdkconfig.defaults` | `sdkconfig.defaults` | `scripts/idf.sh smoke` — BOOT OK (2026-07-12) |
+| 2 | Wrap `rmt_encoder_handle_t` in standalone RAII class `RmtEncoder` | `stepper.hpp`, `stepper.cpp` | `scripts/idf.sh smoke` — home/move via serial API, motor operates correctly | Low (refactor, logic unchanged) |
+| 3 | Replace `void*` with `rmt_channel_handle_t` / `rmt_encoder_handle_t` in `RgbLed` | `rgb_led.hpp`, `rgb_led.cpp` | `scripts/idf.sh smoke` — LED color set via serial API, RGB works | Low (refactor, logic unchanged) |
+| 4 | Call `HeapSnapshot::canAllocate()` before every allocation > 4 KB | `main/main.cpp` (HTTP init, BLE init), `heap_snapshot.hpp` | `scripts/idf.sh smoke` — 30s monitor, no Guru Meditation | None (diagnostic only) |
+
+**Rollback:** Each step is a single commit. If smoke test fails — `git revert <commit>`.
 
 ## Notes
 
@@ -236,9 +259,9 @@ incomplete per GR-7.
 
 **Summary of gaps:**
 
-| # | Severity | Issue | Applies to |
-|---|----------|-------|------------|
-| 1 | HIGH | `CONFIG_BROWNOUT_DET=n` not set in `sdkconfig.defaults` | sdkconfig |
-| 2 | MEDIUM | `rmt_encoder_handle_t` not RAII-wrapped (`stepper.hpp:63`) | stepper |
-| 3 | MEDIUM | `RgbLed` stores RMT handles as `void*` (`rgb_led.hpp:31-32`) | rgb_led |
-| 4 | LOW | `HeapSnapshot::assert_can_allocate()` never called (GR-7) | diag |
+| # | Severity | Issue | Applies to | Status (2026-07-12) |
+|---|----------|-------|------------|---------------------|
+| 1 | HIGH | `CONFIG_BROWNOUT_DET=n` not set in `sdkconfig.defaults` | sdkconfig | ✅ FIXED (2026-07-12) |
+| 2 | MEDIUM | `rmt_encoder_handle_t` not RAII-wrapped (`stepper.hpp:63`) | stepper | ❌ STILL OPEN |
+| 3 | MEDIUM | `RgbLed` stores RMT handles as `void*` (`rgb_led.hpp:31-32`) | rgb_led | ❌ STILL OPEN |
+| 4 | LOW | `HeapSnapshot::assert_can_allocate()` never called (GR-7) | diag | ❌ STILL OPEN |

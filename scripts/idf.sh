@@ -21,6 +21,13 @@ acquire_lock() {
         if [ "$waited" -eq 0 ]; then
             echo "⏳ Waiting for another idf.sh instance (PID $(cat "$LOCKDIR/pid" 2>/dev/null || echo '?'))..."
         fi
+        local lock_pid
+        lock_pid=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
+        if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+            echo "⚠️  Stale lock from PID $lock_pid — removing"
+            rm -rf "$LOCKDIR"
+            continue
+        fi
         sleep 1
         waited=$((waited + 1))
         if [ "$waited" -ge "$LOCK_TIMEOUT" ]; then
@@ -67,8 +74,11 @@ do_build() {
         echo "# Build: $BUILD_DATE (git: $GIT_HASH)"
         echo ""
     } > "$build_log"
-    idf.py build 2>&1 | tee -a "$build_log" | grep -iE '(^Building firmware|^Executing action|warning:|error:|fatal:|FAILED|^Project build complete|Full build log|binary size)' || true
+    timeout 180 idf.py build 2>&1 | tee -a "$build_log" | grep -iE '(^Building firmware|^Executing action|warning:|error:|fatal:|FAILED|^Project build complete|Full build log|binary size)' || true
     local ret=${PIPESTATUS[0]}
+    if [ $ret -eq 124 ]; then
+        echo "❌ Build timed out (180s)"
+    fi
 
     mkdir -p "$PROJECT_DIR/build"
     {
@@ -169,7 +179,24 @@ case "$CMD" in
         ;;
 
     smoke)
-        do_build
+        BINARY="$PROJECT_DIR/build/ecotiter.bin"
+        if [ -f "$BINARY" ] && [ "${2:-}" != "--force-build" ]; then
+            STALE=$(find "$PROJECT_DIR" \
+                -path "$PROJECT_DIR/build" -prune -o \
+                -path "$PROJECT_DIR/build-tests" -prune -o \
+                -path "$PROJECT_DIR/.git" -prune -o \
+                -path "$PROJECT_DIR/logs" -prune -o \
+                -path "$PROJECT_DIR/legacy" -prune -o \
+                \( -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.hpp' -o -name 'CMakeLists.txt' -o -name 'sdkconfig.defaults' \) \
+                -newer "$BINARY" -print -quit 2>/dev/null)
+            if [ -z "$STALE" ]; then
+                echo "Binary is up-to-date — skipping build"
+            else
+                do_build
+            fi
+        else
+            do_build
+        fi
         PORT=$(python3 "$SCRIPT_DIR/find_port.py") || {
             echo "❌ No ESP32 port found"
             exit 1
@@ -237,7 +264,7 @@ case "$CMD" in
         echo "  build                 Clean build — removes build/, injects timestamp + git hash"
         echo "  flash [port]          Flash firmware (auto-detect port, stale source check)"
         echo "  monitor [port]        Serial monitor, 30s timeout"
-        echo "  smoke                 Clean build + flash + 30s monitor (full pipeline test)"
+        echo "  smoke [--force-build] Build (if stale) + flash + 30s monitor (full pipeline test)"
         echo "  test                  Run host unit tests (Catch2)"
         echo "  test --build          Configure + build tests only, don't run"
         echo "  test --list           List test case names"

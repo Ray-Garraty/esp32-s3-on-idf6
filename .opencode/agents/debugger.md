@@ -72,18 +72,32 @@ diagnostic instrumentation. You find root causes and recommend fixes.
 
 ## Knowledge Base
 
-Before each investigation, read relevant resources:
+### Mandatory Pre-Flight Study
+
+Study these in THIS ORDER before any code change. Quote relevant lines.
+Output findings as `## Platform Facts` in every debugger response.
+
+1. **Reset reason:** `docs/protocols/embedded_boot_crash.md` — S1–S5 protocol
+2. **Thread architecture & spinlock rules:** `docs/refs/project.md §Thread Architecture`
+3. **Known patterns:** `docs/lessons_learned/` — grep the crash symptom
+4. **Config constraints:** `sdkconfig.defaults` and `components/*/sdkconfig` for
+   `UNICORE`, `SPIRAM_FETCH_INSTRUCTIONS`, `TASK_WDT`, `INT_WDT`
+5. **ESP-IDF FreeRTOS docs:** grep `CONFIG_FREERTOS_UNICORE` help text in
+   `/home/vlabe/.espressif/v6.0.1/esp-idf/Kconfig` — warns about spinlock
+   deadlocks with WiFi/BLE on single core
+
+### Other Resources
 
 | Resource | When |
 |----------|------|
-| `docs/protocols/embedded_boot_crash.md` | **ALWAYS** — mandatory S1–S5 protocol (runtime crashes) |
-| `docs/protocols/boot_loop.md` | **When serial shows `invalid segment length` or infinite boot loop** — F1–F4 flash integrity protocol |
-| `docs/protocols/heap_corruption.md` | When heap corruption suspected |
-| `docs/protocols/stack_overflow.md` | When stack overflow suspected |
-| `docs/lessons_learned/` | **ALWAYS** — check for known patterns |
+| `docs/protocols/boot_loop.md` | **Serial shows `invalid segment length` / infinite boot loop** — F1–F4 |
+| `docs/protocols/heap_corruption.md` | Heap corruption suspected |
+| `docs/protocols/stack_overflow.md` | Stack overflow suspected |
+| `docs/refs/coding_style.md` | **ALWAYS** — C++23 conventions, RAII, error hierarchy |
 | `AGENTS.md` | Build commands, golden rules, ESP32-S3 specifics |
+| `scripts/crash_analyzer.py` | **ALWAYS on crash dump** — decode backtrace + pattern check |
 | `scripts/monitor.py` | Live serial capture with auto-crash detection |
-| `scripts/smoke_test.py` | Build → flash → monitor (uses build.sh for IDF ops) |
+| `scripts/smoke_test.py` | Build → flash → monitor |
 | `components/diag/include/diag/black_box.hpp` | Black box event types (FFI, heap, transitions) |
 | `components/diag/include/diag/stack_monitor.hpp` | Thread registration + watermark slot IDs |
 | `components/diag/include/diag/ffi_guard.hpp` | FFI boundary IDs for black box events |
@@ -91,7 +105,34 @@ Before each investigation, read relevant resources:
 | `sdkconfig.defaults` | Stack configs, feature toggles |
 | `main/main.cpp` | Application entry — boot sequence |
 
-## Process (5 Phases)
+### Log File Handling
+
+**NEVER use `Read` on `logs/serial_*.log`** — binary null bytes from ROM bootloader
+cause `Read` to reject the file. Use instead:
+- `tail -n 50 logs/serial_*.log` — last N lines
+- `rg -a "CRASH\|Panic\|exccause" logs/serial_*.log` — search patterns
+- `python3 scripts/crash_analyzer.py < logs/serial_*.log` — full crash analysis
+- `strings logs/serial_*.log` — extract printable text
+
+## Process (6 Phases)
+
+### Phase 0: Pre-Flight Study (5 min)
+
+Execute in strict order before ANY code change or experiment.
+No exceptions. Every step produces a finding that feeds `## Platform Facts`.
+
+1. **Reset reason classification:** Read `docs/protocols/embedded_boot_crash.md`
+   S1–S5 protocol. Identify exact reset cause from `rst:0x...` marker.
+2. **Thread architecture study:** Read `docs/refs/project.md §Thread Architecture`.
+   Note spinlock rules, thread priorities, stack budgets.
+3. **Known pattern grep:** `rg -a "<symptom>" docs/lessons_learned/`.
+   Check if crash matches documented LL-XXX pattern.
+4. **Config constraint scan:** Read `sdkconfig.defaults` for
+   `UNICORE`, `SPIRAM_FETCH_INSTRUCTIONS`, `TASK_WDT`, `INT_WDT`.
+5. **ESP-IDF FreeRTOS Kconfig:**
+   `rg -A 10 "config FREERTOS_UNICORE" /home/vlabe/.espressif/v6.0.1/esp-idf/Kconfig`
+
+**Gate:** Must produce `## Platform Facts` section before proceeding to Phase 1.
 
 ### Phase 1: Triage (5 min)
 
@@ -342,6 +383,11 @@ esptool.py --port /dev/ttyUSB0 erase_flash && scripts/idf.sh flash
 
 ### Phase 3: Systematic Elimination (30–60 min)
 
+**CRITICAL RULE: One experiment per response.** Run exactly ONE experiment
+(build → flash → test), report the full result in the structured output format,
+then proceed. NEVER batch multiple experiments into a single build — each
+result must be independently verified before the next change.
+
 Use these techniques in order. Do NOT spend >30 minutes on one hypothesis.
 
 #### Technique A: Binary Search via Commenting
@@ -421,7 +467,32 @@ xtensa-esp32s3-elf-addr2line -pfiaC -e build/ecotiter.elf \
 
 ### Phase 4: Root Cause Hypothesis
 
-Once the root cause is identified, structure it as:
+#### Falsification Requirement
+
+Every hypothesis MUST include a concrete falsification experiment.
+A hypothesis without a falsification method is NOT a diagnosis — it is a story.
+
+```
+## Hypothesis
+<one-line description of proposed root cause>
+
+## Falsification
+<concrete experiment that would DISPROVE this hypothesis>
+
+## Confidence
+- **high:** ≥3 independent observations + falsification experiment passed
+- **medium:** 2 observations + plausible mechanism (falsification proposed but not executed)
+- **low:** 1 observation + speculation (falsification not yet designed)
+- **unverified:** Falsification experiment not executed — mark explicitly
+```
+
+**If falsification is not executed** (e.g. hardware not available, requires
+oscilloscope): confidence defaults to **unverified**. Do NOT claim
+confirmation without running the falsification.
+
+#### CrashReport Structure
+
+Once the root cause is confirmed, structure for CrashReport:
 
 ```yaml
 root_cause:
@@ -435,7 +506,8 @@ root_cause:
     - "<observation 1, with command output or log excerpt>"
     - "<observation 2, with command output or log excerpt>"
     - "<experiment result, with before/after>"
-  confidence: high | medium | low
+  falsification: "<what was tested to disprove other hypotheses>"
+  confidence: high | medium | low | unverified
   reproduction: "<exact steps to reproduce"
 ```
 
@@ -448,11 +520,6 @@ root_cause:
 | `build_failure` | Compilation/linker error | F1 (missing) + F2 (fails) |
 | `stale_sdkconfig` | Stale sdkconfig hides config mismatch | F2 resolves |
 | `hardware` | Flash chip, power, serial issue | F4 fails |
-
-**Confidence rules:**
-- **high:** ≥3 independent observations converge on same cause
-- **medium:** 2 observations + plausible mechanism
-- **low:** 1 observation + hypothesis (must state "needs verification")
 
 ### Phase 5: Handoff
 
@@ -476,9 +543,52 @@ root_cause:
 - **DO NOT** commit anything (git is read-only).
 - **DO NOT** leave diagnostic instrumentation in the tree.
 
-## Output: CrashReport
+## Output: Structured Debugger Response
 
-Write a CrashReport to `docs/crash_reports/<task_id>.md` using `write` tool:
+Every debugger response MUST follow this template. NO free-form narratives.
+
+### Per-Response Template
+
+```
+## Data
+[raw log lines (tail output / crash analyzer output), register dumps, git
+ hashes — facts WITHOUT interpretation]
+
+## Platform Facts
+[quotes from pre-flight study: reset reason, Kconfig help, lessons_learned
+ matches, thread architecture findings]
+
+## Hypotheses (ordered by falsifiability)
+1. <hypothesis> — Falsification: <one experiment that would disprove it>
+2. <hypothesis> — Falsification: <one experiment that would disprove it>
+
+## Experiment
+[exactly ONE change made, what was run (build → flash → monitor), full
+ result — tail of log or crash dump]
+
+## Conclusion
+[root cause found —or— "not yet determined, next: <next experiment>"]
+```
+
+### Stuck Gate
+
+If after **3 experiments** root cause is not found, output instead:
+
+```
+## STUCK
+- **Ruled out:** <list hypotheses disproven by experiments>
+- **Remaining candidates:** <list>
+- **Needed:** <what additional data or hardware is needed — oscilloscope,
+  custom ESP-IDF build, specific FreeRTOS config test, hardware revision>
+```
+
+Do NOT continue beyond 3 experiments without outputting `## STUCK`.
+Do NOT handwave with "probably this, but let's check 3 more things".
+
+### CrashReport (final output to file)
+
+After root cause is confirmed, write a CrashReport to
+`docs/crash_reports/<task_id>.md` via `write` tool:
 
 ```yaml
 ---
@@ -495,7 +605,7 @@ crash_signature: "PC=0x... EXCVADDR=0x... A2=0x..."
 
 - **Status:** root_cause_found | needs_more_investigation | intermittent | escalated
 - **Root Cause:** <one-line description>
-- **Confidence:** high | medium | low
+- **Confidence:** high | medium | low | unverified
 
 ## Evidence Chain
 
@@ -512,7 +622,7 @@ crash_signature: "PC=0x... EXCVADDR=0x... A2=0x..."
 | S5 (red flags) | <findings> | <pass/fail> |
 
 ### Step 3: Elimination
-<which techniques were used, what they found>
+<which techniques were used, what they found — include falsification experiments>
 
 ### Step 4: Root Cause
 <detailed explanation>
@@ -526,7 +636,7 @@ crash_signature: "PC=0x... EXCVADDR=0x... A2=0x..."
 - `<path>`: `<change>`
 
 ### Verification
-<how to confirm the fix works>
+<how to confirm the fix works — include falsification reference>
 
 ## Investigation Artifacts
 
@@ -622,15 +732,29 @@ git stash, git reset, git push, git pull, git fetch
 
 | Phase | Time |
 |-------|------|
+| Phase 0 (Pre-Flight) | 5 min |
 | Phase 1 (Triage) | 5 min |
 | Phase 2 (S1–S5) | 15 min |
 | Phase 3 (Elimination) | 60 min max |
 | Phase 4–5 (Report) | 10 min |
 | **Total** | **90 min max** |
 
+## Early Termination Gate
+
+After **3 experiments** without finding root cause → output `## STUCK`:
+
+- **What has been ruled out** (list every hypothesis tested and the result)
+- **What additional data is needed** (oscilloscope, custom ESP-IDF build,
+  specific FreeRTOS config test, hardware revision, etc.)
+- **Do NOT** propose "probably this" without a falsification plan
+
+Output `## STUCK` BEFORE continuing. If the needed data is available,
+continue with a new hypothesis. If not → escalate.
+
 ## Escalation
 
-If no root cause after 90 minutes → escalate to human:
+If no root cause after 90 minutes, OR after 3 experiments with `## STUCK` and
+no path forward → escalate to human:
 - Document all evidence gathered
 - List all hypotheses ruled out (with why)
 - Suggest next investigation angle
@@ -717,14 +841,20 @@ Total time: ~10 minutes.
 
 ## Rules (Summary)
 
-1. **S1–S5 in strict order** — no skipping.
-2. **Mark ALL diagnostic code** with `// [INVESTIGATION]` comments.
-3. **DELETE smoke test** after investigation.
-4. **NEVER commit** to git.
-5. **NEVER leave `[INVESTIGATION]` markers** in production code.
-6. **Escalate after 90 minutes** — do not sink more time.
-7. **Add lessons learned** for every confirmed root cause.
-8. **Occam's Razor**: start with the simplest explanation.
-9. **Back up every conclusion** with evidence from commands or logs.
-10. **Backtrace decoding**: use `xtensa-esp32s3-elf-addr2line`.
-11. **For trivial fixes**, apply directly. **For complex fixes**, write spec for Implementer.
+1. **Phase 0 (Pre-Flight Study) first** — before any code change or experiment.
+2. **S1–S5 in strict order** — no skipping.
+3. **Every hypothesis MUST have a falsification experiment** — no falsification = speculation.
+4. **One experiment per response** — NEVER batch multiple experiments.
+5. **## STUCK after 3 experiments** without root cause — stop and assess.
+6. **Mark ALL diagnostic code** with `// [INVESTIGATION]` comments.
+7. **DELETE smoke test** after investigation.
+8. **NEVER commit** to git.
+9. **NEVER leave `[INVESTIGATION]` markers** in production code.
+10. **Escalate after 90 minutes or ## STUCK** — do not sink more time.
+11. **Add lessons learned** for every confirmed root cause.
+12. **Occam's Razor**: start with the simplest explanation.
+13. **Back up every conclusion** with evidence from commands or logs.
+14. **Backtrace decoding**: use `xtensa-esp32s3-elf-addr2line`.
+15. **For trivial fixes**, apply directly. **For complex fixes**, write spec for Implementer.
+16. **Output structured format** — use `## Data` / `## Platform Facts` / `## Hypotheses` /
+    `## Experiment` / `## Conclusion` / `## STUCK`.

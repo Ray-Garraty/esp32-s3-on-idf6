@@ -79,6 +79,9 @@ def diagnose_broadcast_intervals(broadcasts: list[tuple[dict, float]], log_fn=pr
     for i in range(1, len(broadcasts)):
         ts_prev = broadcasts[i - 1][0]["ts"]
         ts_curr = broadcasts[i][0]["ts"]
+        # ts ticks at CONFIG_FREERTOS_HZ=1000 → each tick = 1 ms.
+        # Legacy firmware used 100 Hz → 10 ms ticks; this *10 factor
+        # converts ts ticks to milliseconds for that legacy format.
         delta_ts = (ts_curr - ts_prev) * 10
         if delta_ts > 0:
             ts_deltas_ms.append(delta_ts)

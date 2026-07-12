@@ -10,6 +10,24 @@ RAII, error handling). Violations of CRITICAL rules invalidate all changes.
 
 ## 1. CRITICAL RULES (Auto-Revert)
 
+### GR-0: PLATINUM RULE — VERIFY EVERYTHING YOU WROTE
+
+Before ANY commit, BEFORE declaring any task done, and BEFORE calling any
+other agent or tool — verify everything you produced:
+
+- **Code**: syntax check, build, test, lint. Never assume it works.
+- **Scripts**: `bash -n` for shell, `compile()` for Python, etc.
+- **Changes**: `git diff` to confirm only intended changes.
+- **Logic**: trace edge cases in your head before claiming correctness.
+- **Agent output**: if another agent made changes, review them before accepting.
+
+If you cannot verify (no toolchain, no hardware), say so explicitly.
+Silence = trusted. Only trusted code ships.
+
+Failure (2026-07-12): Sub-agents repeatedly committed code that didn't
+compile, left stale locks, and skipped syntax checks. Every issue was
+caught by manual re-verification — 100% avoidable.
+
 ### GR-1: NEVER BLOCK THE MAIN LOOP
 
 Main loop (FreeRTOS task `main`) must NEVER execute a blocking operation.

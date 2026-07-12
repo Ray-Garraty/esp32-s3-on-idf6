@@ -228,6 +228,12 @@ extern "C" void app_main(void)
     puts("BOOT OK: ecotiter v" APP_VERSION " [" BUILD_DATE "] (git: " GIT_HASH ")");
     fflush(stdout);
 
+    // [INVESTIGATION] S1: stack watermark baseline
+    auto wm = uxTaskGetStackHighWaterMark(nullptr);
+    printf("[INVESTIGATION] S1: main task stack watermark: %u bytes\n",
+           static_cast<unsigned>(wm * sizeof(configSTACK_DEPTH_TYPE)));
+    fflush(stdout);
+
     using namespace ecotiter;
 
     // Warmup: flush any stale serial data, ensure stdout works

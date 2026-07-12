@@ -14,6 +14,11 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=8192
 CONFIG_ESP_INT_WDT=y
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=500
 
+# Brownout detector disabled — spurious resets during WiFi/BLE init high-current
+# draws on 3.3V rail (ESP32-S3 + PSRAM + RGB LED burst). WDTs (IWDT/TWDT/RWDT)
+# provide sufficient protection against true system hangs.
+CONFIG_BROWNOUT_DET=n
+
 # RWDT (RTC Watchdog) — ultimate protection against complete system hangs
 # where even IWDT's panic handler cannot run. Keep bootloader's RWDT
 # enabled and re-configure in app_main with 6s timeout → RESET_SYSTEM.
@@ -56,6 +61,7 @@ CONFIG_HTTPD_WS_SUPPORT=y
 CONFIG_MDNS_MAX_SERVICES=1
 
 # LL-038: HTTP server internal task — default 4096 is too small for WS + JSON
+CONFIG_HTTPD_TASK_STACK_SIZE=12288
 
 # PThread default stack (used by BLE notify thread via std::thread)
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192

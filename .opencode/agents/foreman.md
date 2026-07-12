@@ -168,7 +168,13 @@ That's `@validator`'s job.
 
 If Validator's smoke test crashed (ValidationReport has `escalation_target: debugger`),
 or you received a boot loop log / serial log with crash markers,
-invoke @debugger for systematic root cause analysis:
+invoke @debugger for systematic root cause analysis.
+
+**CRITICAL: Pass inherited context.** The @debugger MUST receive:
+1. Previous experiment summaries (table of change → result → conclusion)
+2. Currently open changes (`git diff`)
+3. Tail of the crash log (`tail -20 logs/serial_*.log`)
+4. Known-good commit hash (if any)
 
 ```
 Task(@debugger, "ROOT CAUSE ANALYSIS — edits allowed for diagnostics
@@ -180,7 +186,19 @@ known_good: <commit hash of last known-good build>
 <For boot loop:>
 Serial log with boot loop markers:
 <log text>
-known_good: <optional — may not apply if flash/corrupt issue>")
+known_good: <optional — may not apply if flash/corrupt issue>
+
+## Inherited Context
+### Previous Experiments
+| Change | Result | Conclusion |
+|--------|--------|------------|
+| <git diff summary> | <build+smoke outcome> | <what was ruled out> |
+
+### Open Changes (git diff)
+<output of `git diff` — truncated to last 100 lines>
+
+### Crash Log Tail
+<output of `tail -20 logs/serial_*.log`>")
 ```
 
 **IMPORTANT:** Always include "edits allowed for diagnostics" in the task
@@ -188,19 +206,21 @@ description — @debugger needs to insert `[INVESTIGATION]` instrumentation,
 modify sdkconfig, create smoke test binaries, etc.
 
 The @debugger agent will:
-1. **Determine crash type:** runtime crash (`=== CRASH ===`, Guru Meditation)
+1. **Pre-Flight Study (Phase 0):** Study Kconfig, thread architecture,
+   lessons_learned, config constraints before any code change
+2. **Determine crash type:** runtime crash (`=== CRASH ===`, Guru Meditation)
    vs boot loop (`esp_image: invalid segment length`, `Factory app partition
    is not bootable`)
-2. **For runtime crash:** Run `scripts/crash_analyzer.py` on the crash dump,
+3. **For runtime crash:** Run `scripts/crash_analyzer.py` on the crash dump,
    then execute S1–S5 Occam's Razor Protocol (see `docs/protocols/embedded_boot_crash.md`)
-3. **For boot loop:** Execute F1–F4 Flash Integrity Protocol (see
+4. **For boot loop:** Execute F1–F4 Flash Integrity Protocol (see
    `docs/protocols/boot_loop.md`) — checks build artifact, clean build,
    partition table, and flash write
-4. Isolate root cause via systematic elimination
-5. If trivial fix (<10 lines) — apply it directly with `[INVESTIGATION]` markers
-6. If complex fix — produce a CrashReport with spec for @implementer
-7. Write a CrashReport to `docs/crash_reports/`
-8. Add new LL-XXX.yaml to `docs/lessons_learned/` with new findings
+5. Isolate root cause via systematic elimination — **one experiment per response**
+6. If trivial fix (<10 lines) — apply it directly with `[INVESTIGATION]` markers
+7. If complex fix — produce a CrashReport with spec for @implementer
+8. Write a CrashReport to `docs/crash_reports/`
+9. Add new LL-XXX.yaml to `docs/lessons_learned/` with new findings
 
 **Do NOT** attempt to diagnose the crash yourself — delegate entirely to @debugger.
 
