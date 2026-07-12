@@ -20,6 +20,8 @@ static uint32_t rtc_slow_clk_hz() noexcept {
 
 namespace ecotiter::diag {
 
+RtcWatchdog* gRtcWdt = nullptr;
+
 RtcWatchdog::RtcWatchdog() noexcept {
     // Step 1: Initialize HAL context. rwdt_hal_init disables RWDT + all
     // stages + sets defaults. Must be called first to get a clean state.

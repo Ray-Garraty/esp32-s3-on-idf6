@@ -5,6 +5,7 @@
 #include "freertos/queue.h"
 
 #include "domain/types.hpp"
+#include "infrastructure/drivers/tmc_uart.hpp"
 
 extern "C" void motorTaskEntry(void* pvParameters);
 
@@ -72,5 +73,6 @@ struct SmResult {
 
 extern QueueHandle_t gMotorCmdQueue;
 extern SmResult gSmResult;
+extern drivers::TmcUart gTmcUart;
 
 } // namespace ecotiter::infrastructure

@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include "driver/uart.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -89,6 +90,17 @@ struct NetTaskParams {
 // Must be atomic for cross-task visibility (GR-1: no blocking, no mutex)
 namespace { std::atomic<ecotiter::infrastructure::network::HttpServer*> gHttpServerForWs{nullptr}; }
 
+// ADC driver pointer for dispatch.cpp sample read callback
+namespace { ecotiter::infrastructure::drivers::AdcDriver* gAdcDriver{nullptr}; }
+
+static uint16_t adcSampleRead() {
+    if (gAdcDriver) {
+        auto raw = gAdcDriver->readRaw();
+        if (raw) return *raw;
+    }
+    return 0;
+}
+
 // ── ESP_LOG capture → LogBuffer ───────────────────────────────────
 static int logVprintf(const char* fmt, va_list args) {
     char buf[384];
@@ -101,10 +113,9 @@ static int logVprintf(const char* fmt, va_list args) {
         uint32_t ts = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
         ecotiter::domain::LogBuffer::instance().push(ts, level, buf);
     }
-    // Forward to UART through stdio
+    // Forward to UART through direct driver write (stable after UART reinit)
     if (n > 0) {
-        fwrite(buf, 1, static_cast<size_t>(n), stdout);
-        fflush(stdout);
+        uart_write_bytes(UART_NUM_0, buf, static_cast<size_t>(n));
     }
     return n;
 }
@@ -271,7 +282,7 @@ extern "C" void app_main(void)
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::RtcWdt, std::memory_order_release);
     diag::RtcWatchdog rtcWdt;
-    (void)rtcWdt;
+    diag::gRtcWdt = &rtcWdt;
 
     // ====== Step 6: BLE object construction (init deferred to net_owner) ======
     // GR-3: BLE init moved to net_owner thread after HTTP server to ensure
@@ -350,6 +361,8 @@ extern "C" void app_main(void)
 
     diag::FfiGuard guard(50);
     infrastructure::drivers::AdcDriver adc(ADC_UNIT_1, ADC_CHANNEL_3);
+    gAdcDriver = &adc;
+    ecotiter::application::setAdcSampleReadCb(adcSampleRead);
 
     application::TickScheduler scheduler;
     application::ApplicationStateMachine appStateMachine;

@@ -25,6 +25,11 @@ inline constexpr uint32_t RMT_RESOLUTION_HZ = 1'000'000;  // 1 tick = 1 us
 inline constexpr uint32_t RMT_CHUNK_SYMBOLS = 128;
 inline constexpr uint32_t RMT_MAX_SYMBOLS   = 192;  // S3 shared RAM = 384 words
 
+// TMC2209 UART (PDN_UART via GPIO16/17, half-duplex with 1k pull on TX)
+inline constexpr gpio_num_t PIN_TMC_UART_TX = GPIO_NUM_17;
+inline constexpr gpio_num_t PIN_TMC_UART_RX = GPIO_NUM_16;
+inline constexpr uint32_t TMC_UART_BAUD = 115200;
+
 // Stepper kinematics
 inline constexpr uint32_t STEP_FREQ_MIN_HZ = 30;
 inline constexpr uint32_t STEP_FREQ_MAX_HZ = 3000;
@@ -32,6 +37,7 @@ inline constexpr uint32_t STEP_FREQ_MAX_HZ = 3000;
 
 // Network
 inline constexpr const char* AP_SSID       = "EcoTiter-AP";
+inline constexpr const char* AP_PASSWORD  = "12345678";
 inline constexpr uint32_t STA_RECONNECT_MS = 10'000;
 
 // Memory map (ESP32-S3) — for is_sane_sp() in panic handler

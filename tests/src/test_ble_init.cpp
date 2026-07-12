@@ -13,8 +13,8 @@
 #include <string>
 #include <vector>
 
-// Path from build-tests/ to the ble.cpp source
-static constexpr auto BLE_SRC_PATH = "components/infrastructure/network/src/ble.cpp";
+// Absolute path via CMake compile definition — works from any CWD
+static constexpr auto BLE_SRC_PATH = TESTS_SOURCE_DIR "/../components/infrastructure/network/src/ble.cpp";
 
 static std::vector<std::string> readFileLines(const std::string& path) {
     std::vector<std::string> lines;

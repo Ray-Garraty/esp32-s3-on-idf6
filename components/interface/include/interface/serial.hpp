@@ -8,6 +8,11 @@
 #include <optional>
 #include <string_view>
 
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
+
 #include "domain/memory.hpp"
 
 namespace ecotiter::interface {
@@ -50,6 +55,16 @@ public:
     void setSilent(bool s) noexcept { silent_.store(s, std::memory_order_release); }
     [[nodiscard]] bool isSilent() const noexcept { return silent_.load(std::memory_order_acquire); }
     [[nodiscard]] bool isInitialized() const noexcept { return fd_ >= 0; }
+    [[nodiscard]] bool hasHeartbeat(uint32_t nowTick, uint32_t timeoutMs) const noexcept {
+#ifdef ESP_PLATFORM
+        uint32_t last = lastDataTick_.load(std::memory_order_acquire);
+        if (last == 0) return false;
+        return (nowTick - last) * portTICK_PERIOD_MS < timeoutMs;
+#else
+        (void)nowTick; (void)timeoutMs;
+        return true;
+#endif
+    }
 
     static constexpr size_t INPUT_BUF_SIZE = 256;
 
@@ -62,6 +77,11 @@ private:
     // or nullopt if no complete line is available yet.
     // WARNING: returned view is valid only until the next process() call.
     std::optional<std::string_view> splitBuffer(std::string_view data) noexcept {
+#ifdef ESP_PLATFORM
+        if (!data.empty()) {
+            lastDataTick_.store(xTaskGetTickCount(), std::memory_order_release);
+        }
+#endif
         // Compact consumed data at start of buffer
         if (readPos_ > 0) {
             if (readPos_ < linePos_) {
@@ -115,6 +135,7 @@ private:
 
     int fd_{-1};
     std::atomic<bool> silent_{false};
+    std::atomic<uint32_t> lastDataTick_{0};
     std::array<char, domain::memory::MAX_CMD_SIZE> lineBuf_{};
     size_t linePos_{0};
     size_t readPos_{0};

@@ -27,10 +27,7 @@ enum class CommandType : uint8_t {
   SetDirection,
   SetSpeed,
   SetAccel,
-  SetVolume,
-  ConfigMove,
-  ConfigHome,
-  ConfigSensor,
+
   // Calibration
   CalGet,
   CalCalcVolume,
@@ -76,10 +73,6 @@ struct Command {
   std::optional<domain::Ml> targetVolume;
   std::optional<domain::ValvePosition> valvePos;
   std::optional<uint8_t> sgThreshold;
-  std::optional<uint32_t> configMoveSpeed;
-  std::optional<uint32_t> configMoveAccel;
-  std::optional<uint32_t> configHomeSpeed;
-  std::optional<uint32_t> configSensorValue;
   std::optional<std::string> mode;
   std::optional<float> freqHz;
 

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "esp_err.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -13,9 +15,6 @@ typedef enum {
     NVS_READWRITE
 } nvs_open_mode_t;
 
-typedef int esp_err_t;
-
-#define ESP_OK 0
 #define ESP_ERR_NVS_NOT_FOUND 0x1101
 #define ESP_ERR_NVS_INVALID_NAME 0x1102
 

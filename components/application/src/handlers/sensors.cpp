@@ -9,6 +9,8 @@
 
 #include "application/command.hpp"
 #include "domain/memory.hpp"
+#include "infrastructure/motor_task.hpp"
+#include "infrastructure/storage/nvs.hpp"
 
 namespace ecotiter::application::handlers::sensors {
 namespace {
@@ -64,15 +66,53 @@ std::expected<CommandResponse, domain::AppError> handleAdcCalGet(
   read(aX1000, b);
   float aVal = (aX1000 > 0) ? static_cast<float>(aX1000) / 1000.0f : 1.0f;
   bool isDefault = (aX1000 == 1000 && b == 0);
+
+  uint16_t rawMv = 0;
+  int16_t calibratedMv = 0;
+  for (size_t i = 0; i < gPointCount; ++i) {
+    if (gPoints[i].collected) {
+      rawMv = gPoints[i].raw_mv;
+      break;
+    }
+  }
+  if (rawMv > 0) {
+    calibratedMv = static_cast<int16_t>(
+        static_cast<float>(rawMv) * aVal + static_cast<float>(b) + 0.5f);
+  }
+
+  char pointsBuf[384];
+  size_t pOff = 0;
+  pOff += static_cast<size_t>(std::snprintf(pointsBuf, sizeof(pointsBuf), "["));
+  bool first = true;
+  for (size_t i = 0; i < gPointCount; ++i) {
+    if (gPoints[i].collected) {
+      if (!first) {
+        pOff += static_cast<size_t>(
+            std::snprintf(pointsBuf + pOff, sizeof(pointsBuf) - pOff, ","));
+      }
+      pOff += static_cast<size_t>(
+          std::snprintf(pointsBuf + pOff, sizeof(pointsBuf) - pOff,
+                        R"({"ref_mv":%.1f,"raw_mv":%u})",
+                        static_cast<double>(gPoints[i].ref_mv),
+                        static_cast<unsigned>(gPoints[i].raw_mv)));
+      first = false;
+    }
+  }
+  pOff += static_cast<size_t>(
+      std::snprintf(pointsBuf + pOff, sizeof(pointsBuf) - pOff, "]"));
+
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   size_t off = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
                     R"({"cmd":"adc.cal.get","status":"ok","a":%.6f,"b":%d,)"
                     R"("r_squared":0.0,"calibrated_at":null,"is_default":%s,)"
-                    R"("points":[],"raw_mv":0,"calibrated_mv":0})",
+                    R"("points":%s,"raw_mv":%u,"calibrated_mv":%d})",
                     static_cast<double>(aVal), static_cast<int>(b),
-                    isDefault ? "true" : "false"));
+                    isDefault ? "true" : "false",
+                    pointsBuf,
+                    static_cast<unsigned>(rawMv),
+                    static_cast<int>(calibratedMv)));
   rsp.bodySize = off;
   return rsp;
 }
@@ -254,12 +294,23 @@ std::expected<CommandResponse, domain::AppError> handleAdcCalReset(
 
 std::expected<CommandResponse, domain::AppError> handleStallGuardGet(
     uint8_t threshold) {
+  (void)threshold;
+  uint32_t sgResult = 0;
+  std::ignore = infrastructure::gTmcUart.readRegister(
+      infrastructure::drivers::TMC_REG_SG_RESULT, sgResult);
+  uint32_t drvStatus = 0;
+  std::ignore = infrastructure::gTmcUart.readRegister(
+      infrastructure::drivers::TMC_REG_DRV_STATUS, drvStatus);
+  uint8_t currentThreshold = domain::gStallGuardThreshold.load(std::memory_order_acquire);
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"cmd":"stallGuard.get","threshold":%u})",
-                    static_cast<unsigned>(threshold)));
+                    R"({"cmd":"stallGuard.get","threshold":%u,)"
+                    R"("sg_result":%lu,"drv_status":%lu})",
+                    static_cast<unsigned>(currentThreshold),
+                    static_cast<unsigned long>(sgResult),
+                    static_cast<unsigned long>(drvStatus)));
   return rsp;
 }
 
@@ -268,6 +319,10 @@ std::expected<CommandResponse, domain::AppError> handleStallGuardSetThreshold(
   if (!threshold) {
     return makeErrorResponse("stallGuard.setThreshold requires 'threshold' param");
   }
+  domain::gStallGuardThreshold.store(*threshold, std::memory_order_release);
+  std::ignore = infrastructure::gTmcUart.writeRegister(
+      infrastructure::drivers::TMC_REG_SGTHRS, *threshold);
+  std::ignore = infrastructure::storage::stallguardWriteThreshold(*threshold);
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
   rsp.bodySize = static_cast<size_t>(

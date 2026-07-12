@@ -34,13 +34,5 @@ namespace ecotiter::application::handlers::burette_ops {
     std::optional<uint32_t> speedHz);
 [[nodiscard]] std::expected<CommandResponse, domain::AppError> handleSetAccel(
     std::optional<uint32_t> accelSteps);
-[[nodiscard]] std::expected<CommandResponse, domain::AppError> handleSetVolume(
-    std::optional<domain::Ml> volume);
-[[nodiscard]] std::expected<CommandResponse, domain::AppError> handleConfigMove(
-    std::optional<uint32_t> speed, std::optional<uint32_t> accel);
-[[nodiscard]] std::expected<CommandResponse, domain::AppError> handleConfigHome(
-    std::optional<uint32_t> speed);
-[[nodiscard]] std::expected<CommandResponse, domain::AppError> handleConfigSensor(
-    std::optional<uint32_t> value);
 
 } // namespace ecotiter::application::handlers::burette_ops

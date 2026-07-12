@@ -38,6 +38,7 @@ set(APPLICATION_SRCS
 
 set(DOMAIN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/domain/src/burette.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/infrastructure/src/drivers/tmc_uart.cpp
 )
 
 # --- Interface library (host-compilable subset) ---
@@ -98,6 +99,10 @@ target_include_directories(unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/interface/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/infrastructure/include
     ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+)
+
+target_compile_definitions(unit_tests PRIVATE
+    TESTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
 target_link_libraries(unit_tests PRIVATE

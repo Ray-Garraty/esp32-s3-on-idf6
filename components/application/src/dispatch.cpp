@@ -21,8 +21,16 @@ void stubAdcCalRead(uint16_t& a, int16_t& b) {
 std::expected<void, domain::ResourceError> stubAdcCalWrite(uint16_t a, int16_t b) {
   return infrastructure::storage::adcCalibrationWrite(a, b);
 }
-uint16_t stubSampleRead() { return 0; }
+uint16_t (*s_adcSampleReadCb)() = nullptr;
+uint16_t stubSampleRead() {
+    if (s_adcSampleReadCb) return s_adcSampleReadCb();
+    return 0;
+}
 } // anonymous namespace
+
+void setAdcSampleReadCb(uint16_t (*cb)()) {
+    s_adcSampleReadCb = cb;
+}
 
 std::expected<CommandResponse, domain::AppError> dispatch(
     const Command& cmd) {
@@ -54,8 +62,7 @@ std::expected<CommandResponse, domain::AppError> dispatch(
     case CommandType::Stop:
       return withId(burette_ops::handleStop());
     case CommandType::MoveToStop:
-      return withId(burette_ops::handleCalRun(
-          std::optional<std::string_view>{"speed"}, std::nullopt, std::nullopt));
+      return withId(burette_ops::handleStop());
     case CommandType::EmergencyStop:
       return withId(burette_ops::handleEmergencyStop());
     case CommandType::GetStatus:
@@ -76,14 +83,6 @@ std::expected<CommandResponse, domain::AppError> dispatch(
       return withId(burette_ops::handleSetSpeed(cmd.speed));
     case CommandType::SetAccel:
       return withId(burette_ops::handleSetAccel(cmd.accel));
-    case CommandType::SetVolume:
-      return withId(burette_ops::handleSetVolume(cmd.targetVolume));
-    case CommandType::ConfigMove:
-      return withId(burette_ops::handleConfigMove(cmd.configMoveSpeed, cmd.configMoveAccel));
-    case CommandType::ConfigHome:
-      return withId(burette_ops::handleConfigHome(cmd.configHomeSpeed));
-    case CommandType::ConfigSensor:
-      return withId(burette_ops::handleConfigSensor(cmd.configSensorValue));
 
     // --- Calibration ---
     case CommandType::CalGet:

@@ -1,4 +1,5 @@
 #include "application/state_machine.hpp"
+#include "freertos/FreeRTOS.h"
 
 namespace ecotiter::application {
 
@@ -18,8 +19,17 @@ bool ApplicationStateMachine::tick(uint32_t currentTick) noexcept {
   if (!pending_.active) return false;
 
   uint32_t elapsed = currentTick - pending_.startTick;
+
+  // Check for operation timeout (60s watchdog)
+  uint32_t elapsedMs = elapsed * portTICK_PERIOD_MS;
+  if (elapsedMs >= kPendingWatchdogMs) {
+    pending_.active = false;
+    controller_.state = domain::BuretteState::Idle;
+    return true;
+  }
+
   if (elapsed >= pending_.expectedDurationTicks) {
-    // Operation completed or timed out — reset to Idle
+    // Operation completed — reset to Idle
     pending_.active = false;
     controller_.state = domain::BuretteState::Idle;
     return true;

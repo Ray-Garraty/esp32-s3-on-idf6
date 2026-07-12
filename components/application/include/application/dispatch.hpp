@@ -12,4 +12,7 @@ namespace ecotiter::application {
 [[nodiscard]] std::expected<CommandResponse, domain::AppError> dispatch(
     const Command& cmd);
 
+// Set callback for ADC sample reads (platform-specific — called from main.cpp)
+void setAdcSampleReadCb(uint16_t (*cb)());
+
 } // namespace ecotiter::application

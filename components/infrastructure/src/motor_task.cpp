@@ -11,6 +11,7 @@
 
 #include "infrastructure/config.hpp"
 #include "infrastructure/drivers/stepper.hpp"
+#include "infrastructure/drivers/tmc_uart.hpp"
 #include "infrastructure/drivers/limitswitch.hpp"
 #include "domain/types.hpp"
 #include "domain/errors.hpp"
@@ -18,7 +19,9 @@
 #include "domain/rinse_sm.hpp"
 #include "domain/cal_dose_sm.hpp"
 #include "domain/cal_speed_sm.hpp"
+#include "diag/black_box.hpp"
 #include "diag/ffi_guard.hpp"
+#include "diag/rtc_watchdog.hpp"
 #include "diag/stack_monitor.hpp"
 #include "diag/state_tracer.hpp"
 
@@ -28,6 +31,7 @@ namespace ecotiter::infrastructure {
 
 QueueHandle_t gMotorCmdQueue = nullptr;
 SmResult gSmResult{SmResult::Type::None, 0, 0.0f, {}, 0};
+drivers::TmcUart gTmcUart;
 
 namespace {
 
@@ -149,26 +153,46 @@ void run_rinse_sm(StepperMotor& stepper,
     }
 
     while (!s_rinseSm.isComplete()) {
+        if (diag::gRtcWdt) diag::gRtcWdt->feed();
         auto action = s_rinseSm.onMotorComplete(
             domain::gVolumeMl.load(std::memory_order_acquire),
             nominalVolumeMl);
 
         switch (action) {
             case domain::sm::RinseAction::FillToLimit:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "filling");
                 ESP_LOGI(TAG, "rinse: fill (cycle %u/%u)",
                          s_rinseSm.currentCycle, s_rinseSm.totalCycles);
                 move_fill(stepper, speedHz);
                 break;
             case domain::sm::RinseAction::EmptyToLimit:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "emptying");
                 ESP_LOGI(TAG, "rinse: empty (cycle %u/%u)",
                          s_rinseSm.currentCycle, s_rinseSm.totalCycles);
                 move_empty(stepper, speedHz);
                 break;
             case domain::sm::RinseAction::Complete:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "idle");
                 ESP_LOGI(TAG, "rinse: complete");
                 store_result(SmResult::Type::RinseComplete);
                 return;
             case domain::sm::RinseAction::Error:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "error");
+                diag::BlackBox::instance().record({
+                    .timestampUs = static_cast<uint64_t>(xTaskGetTickCount() * portTICK_PERIOD_MS * 1000),
+                    .type = diag::BlackBox::EventType::Error,
+                    .threadId = 1,
+                    .payloadId = 0x10,
+                    .payloadValue = 0
+                });
                 ESP_LOGE(TAG, "rinse: SM error");
                 store_result(SmResult::Type::Error);
                 return;
@@ -185,6 +209,9 @@ void run_cal_dose_sm(StepperMotor& stepper,
     auto action = s_calDoseSm.onStart(currentVolumeMl, nominalVolumeMl);
 
     if (action == domain::sm::CalDoseAction::FillToLimit) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "filling");
         ESP_LOGI(TAG, "cal_dose: fill");
         move_fill(stepper, speedHz);
         action = s_calDoseSm.onFillComplete(
@@ -192,6 +219,9 @@ void run_cal_dose_sm(StepperMotor& stepper,
     }
 
     if (action == domain::sm::CalDoseAction::EmptyToLimit) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "emptying");
         ESP_LOGI(TAG, "cal_dose: empty");
         move_empty(stepper, speedHz);
         action = s_calDoseSm.onEmptyComplete(
@@ -199,11 +229,17 @@ void run_cal_dose_sm(StepperMotor& stepper,
     }
 
     if (action == domain::sm::CalDoseAction::Complete) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "idle");
         ESP_LOGI(TAG, "cal_dose: complete, steps=%ld",
                  static_cast<long>(s_calDoseSm.stepsTaken));
         store_result(SmResult::Type::CalDoseComplete,
                      s_calDoseSm.stepsTaken);
     } else {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "error");
         store_result(SmResult::Type::Error);
     }
 }
@@ -217,6 +253,9 @@ void run_cal_speed_sm(StepperMotor& stepper,
     auto action = s_calSpeedSm.onStart(currentVolumeMl, nominalVolumeMl);
 
     if (action == domain::sm::CalSpeedAction::FillToLimit) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "filling");
         ESP_LOGI(TAG, "cal_speed: fill");
         move_fill(stepper, speedHz);
         auto now = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -224,6 +263,9 @@ void run_cal_speed_sm(StepperMotor& stepper,
     }
 
     if (action == domain::sm::CalSpeedAction::EmptyToLimit) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "emptying");
         uint32_t hz = testFreqHz;
         if (hz < ml_min_to_hz(15.0f)) hz = ml_min_to_hz(15.0f);
         ESP_LOGI(TAG, "cal_speed: empty at %lu Hz",
@@ -234,11 +276,17 @@ void run_cal_speed_sm(StepperMotor& stepper,
     }
 
     if (action == domain::sm::CalSpeedAction::Complete) {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "idle");
         ESP_LOGI(TAG, "cal_speed: complete, speed=%.2f ml/min",
                  static_cast<double>(s_calSpeedSm.measuredSpeedMlMin));
         store_result(SmResult::Type::CalSpeedComplete,
                      0, s_calSpeedSm.measuredSpeedMlMin);
     } else {
+        diag::StateTracer::logBuretteTransition(
+            buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+            "error");
         store_result(SmResult::Type::Error);
     }
 }
@@ -255,18 +303,25 @@ void run_cal_speed_seq_sm(StepperMotor& stepper,
     }
 
     while (!s_calSpeedSeqSm.isComplete()) {
+        if (diag::gRtcWdt) diag::gRtcWdt->feed();
         auto now = static_cast<uint32_t>(
             xTaskGetTickCount() * portTICK_PERIOD_MS);
         auto action = s_calSpeedSeqSm.onTick(now);
 
         switch (action) {
             case domain::sm::CalSpeedAction::FillToLimit:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "filling");
                 ESP_LOGI(TAG, "cal_speed_seq: fill (point %d/3)",
                          s_calSpeedSeqSm.seqIdx + 1);
                 move_fill(stepper, fillHz);
                 break;
 
             case domain::sm::CalSpeedAction::EmptyToLimit: {
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "emptying");
                 int idx = s_calSpeedSeqSm.seqIdx;
                 uint16_t f = s_calSpeedSeqSm.freqs[idx];
                 ESP_LOGI(TAG, "cal_speed_seq: empty at %u Hz (point %d/3)",
@@ -280,6 +335,9 @@ void run_cal_speed_seq_sm(StepperMotor& stepper,
                 break;
 
             case domain::sm::CalSpeedAction::Complete:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "idle");
                 ESP_LOGI(TAG, "cal_speed_seq: complete");
                 store_result(SmResult::Type::CalSpeedSeqComplete,
                              0, 0.0f,
@@ -288,6 +346,9 @@ void run_cal_speed_seq_sm(StepperMotor& stepper,
                 return;
 
             case domain::sm::CalSpeedAction::Error:
+                diag::StateTracer::logBuretteTransition(
+                    buretteStateName(domain::gBuretteState.load(std::memory_order_acquire)),
+                    "error");
                 ESP_LOGE(TAG, "cal_speed_seq: SM error");
                 store_result(SmResult::Type::Error);
                 return;
@@ -323,6 +384,7 @@ void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     bool timedOut = false;
 
     while (!homed && !timedOut) {
+        if (diag::gRtcWdt) diag::gRtcWdt->feed();
         assert_rmt_preconditions();
 
         if (domain::gStopFull.load(std::memory_order_acquire)) {
@@ -405,6 +467,7 @@ void execute_move_steps(StepperMotor& stepper, int32_t steps) {
 
     int32_t remaining = steps;
     while (remaining > 0) {
+        if (diag::gRtcWdt) diag::gRtcWdt->feed();
         assert_rmt_preconditions();
 
         if (domain::gStopFull.load(std::memory_order_acquire)) {
@@ -487,6 +550,35 @@ extern "C" void motorTaskEntry(void* pvParameters) {
     LimitSwitch fullSwitch(config::PIN_LIMIT_FULL,
                            domain::gStopFull, false);
     puts("DBG: after LimitSwitch fullSwitch ctor"); fflush(stdout);
+
+    // Initialize TMC2209 UART
+    puts("DBG: before tmc uart init"); fflush(stdout);
+    bool tmcOk = gTmcUart.init(config::PIN_TMC_UART_TX, config::PIN_TMC_UART_RX,
+                               config::TMC_UART_BAUD);
+    if (tmcOk && gTmcUart.testConnection()) {
+        ESP_LOGI(TAG, "TMC2209 UART connected — configuring registers");
+
+        // GCONF: pdn_disable=1, I_scale_analog=1, en_spreadCycle=0
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_GCONF, 0x00000041);
+
+        // CHOPCONF: toff=4, tbl=1, mres=4 (16 µsteps)
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_CHOPCONF, 0x00002104);
+
+        // COOLCONF: semin=5, semax=2, sedn=1
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_COOLCONF, 0x00002205);
+
+        // TCOOLTHRS: upper CoolStep threshold (20-bit)
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_TCOOLTHRS, 0x000FFFFF);
+
+        // PWMCONF: pwm_autoscale=1, pwm_autograd=1, pwm_freq=1
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_PWMCONF, 0x00010014);
+
+        // StallGuard threshold (runtime-configurable via NVS/WebUI)
+        uint8_t sg = domain::gStallGuardThreshold.load(std::memory_order_acquire);
+        std::ignore = gTmcUart.writeRegister(drivers::TMC_REG_SGTHRS, sg);
+    } else {
+        ESP_LOGW(TAG, "TMC2209 UART not connected, running without register config");
+    }
 
     puts("DBG: before run_homing"); fflush(stdout);
     run_homing(stepper, fullSwitch);

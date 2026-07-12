@@ -6,6 +6,8 @@ RAII, error handling). Violations of CRITICAL rules invalidate all changes.
 
 - **Path accuracy**: File paths in sub-agent prompts must be relative to the repo root (e.g. `legacy/arduino/src/`, not `arduino/src/` or `src/`). The sub-agent's working directory is the workspace root — relative paths in prompts are resolved from there.
 
+- **Legacy dir in .gitignore — DO NOT USE Glob for legacy/**: The `legacy/` directory is gitignored, so Glob (`**/*.h`, `**/stepper*`) does NOT find files there. Always use absolute or repo-relative paths with `Read` or `Grep` (rg) for legacy files. See §Legacy Path References below for exact paths.
+
 ## 1. CRITICAL RULES (Auto-Revert)
 
 ### GR-1: NEVER BLOCK THE MAIN LOOP
@@ -158,14 +160,14 @@ wasn't fully applied.
 Before ANY code generation touching WiFi, DNS, HTTP, BLE, RMT, or any
 ESP-IDF API call, study the local authoritative copies:
 
-**Primary — `/home/vlabe/Downloads/esp-idf-master`:**
+**Primary — `<device root>/home/vlabe/Downloads/esp-idf-master`:**
 The authoritative header source for ESP-IDF v6 (dev branch). Verify function
 signatures, struct definitions, enum values, and header locations here.
 Online docs may be out of date or mismatch the local build.
 
-**Secondary — `/legacy/arduino`:**
+**Secondary — `<repository root>/legacy/arduino`:**
 Legacy Arduino-based firmware — **SOURCE OF BUSINESS LOGIC ONLY** (dosing
-algorithms and math, calibration formulas). Study when porting algorithms
+algorithms and math, calibration formulas, WebUI etc). Study when porting algorithms
 or maintaining compatibility with existing protocol expectations. Do NOT copy
 Arduino syntax (digitalWrite, Serial.println, etc.) into ESP-IDF code.
 

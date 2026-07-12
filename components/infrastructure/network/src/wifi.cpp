@@ -151,7 +151,10 @@ void WifiManager::startAP() {
     apConfig.ap.ssid_len = static_cast<uint8_t>(std::strlen(apSsid_));
     apConfig.ap.channel = 1;
     apConfig.ap.max_connection = 4;
-    apConfig.ap.authmode = WIFI_AUTH_OPEN;
+    apConfig.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+    std::strncpy(reinterpret_cast<char*>(apConfig.ap.password),
+                 config::AP_PASSWORD, sizeof(apConfig.ap.password) - 1);
+    apConfig.ap.password[sizeof(apConfig.ap.password) - 1] = '\0';
 
     esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &apConfig);
     if (err != ESP_OK) {

@@ -22,6 +22,9 @@ struct PendingOperation {
   bool active{false};
 };
 
+// Max time (ms) for any pending operation before auto-transition to Idle
+inline constexpr uint32_t kPendingWatchdogMs = 300000; // 5 min
+
 class ApplicationStateMachine {
 public:
   [[nodiscard]] domain::BuretteState buretteState() const noexcept {

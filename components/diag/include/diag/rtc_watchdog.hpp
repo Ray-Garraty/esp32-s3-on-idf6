@@ -48,4 +48,8 @@ private:
     wdt_hal_context_t hal_;
 };
 
+// Global pointer for cross-task RWDT access (motor task feeds during long SMs)
+// Set by app_main() after construction.
+extern RtcWatchdog* gRtcWdt;
+
 } // namespace ecotiter::diag

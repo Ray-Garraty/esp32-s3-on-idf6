@@ -29,10 +29,6 @@ constexpr CmdName kCmdNames[] = {
   {"burette.setDirection",  CommandType::SetDirection},
   {"burette.setSpeed",      CommandType::SetSpeed},
   {"burette.setAccel",      CommandType::SetAccel},
-  {"burette.setVolume",      CommandType::SetVolume},
-  {"burette.configMove",    CommandType::ConfigMove},
-  {"burette.configHome",    CommandType::ConfigHome},
-  {"burette.configSensor",  CommandType::ConfigSensor},
   {"burette.cal.get",           CommandType::CalGet},
   {"burette.cal.calcVolume",    CommandType::CalCalcVolume},
   {"burette.cal.calcSpeed",     CommandType::CalCalcSpeed},
@@ -170,10 +166,7 @@ std::expected<Command, domain::ProtocolError> parseCommand(
       cmd.speedMlMin = static_cast<float>(it->get<double>());
     }
   }
-  cmd.configMoveSpeed = readU32("moveSpeed");
-  cmd.configMoveAccel = readU32("moveAccel");
-  cmd.configHomeSpeed = readU32("homeSpeed");
-  cmd.configSensorValue = readU32("sensorValue");
+
 
   auto sgOpt = readU32("threshold");
   if (sgOpt) {

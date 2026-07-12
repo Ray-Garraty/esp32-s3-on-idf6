@@ -71,14 +71,6 @@ TEST_CASE("parseCommand: setAccel", "[command]") {
   REQUIRE(*cmd->accel == 200);
 }
 
-TEST_CASE("parseCommand: setVolume", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"burette.setVolume","targetVolume":25.0})");
-  REQUIRE(cmd);
-  REQUIRE(cmd->type == CommandType::SetVolume);
-  REQUIRE(cmd->targetVolume.has_value());
-  REQUIRE(approx(cmd->targetVolume->value, 25.0f));
-}
-
 TEST_CASE("parseCommand: valve.setPosition input", "[command]") {
   auto cmd = parseCommand(R"({"cmd":"valve.setPosition","position":"input"})");
   REQUIRE(cmd);
@@ -187,32 +179,6 @@ TEST_CASE("parseCommand: system.getStatus", "[command]") {
   auto cmd = parseCommand(R"({"cmd":"system.getStatus"})");
   REQUIRE(cmd);
   REQUIRE(cmd->type == CommandType::SystemGetStatus);
-}
-
-TEST_CASE("parseCommand: configMove", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"burette.configMove","moveSpeed":2000,"moveAccel":300})");
-  REQUIRE(cmd);
-  REQUIRE(cmd->type == CommandType::ConfigMove);
-  REQUIRE(cmd->configMoveSpeed.has_value());
-  REQUIRE(*cmd->configMoveSpeed == 2000);
-  REQUIRE(cmd->configMoveAccel.has_value());
-  REQUIRE(*cmd->configMoveAccel == 300);
-}
-
-TEST_CASE("parseCommand: configHome", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"burette.configHome","homeSpeed":500})");
-  REQUIRE(cmd);
-  REQUIRE(cmd->type == CommandType::ConfigHome);
-  REQUIRE(cmd->configHomeSpeed.has_value());
-  REQUIRE(*cmd->configHomeSpeed == 500);
-}
-
-TEST_CASE("parseCommand: configSensor", "[command]") {
-  auto cmd = parseCommand(R"({"cmd":"burette.configSensor","sensorValue":42})");
-  REQUIRE(cmd);
-  REQUIRE(cmd->type == CommandType::ConfigSensor);
-  REQUIRE(cmd->configSensorValue.has_value());
-  REQUIRE(*cmd->configSensorValue == 42);
 }
 
 TEST_CASE("parseCommand: cal.run", "[command]") {

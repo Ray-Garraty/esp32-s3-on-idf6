@@ -91,20 +91,6 @@ TEST_CASE("handler: setAccel", "[handlers][burette]") {
   REQUIRE(rsp->kind == ResponseKind::AckThen);
 }
 
-TEST_CASE("handler: setVolume", "[handlers][burette]") {
-  auto rsp = burette_ops::handleSetVolume(Ml{25.0f});
-  REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
-  std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("\"volume\":25.0") != std::string_view::npos);
-}
-
-TEST_CASE("handler: setVolume missing param returns error", "[handlers][burette]") {
-  auto rsp = burette_ops::handleSetVolume(std::nullopt);
-  REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Error);
-}
-
 TEST_CASE("handler: moveSteps", "[handlers][burette]") {
   auto rsp = burette_ops::handleMoveSteps(Steps{500});
   REQUIRE(rsp);
@@ -141,36 +127,6 @@ TEST_CASE("handler: emergencyStop", "[handlers][burette]") {
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
 }
-
-TEST_CASE("handler: configMove", "[handlers][burette]") {
-  auto rsp = burette_ops::handleConfigMove(2000u, 300u);
-  REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
-  std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("configMove") != std::string_view::npos);
-  REQUIRE(sv.find("2000") != std::string_view::npos);
-  REQUIRE(sv.find("300") != std::string_view::npos);
-}
-
-TEST_CASE("handler: configHome", "[handlers][burette]") {
-  auto rsp = burette_ops::handleConfigHome(500u);
-  REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
-  std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("configHome") != std::string_view::npos);
-  REQUIRE(sv.find("500") != std::string_view::npos);
-}
-
-TEST_CASE("handler: configSensor", "[handlers][burette]") {
-  auto rsp = burette_ops::handleConfigSensor(42u);
-  REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::Single);
-  std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("configSensor") != std::string_view::npos);
-  REQUIRE(sv.find("42") != std::string_view::npos);
-}
-
-// --- burette_cal ---
 
 TEST_CASE("handler: cal.get returns error when NVS unavailable", "[handlers][cal]") {
   auto stubFail = []() -> std::expected<CalibrationData, ResourceError> {
@@ -413,11 +369,13 @@ TEST_CASE("handler: temperature.read handles invalid temp", "[handlers][sensors]
 }
 
 TEST_CASE("handler: stallGuard.get", "[handlers][sensors]") {
-  auto rsp = sensors::handleStallGuardGet(64);
+  auto rsp = sensors::handleStallGuardGet(0);
   REQUIRE(rsp);
   REQUIRE(rsp->kind == ResponseKind::Single);
   std::string_view sv(rsp->body.data(), rsp->bodySize);
-  REQUIRE(sv.find("64") != std::string_view::npos);
+  REQUIRE(sv.find("stallGuard.get") != std::string_view::npos);
+  REQUIRE(sv.find("sg_result") != std::string_view::npos);
+  REQUIRE(sv.find("drv_status") != std::string_view::npos);
 }
 
 TEST_CASE("handler: stallGuard.setThreshold", "[handlers][sensors]") {

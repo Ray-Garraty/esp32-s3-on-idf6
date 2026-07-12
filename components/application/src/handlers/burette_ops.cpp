@@ -1,46 +1,14 @@
 #include "application/handlers/burette_ops.hpp"
 
-#include <cstdarg>
-#include <cstdio>
-#include <cstring>
-
 #include "application/command.hpp"
 #include "domain/calibration.hpp"
 #include "domain/cal_run_planner.hpp"
-#include "domain/memory.hpp"
 #include "domain/types.hpp"
 #include "infrastructure/motor_task.hpp"
 #include "infrastructure/storage/nvs.hpp"
 
 namespace ecotiter::application::handlers::burette_ops {
 namespace {
-
-using Buf = domain::memory::ResponseBuffer;
-
-CommandResponse makeCmdResponse(const char* cmdName,
-                                const char* fmt = nullptr, ...) {
-  CommandResponse rsp;
-  rsp.kind = ResponseKind::Single;
-  size_t off = 0;
-  auto& buf = rsp.body;
-  off = static_cast<size_t>(
-      std::snprintf(buf.data(), buf.size(), R"({"cmd":"%s")", cmdName));
-  if (fmt) {
-    va_list args;
-    va_start(args, fmt);
-    int n = std::vsnprintf(buf.data() + off, buf.size() - off, fmt, args);
-    va_end(args);
-    if (n > 0) off += static_cast<size_t>(n);
-  }
-  if (off < buf.size() - 1) {
-    buf[off++] = '}';
-  }
-  if (off < buf.size()) {
-    buf[off] = '\0';
-  }
-  rsp.bodySize = off;
-  return rsp;
-}
 
 bool sendMotorCommand(infrastructure::MotorCommand&& cmd) {
   if (infrastructure::gMotorCmdQueue == nullptr) return false;
@@ -278,60 +246,6 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(
   cmd.accelHzPerS = *accelSteps;
   sendMotorCommand(std::move(cmd));
   return makeAckThenResponse();
-}
-
-std::expected<CommandResponse, domain::AppError> handleSetVolume(
-    std::optional<domain::Ml> volume) {
-  if (!volume) {
-    return makeErrorResponse("invalid_params");
-  }
-  return makeCmdResponse("setVolume",
-                         R"(,"volume":%.1f)",
-                         static_cast<double>(volume->value));
-}
-
-std::expected<CommandResponse, domain::AppError> handleConfigMove(
-    std::optional<uint32_t> speed, std::optional<uint32_t> accel) {
-  CommandResponse rsp;
-  rsp.kind = ResponseKind::Single;
-  size_t off = static_cast<size_t>(
-      std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"cmd":"configMove")"));
-  if (speed) {
-    off += static_cast<size_t>(
-        std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
-                      R"(,"speed":%lu)", static_cast<unsigned long>(*speed)));
-  }
-  if (accel) {
-    off += static_cast<size_t>(
-        std::snprintf(rsp.body.data() + off, rsp.body.size() - off,
-                      R"(,"accel":%lu)", static_cast<unsigned long>(*accel)));
-  }
-  if (off < rsp.body.size() - 1) {
-    rsp.body[off++] = '}';
-  }
-  rsp.bodySize = off;
-  return rsp;
-}
-
-std::expected<CommandResponse, domain::AppError> handleConfigHome(
-    std::optional<uint32_t> speed) {
-  if (!speed) {
-    return makeErrorResponse("invalid_params");
-  }
-  return makeCmdResponse("configHome",
-                         R"(,"homeSpeed":%lu)",
-                         static_cast<unsigned long>(*speed));
-}
-
-std::expected<CommandResponse, domain::AppError> handleConfigSensor(
-    std::optional<uint32_t> value) {
-  if (!value) {
-    return makeErrorResponse("invalid_params");
-  }
-  return makeCmdResponse("configSensor",
-                         R"(,"sensorValue":%lu)",
-                         static_cast<unsigned long>(*value));
 }
 
 } // namespace ecotiter::application::handlers::burette_ops

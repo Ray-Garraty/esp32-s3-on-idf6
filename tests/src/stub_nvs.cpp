@@ -34,4 +34,12 @@ domain::Result<void, domain::ResourceError> adcCalibrationWrite(uint16_t aX1000,
     return {};
 }
 
+uint8_t stallguardReadThreshold() {
+    return 0;
+}
+
+domain::Result<void, domain::ResourceError> stallguardWriteThreshold(uint8_t) {
+    return {};
+}
+
 } // namespace ecotiter::infrastructure::storage
