@@ -13,6 +13,7 @@ __pycache__/
 components_esp32.lock
 .opencode/tmp/
 /logs/
+/scripts/testing/logs/
 /legacy/arduino/
 
 # C++ project build artifacts
