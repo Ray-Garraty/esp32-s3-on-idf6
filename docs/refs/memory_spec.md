@@ -18,7 +18,7 @@ Violations cause: DRAM fragmentation, ISR jitter, WDT resets, or silent data cor
 - Online: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-guides/external-ram.html
 - Online: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/mem_alloc.html
 - Local headers: `<device root>/home/vlabe/Downloads/esp-idf-master/components/esp_psram/include/esp_psram.h`
-- Local headers: `<device root>/home/vlabe/Downloads/esp-idf-master/components/esp_heap_caps/include/esp_heap_caps.h`
+- Local headers: `<device root>/home/vlabe/Downloads/esp-idf-master/components/heap/include/esp_heap_caps.h`
 
 ---
 
@@ -29,9 +29,9 @@ Violations cause: DRAM fragmentation, ISR jitter, WDT resets, or silent data cor
 | Memory Type | Size | Speed | Latency | Usage |
 |---|---|---|---|---|
 | **Internal SRAM (DRAM)** | ~512 KB total, ~320 KB free after full init | 240 MHz (CPU clock) | 1 cycle | Stacks, ISR data, hot-path atomics, ESP-IDF drivers |
-| **Internal SRAM (IRAM)** | ~128 KB | 240 MHz | 1 cycle | ISR handlers, panic handlers, critical code |
-| **PSRAM (Octal SPI)** | 8 MB | ~40 MHz (SPI bus) | 10–100 cycles | Bulk data: JSON, HTTP buffers, logs, ramps |
-| **Flash** | 16 MB | ~80 MHz (QSPI) | 100+ cycles | Code, read-only data, NVS |
+| **Internal SRAM (IRAM)** | ~160 KB | 240 MHz | 1 cycle | ISR handlers, panic handlers, critical code |
+| **PSRAM (Octal SPI)** | 8 MB | Up to 80 MHz (ESP-IDF default ~40 MHz) | 10–100 cycles | Bulk data: JSON, HTTP buffers, logs, ramps |
+| **Flash** | 16 MB (off-package) | ~80 MHz (QSPI) | 100+ cycles | Code, read-only data, NVS |
 
 ### 1.2 PSRAM Capabilities and Constraints
 
@@ -41,8 +41,16 @@ Violations cause: DRAM fragmentation, ISR jitter, WDT resets, or silent data cor
 - Code/rodata can be served from PSRAM via `CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y` + `CONFIG_SPIRAM_RODATA=y`
 - WiFi/LWIP buffers can partially reside in PSRAM (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y`, saves ~10 KB DRAM)
 
+**ESP-IDF v6 memory capability flags (notable additions):**
+- `MALLOC_CAP_SPIRAM_NO_ENC` — allocate from unencrypted PSRAM region (for sharing data with external processors).
+- `MALLOC_CAP_DMA_DESC_AHB` / `MALLOC_CAP_DMA_DESC_AXI` — DMA descriptor memory with explicit bus targeting.
+- `MALLOC_CAP_CACHE_ALIGNED` — allocate on cache-line boundary for DMA coherency.
+- `MALLOC_CAP_SIMD` — memory suitable for SIMD vector instructions.
+- These are not required by the current strategy but are available for future optimisation.
+
 **Hard constraints:**
-- `MALLOC_CAP_DMA` excludes PSRAM. DMA-capable allocations always go to internal DRAM. Applies to RMT, I2S, SPI DMA buffers [mem_alloc.html].
+- `MALLOC_CAP_INTERNAL` specifically means memory safe when flash cache is disabled. PSRAM is **not** `MALLOC_CAP_INTERNAL` — it becomes inaccessible during flash writes.
+- `MALLOC_CAP_DMA` does **not** categorically exclude PSRAM on ESP32-S3 (`SOC_PSRAM_DMA_CAPABLE=1`). Many ESP-IDF v6 drivers (SPI, LCD, SDMMC) correctly use `MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA`. The exception is **RMT TX**, whose internal symbol DMA buffer explicitly disables external memory (`access_ext_mem = false`). For general-purpose DMA, check the driver's capability mask before assuming DRAM.
 - DMA descriptors cannot be in PSRAM [external-ram.html].
 - Cache is shared between flash and PSRAM. Accessing >32 KB of PSRAM data can evict flash from cache, slowing code execution.
 - Flash operations block PSRAM. During NVS writes, OTA, or any flash write, PSRAM becomes inaccessible because flash cache is disabled. ISR accessing PSRAM during flash write → crash.
@@ -68,7 +76,7 @@ ESP-IDF v6 exposes a mutually exclusive Kconfig choice group for PSRAM heap inte
 |--------|----------|--------------------------|
 | `CONFIG_SPIRAM_USE_MALLOC=y` | `malloc()` can return PSRAM based on threshold (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`). Allocations ≤ threshold prefer DRAM; > threshold prefer PSRAM. Fallback to other type if preferred unavailable. | ⚠️ Possible but risky |
 | `CONFIG_SPIRAM_USE_CAPS_ALLOC=y` | `malloc()` stays in DRAM by default. PSRAM only via explicit `heap_caps_malloc(MALLOC_CAP_SPIRAM)`. | ✅ **OUR CHOICE** |
-| `CONFIG_SPIRAM_USE_NONE=y` | PSRAM disconnected from heap system entirely; manual access only. | ❌ Too restrictive |
+| `CONFIG_SPIRAM_USE_MEMMAP=y` | PSRAM integrated into CPU memory map, outside heap system; manual management. | ❌ Too restrictive |
 
 ### 2.2 Why USE_CAPS_ALLOC Over USE_MALLOC
 
@@ -102,14 +110,14 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y                    # Octal SPI (8 MB PSRAM)
 CONFIG_SPIRAM_USE_CAPS_ALLOC=y              # Explicit allocation (NOT USE_MALLOC)
 # CONFIG_SPIRAM_USE_MALLOC is not set       # (implicit — choice group)
-# CONFIG_SPIRAM_USE_NONE is not set         # (implicit — choice group)
+# CONFIG_SPIRAM_USE_MEMMAP is not set       # (implicit — choice group)
 
 # === PSRAM Optimizations ===
 # [INVESTIGATION] — enable after stability verification:
 # CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y        # Code fetch via PSRAM cache
 # CONFIG_SPIRAM_RODATA=y                    # Read-only data in PSRAM
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y      # WiFi/LWIP buffers in PSRAM (~10 KB DRAM saved)
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024    # Defensive: keep small allocs in DRAM (no-op with USE_CAPS_ALLOC, but future-proof)
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024    # Project policy (IDF default is 16384). No-op with USE_CAPS_ALLOC, defensive if switching strategy later.
 
 # === PSRAM Safety ===
 CONFIG_SPIRAM_BOOT_INIT=y                   # Init PSRAM at boot
@@ -124,7 +132,7 @@ After `scripts/idf.sh build`, the generated `sdkconfig` must contain:
 ```
 CONFIG_SPIRAM_USE_CAPS_ALLOC=y
 # CONFIG_SPIRAM_USE_MALLOC is not set
-# CONFIG_SPIRAM_USE_NONE is not set
+# CONFIG_SPIRAM_USE_MEMMAP is not set
 CONFIG_FREERTOS_UNICORE=n
 ```
 
@@ -305,7 +313,7 @@ struct RampConfig {
 
 ### 4.4 Copy-to-DRAM Pattern for RMT Transmission
 
-RMT DMA buffers must be in internal DRAM (`MALLOC_CAP_DMA` excludes PSRAM). Pattern: compute in PSRAM, copy to DRAM for transmission.
+RMT TX internal symbol DMA buffer must be in internal DRAM (GDMA channel configured `access_ext_mem = false`). The user payload (raw data passed to the encoder) may reside in PSRAM, but cache coherency during flash writes makes it unsafe for ISR-driven transmission. Recommended pattern: compute in PSRAM, copy to DRAM for transmission.
 
 ```cpp
 void motor_task_dispatch_move(uint32_t steps, const RampConfig& cfg) {
@@ -370,7 +378,7 @@ public:
 |---|---|---|
 | Task stacks | 8 KB – 32 KB | PSRAM access during flash write = crash. FreeRTOS default (DRAM) is correct. |
 | ISR-accessed data | 1 B – 256 B | Endstop flags, tick counters, `MotorState` atomics. Cache miss in ISR → 10–100 µs jitter → missed pulses → IWDT reset. |
-| RMT DMA buffers | 512 B – 2 KB | `MALLOC_CAP_DMA` excludes PSRAM. RMT DMA cannot address PSRAM. |
+| RMT TX internal DMA buffer | 512 B – 2 KB | GDMA channel configured `access_ext_mem = false`. Must be in internal DRAM. |
 | IRAM code | 1 KB – 16 KB | ISR handlers, panic handlers, critical sections. |
 | ESP-IDF driver handles | variable | Allocated by ESP-IDF itself; do not intervene. |
 | Endstop flags (`std::atomic<bool>`) | 1 B | Read by GPIO ISR on pins 7, 15. |
@@ -438,18 +446,20 @@ void gpio_isr_handler(void* arg) {
 xTaskCreate(motor_task, "motor", 16384, ...);  // stack in PSRAM
 ```
 
-**Fix:** Do not enable `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` or `CONFIG_FREERTOS_PLACE_TASK_STACKS_IN_EXT_RAM`. Default behavior (DRAM stacks) is correct.
+**Fix:** Ensure `CONFIG_FREERTOS_PLACE_TASK_STACKS_IN_EXT_RAM=n` (IDF default is correct). Note: `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` defaults to `y` on ESP32-S3 in IDF v6 — this only enables `xTaskCreateStatic` with explicit PSRAM stack, not automatic placement. The critical guard is `PLACE_TASK_STACKS_IN_EXT_RAM=n`.
 
-### 6.5 RMT DMA Buffer Directly in PSRAM
+### 6.5 RMT TX Data in PSRAM Without Copy
 
 ```cpp
-// ❌ FORBIDDEN — RMT DMA cannot address PSRAM
+// ❌ FORBIDDEN — RMT TX DMA channel requires internal DRAM for its symbol buffer.
+// User payload (ramp.data()) may *technically* be in PSRAM since the encoder
+// copies into the internal TX buffer, but during flash writes PSRAM is
+// inaccessible → cache miss in ISR → corruption or crash.
 std::pmr::vector<uint32_t> ramp{&psram_resource()};
 rmt_transmit(channel, encoder, ramp.data(), ramp.size() * sizeof(uint32_t), &tx_cfg);
-// DMA fails or corrupts data
 ```
 
-**Fix:** Copy to DRAM before transmission (see §4.4).
+**Fix:** Copy to DRAM before transmission (see §4.4). This ensures cache-safe access even during flash operations.
 
 ### 6.6 PSRAM Access During Flash Operations
 
@@ -485,8 +495,8 @@ void hot_path() {
 After boot, serial log must show:
 
 ```
-I (xxx) spi_flash: detected octal PSRAM, 8 MB
-I (xxx) heap_init: Initializing with RAM+PSRAM
+I (xxx) esp_psram: Found 8MB PSRAM device
+I (xxx) heap_init: Initializing. RAM available for dynamic allocation:
 ```
 
 If PSRAM init fails, the chip should panic (hardware fault, `CONFIG_SPIRAM_IGNORE_NOTFOUND=n`).
