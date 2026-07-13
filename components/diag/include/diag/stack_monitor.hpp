@@ -16,6 +16,7 @@ public:
 
     void registerMainTask() noexcept;
     void registerThread(const char* name, size_t stackSize) noexcept;
+    void registerByHandle(TaskHandle_t handle, const char* name, size_t stackSize) noexcept;
     [[nodiscard]] uint32_t watermarkMain() const noexcept;
     void logAllWatermarks() const noexcept;
 

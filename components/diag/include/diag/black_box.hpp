@@ -19,7 +19,8 @@ public:
         TickBegin,
         TickEnd,
         AllocRequest,
-        Error
+        Error,
+        TickDuration
     };
 
     struct Event {

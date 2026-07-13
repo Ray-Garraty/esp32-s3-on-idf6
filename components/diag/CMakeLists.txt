@@ -3,6 +3,7 @@ idf_component_register(
         "src/black_box.cpp"
         "src/crash_handler.cpp"
         "src/ffi_guard.cpp"
+        "src/heap_snapshot.cpp"
         "src/state_tracer.cpp"
         "src/stack_monitor.cpp"
         "src/rtc_watchdog.cpp"

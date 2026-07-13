@@ -514,6 +514,26 @@ def classify_crash(
         classification["confidence"] = "high"
         return classification
 
+    # Stack canary detection: 0xa5a5a5a5 in backtrace
+    if backtrace_decoded:
+        for bt in backtrace_decoded:
+            if bt.get("address") == 0xa5a5a5a5:
+                info["stack_overflow_task"] = "detected (canary 0xa5a5a5a5 in backtrace)"
+                classification["category"] = "stack_overflow"
+                classification["pattern"] = "FreeRTOS stack canary 0xa5a5a5a5 in backtrace"
+                classification["confidence"] = "high"
+                return classification
+
+    # Also check raw backtrace addresses before decoding
+    if not backtrace_decoded:
+        for bt in info.get("backtrace_raw", []):
+            if bt.get("pc") == 0xa5a5a5a5:
+                info["stack_overflow_task"] = "detected (canary 0xa5a5a5a5 in backtrace)"
+                classification["category"] = "stack_overflow"
+                classification["pattern"] = "FreeRTOS stack canary 0xa5a5a5a5 in backtrace"
+                classification["confidence"] = "high"
+                return classification
+
     return classification
 
 

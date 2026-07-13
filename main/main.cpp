@@ -197,25 +197,18 @@ extern "C" void netTaskEntry(void* pvParameters) {
         return;
     }
 
-    // LL-044: Wait for homing to complete before starting WiFi AP.
-    // WiFi AP + active RMT homing cause interrupt storm on UNICORE
-    // (CPU hangs in _xt_lowint1 → tick freezes → RWDT 6s timeout).
-    puts("DBG: waiting for homing..."); fflush(stdout);
-    while (!ecotiter::domain::gHomingDone.load(std::memory_order_acquire)) {
-        esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    puts("DBG: homing done, starting AP"); fflush(stdout);
-
+    // GR-3: start AP immediately after WiFi init. IP logged within seconds.
+    // Homing runs concurrently on motor task (GR-12 dual-core: WiFi ISR on CPU0,
+    // RMT on CPU1 — no interrupt storm).
     wifiManager.startAP();
 
-    // Attempt STA connection from NVS credentials
+    // Attempt STA connection from NVS credentials (non-blocking, async)
     bool staStarted = wifiManager.tryStartSTA();
     if (staStarted) {
         ESP_LOGI("net_owner", "STA connection attempt in progress");
     }
 
-    // [INVESTIGATION] Exp 9 — FULL: routes + gHttpServerForWs + LogBuffer callback + worker
+    // GR-3: HTTP server immediately after WiFi. All tasks independent.
     HttpServer httpServer;
     httpServer.setWifiManager(&wifiManager);
     auto httpResult = httpServer.init();
@@ -229,8 +222,7 @@ extern "C" void netTaskEntry(void* pvParameters) {
         ESP_LOGW("net_owner", "HTTP server init failed");
     }
 
-    // BLE init after HTTP server — ensures 12KB+ contiguous DRAM is available
-    // (GR-3: WiFi → HTTP → BLE)
+    // GR-3: BLE init after HTTP server — ensures 12KB+ contiguous DRAM is available
     if (params && params->bleManager) {
         auto bleResult = params->bleManager->init();
         if (bleResult) {
@@ -242,9 +234,14 @@ extern "C" void netTaskEntry(void* pvParameters) {
     }
 
     // LL-038: async log worker
+    TaskHandle_t logWorkerHandle = nullptr;
     xTaskCreate(ecotiter::domain::LogBuffer::workerTaskEntry,
                 "log_worker", 8192 / sizeof(configSTACK_DEPTH_TYPE),
-                nullptr, 0, nullptr);
+                nullptr, 0, &logWorkerHandle);
+    if (logWorkerHandle != nullptr) {
+        ecotiter::diag::StackMonitor::instance().registerByHandle(
+            logWorkerHandle, "log_worker", 8192);
+    }
 
     while (true) {
         esp_task_wdt_reset();

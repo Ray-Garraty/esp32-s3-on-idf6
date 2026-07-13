@@ -144,10 +144,13 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
                         if not line:
                             continue
 
-                        # Core dump raw capture: start on CRASH marker, stop on reboot/end
+                        # Core dump raw capture: start on CRASH marker or core dump header
                         if "=== CRASH ===" in line:
                             capturing_coredump = True
-                        if "Rebooting..." in line or "!!! EXCEPTION END !!!" in line:
+                        if "Print core dump to uart" in line or "esp_core_dump_uart:" in line:
+                            capturing_coredump = True
+                        # Stop only on reboot — NOT on !!! EXCEPTION END !!! (which is before actual core dump)
+                        if "Rebooting..." in line or "ESP-ROM:" in line:
                             capturing_coredump = False
 
                         # Filter out binary garbage from ROM bootloader preamble.
@@ -182,30 +185,49 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
         ser.close()
         writeline("=== Port closed ===", always_visible=True)
 
-        # Save raw coredump binary from crash capture phase
+        # Save raw coredump from crash capture phase
+        # ESP-IDF transmits core dump as base64 text over UART
         if coredump_buffer and log_path:
-            # Find ELF magic in captured bytes
-            elf_magic = b'\x7fELF'
-            start = coredump_buffer.find(elf_magic)
-            if start >= 0:
-                # Trim preceding noise, find end via reboot markers
-                end = len(coredump_buffer)
-                for marker in [b"rst:", b"ESP-ROM:", b"Rebooting"]:
-                    idx = coredump_buffer.find(marker, start)
-                    if idx >= 0 and idx < end:
-                        end = idx
-                coredump_data = coredump_buffer[start:end]
-                if coredump_data:
-                    dumps_dir = PROJECT_DIR / "dumps"
-                    dumps_dir.mkdir(parents=True, exist_ok=True)
-                    coredump_path = dumps_dir / (log_path.stem + ".coredump")
-                    counter = 1
-                    while coredump_path.exists():
-                        coredump_path = dumps_dir / f"{log_path.stem}_{counter}.coredump"
-                        counter += 1
-                    coredump_path.write_bytes(coredump_data)
-                    writeline(f"=== Core dump saved to {coredump_path} ({len(coredump_data)} bytes) ===",
-                              always_visible=True)
+            import base64
+            dumps_dir = PROJECT_DIR / "dumps"
+            dumps_dir.mkdir(parents=True, exist_ok=True)
+
+            # Try to decode base64 and find ELF magic in decoded bytes
+            coredump_data = None
+            try:
+                decoded = base64.b64decode(coredump_buffer)
+                elf_magic = b'\x7fELF'
+                start = decoded.find(elf_magic)
+                if start >= 0:
+                    end = len(decoded)
+                    for marker in [b"rst:", b"ESP-ROM:", b"Rebooting"]:
+                        idx = decoded.find(marker, start)
+                        if idx >= 0 and idx < end:
+                            end = idx
+                    coredump_data = decoded[start:end]
+            except Exception:
+                pass
+
+            if coredump_data:
+                coredump_path = dumps_dir / (log_path.stem + ".coredump")
+                counter = 1
+                while coredump_path.exists():
+                    coredump_path = dumps_dir / f"{log_path.stem}_{counter}.coredump"
+                    counter += 1
+                coredump_path.write_bytes(coredump_data)
+                writeline(f"=== Core dump saved to {coredump_path} ({len(coredump_data)} bytes) ===",
+                          always_visible=True)
+            else:
+                # Save raw base64 text for later manual decoding
+                raw_path = dumps_dir / (log_path.stem + ".coredump.base64")
+                counter = 1
+                while raw_path.exists():
+                    raw_path = dumps_dir / f"{log_path.stem}_{counter}.coredump.base64"
+                    counter += 1
+                coredump_text = coredump_buffer.decode("utf-8", errors="replace")
+                raw_path.write_text(coredump_text)
+                writeline(f"=== Raw core dump (base64) saved to {raw_path} ({len(coredump_text)} bytes) ===",
+                          always_visible=True)
 
         if log_file and log_file.exists() and log_file.stat().st_size == 0:
             log_file.unlink()

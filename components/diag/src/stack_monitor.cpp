@@ -10,6 +10,21 @@ namespace ecotiter::diag {
 
 void StackMonitor::registerMainTask() noexcept {
     registerThread("main", 32768);
+    // Also register known internal ESP-IDF tasks (Gap 10)
+    struct KnownTask { const char* name; size_t stack; };
+    static constexpr KnownTask kInternal[] = {
+        {"Tmr Svc", 4096},
+        {"ipc0", 4096},
+        {"ipc1", 4096},
+        {"wifi", 8192},
+        {"phy_init", 4096},
+    };
+    for (auto& t : kInternal) {
+        TaskHandle_t h = xTaskGetHandle(t.name);
+        if (h != nullptr) {
+            registerByHandle(h, t.name, t.stack);
+        }
+    }
 }
 
 void StackMonitor::registerThread(const char* name, size_t stackSize) noexcept {
@@ -20,6 +35,17 @@ void StackMonitor::registerThread(const char* name, size_t stackSize) noexcept {
     names_[count_] = name;
     stackSizes_[count_] = stackSize;
     handles_[count_] = xTaskGetCurrentTaskHandle();
+    ++count_;
+}
+
+void StackMonitor::registerByHandle(TaskHandle_t handle, const char* name, size_t stackSize) noexcept {
+    if (count_ >= MAX_THREADS) {
+        ESP_LOGW(TAG, "Too many threads registered");
+        return;
+    }
+    names_[count_] = name;
+    stackSizes_[count_] = stackSize;
+    handles_[count_] = handle;
     ++count_;
 }
 

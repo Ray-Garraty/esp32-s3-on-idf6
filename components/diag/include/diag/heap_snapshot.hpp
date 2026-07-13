@@ -15,6 +15,10 @@ public:
 
     // Log current heap state
     static void log() noexcept;
+
+    // Assert that a contiguous allocation of `size` bytes is possible (GR-7)
+    // Logs warning if insufficient; returns false if cannot allocate
+    [[nodiscard]] static bool assertCanAllocate(size_t size) noexcept;
 };
 
 } // namespace ecotiter::diag

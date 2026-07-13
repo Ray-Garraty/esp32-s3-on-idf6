@@ -380,16 +380,21 @@ Any ESP32 crash is a RED ALERT. The diagnostic subsystem
 
 ```
 === CRASH ===
-exccause=0 name=IllegalInstruction pc=0x40091100 ...
+exccause=20 name=InstrFetchProhibited excvaddr=0x00000000 pc=0x420e00ca
 === REGISTERS ===
-a0=0x800910c8 ...
-=== BACKTRACE ===
-0x400910fd:0x3fffcee0 ...
+a0=0x3fce53a0 a1=0x3fce53c8 a2=0x3fce5420 a3=0x00000000 a4=0x00000000
+a5=0x00000000 a6=0x00000000 a7=0x00000000 a8=0x00000000 a9=0x00000000
+a10=0x00000000 a11=0x00000000 a12=0x00000000 a13=0x00000000 a14=0x00000000 a15=0x00000000
+ps=0x00060525 sp=0x3fce53a0
 === BLACK BOX (64 events, newest first) ===
-[822us] t4 FfiExit { boundary: 20, result: 0 }
+[28412us] t1 FfiExit  { boundary: 20, result: 0 }
+[28302us] t1 FfiEnter { boundary: 20 }
+[17300us] t5 Error    { id: 7, value: 0 }
 === STACK ===
-t0 main watermark=0  t1 motor watermark=0 ...
+t1 main  watermark=25980 used=20%  t2 motor  watermark=1524 used=90% ...
 ```
+
+**`0xa5a5a5a5`** in backtrace address = FreeRTOS stack canary overwritten (stack overflow). See LL-001.
 
 ### Triage Pipeline
 
@@ -398,12 +403,13 @@ t0 main watermark=0  t1 motor watermark=0 ...
 | Serial log exists | `python3 scripts/crash_analyzer.py < crash.txt` |
 | Live capture | `timeout 60 python3 scripts/monitor.py` |
 | Raw crash text | `python3 scripts/crash_analyzer.py < crash.txt` |
+| Core dump captured | `ls dumps/` — `.coredump.base64` files saved by monitor.py |
 
 ### Known Patterns (from docs/lessons_learned/)
 
 | Signature | Real Cause | Fix |
 |-----------|-----------|------|
-| A2=0xFFFFFFFC, tlsf_check, heap_caps_*free | Stack overflow, NOT heap (LL-001) | Increase stack, check watermark FIRST |
+| A2=0xFFFFFFFC, tlsf_check, heap_caps_*free, `0xa5a5a5a5` in backtrace | Stack overflow, NOT heap (LL-001) | Increase stack, check watermark FIRST |
 | ESP_ERR_HTTPD_TASK (45064) | DRAM fragmentation | GR-3 init order; move BLE to net_owner |
 | wifi:fail to alloc timer, type=9 | WiFi timer after BLE+HTTP ate DRAM | Reduce WiFi buffer counts |
 | StoreProhibited EXCVADDR=0x28 | Dangling httpd_req_t (GR-5) | WebSocket API; no stored C pointers |
@@ -504,6 +510,8 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 - [ ] `scripts/idf.sh build` — 0 errors, 0 warnings
 - [ ] `scripts/idf.sh tidy` — 0 warnings
 - [ ] `scripts/idf.sh test` — all pass
+- [ ] Crash output contains `exccause=`, `excvaddr=`, all 16 registers (a0–a15)
+- [ ] `dumps/` has `.coredump.base64` if crash occurred during test
 - [ ] No `std::abort()` / `std::terminate()` / `assert()` in production
 - [ ] No `std::string` / `std::vector` in main loop or motor hot paths
 - [ ] Every `// NOLINT` has `// CONTRACT:` within preceding 3 lines
@@ -557,7 +565,10 @@ Sub-agents are **forbidden** from creating `.md` or `.yaml` files inside
 |----------|---------|
 | docs/refs/project.md | HW pinout, thread/stack budget, init order, network stack, NVS, API |
 | docs/refs/coding_style.md | C++23 conventions, error hierarchy, RAII, memory budget, low-level ops |
-| docs/lessons_learned/ | Crash patterns & fixes (LL-001–LL-046) |
+| docs/lessons_learned/ | Crash patterns & fixes (LL-001–LL-047) |
+| docs/refs/watchdog_spec.md | WDT architecture — IWDT/TWDT/RWDT/Brownout |
+| docs/refs/diagnostic_spec.md | Crash capture, panic handler, BlackBox, core dump pipeline |
+| docs/refs/wifi_spec.md | WiFi init order, IP visibility, captive portal |
 | docs/protocols/embedded_boot_crash.md | S1–S5 Occam's Razor Protocol |
 | docs/protocols/heap_corruption.md | Heap triage (often misdiagnosed stack overflow) |
 | docs/protocols/stack_overflow.md | Stack triage + watermark checks |
