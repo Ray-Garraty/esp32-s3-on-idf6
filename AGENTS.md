@@ -3,6 +3,7 @@
 This document defines the operational rules, safety protocols, and workflows for AI agents working on this repository.
 - For architectural laws, see `docs/refs/CONSTITUTION.md`.
 - For hardware/pinout, see `docs/refs/project.md` and `docs/refs/gpio_pins_spec.md`.
+- For ESP32-S3 datasheet extracts (electrical, boot, memory, GPIO, power, watchdog, interrupt, RMT, ADC, Wi-Fi/BLE RF, USB/JTAG), see `docs/refs/datasheet_extracts/`.
 - For coding conventions, see `docs/refs/coding_style.md`.
 - **Path accuracy:** File paths in sub-agent prompts must be relative to the repo root (e.g. `legacy/arduino/src/`, not `arduino/src/` or `src/`). The sub-agent's working directory is the workspace root.
 - **Legacy dir is gitignored — DO NOT use Glob for `legacy/`:** The `legacy/` directory is in `.gitignore`, so Glob (`**/*.h`, `**/stepper*`) does NOT find files there. Always use absolute or repo-relative paths with `Read` or `Grep` for legacy files.
