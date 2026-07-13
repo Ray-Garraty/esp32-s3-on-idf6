@@ -58,6 +58,7 @@ RtcWatchdog::RtcWatchdog() noexcept {
     wdt_hal_write_protect_enable(&hal_);
 
     enabled_ = true;
+    gRtcWdt = this;
 
     ESP_LOGI(TAG, "RWDT enabled: %u s timeout (%u Hz RTC slow clk, %u ticks)",
              RWDT_TIMEOUT_S, clk_hz, timeout_ticks);
@@ -71,6 +72,7 @@ RtcWatchdog::~RtcWatchdog() noexcept {
     if (enabled_) {
         wdt_hal_deinit(&hal_);
         enabled_ = false;
+        gRtcWdt = nullptr;
         ESP_LOGI(TAG, "RWDT disabled");
     }
 }

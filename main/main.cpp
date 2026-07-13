@@ -304,11 +304,11 @@ extern "C" void app_main(void)
     // If ANY task holds a spinlock > 6s (or the system freezes entirely),
     // RWDT fires → RESET_SYSTEM → reboot with RTCWDT_SYS_RESET in boot log.
     // Configured BEFORE BLE init so it covers the PHY calibration window too.
-    puts("DBG: step 5 - RWDT DISABLED");
+    puts("DBG: step 5 - RWDT configured");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::RtcWdt, std::memory_order_release);
-    // diag::RtcWatchdog rtcWdt;
-    diag::gRtcWdt = nullptr;
+    diag::RtcWatchdog rtcWdt;
+    diag::gRtcWdt = &rtcWdt;
 
     // ====== Step 6: BLE object construction (init deferred to net_owner) ======
     // GR-3: BLE init moved to net_owner thread after HTTP server to ensure
@@ -424,8 +424,7 @@ extern "C" void app_main(void)
 
         // Feed RWDT every main loop iteration (10ms).
         // If ANY task holds a spinlock > 6s, RWDT fires → RESET_SYSTEM.
-        // [INVESTIGATION] RWDT disabled
-        // rtcWdt.feed();
+        rtcWdt.feed();
 
         scheduler.tick();
 

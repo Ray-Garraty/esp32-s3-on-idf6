@@ -386,7 +386,6 @@ void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
     while (!homed && !timedOut) {
         if (diag::gRtcWdt) {
             diag::gRtcWdt->feed();
-            puts("DBG: RWDT fed in homing"); fflush(stdout);
         } else {
             puts("DBG: gRtcWdt IS NULL!"); fflush(stdout);
         }
