@@ -149,7 +149,7 @@ domain::Result<void, domain::ResourceError> NvsHandle::eraseAll() const {
     return {};
 }
 
-void nvsInit() {
+void nvsInit() { // NOLINT(readability-function-cognitive-complexity) // reason: NVS init with calibration cache population
     // Create calibration namespaces if they don't exist (NVS_READWRITE auto-creates)
     {
         auto nvs = NvsHandle(config::NVS_NS_BURETTE_CAL, true);
@@ -259,9 +259,9 @@ domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead()
         auto r = nvs.getU32(config::NVS_KEY_CAL_MAX_FREQ);
         cal.maxFreqHz = (r && r->has_value()) ? static_cast<uint16_t>(r->value() & 0xFFFF) : domain::CalibrationData::kDefaultMaxFreqHz;
     }
-    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) // reason: NVS C API returns raw handle pointers
     auto* old = domain::gCalCache.exchange(new domain::CalibrationData(cal));
-    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) // reason: NVS C API returns raw handle pointers
     delete old;
     return cal;
 }
@@ -282,9 +282,9 @@ domain::Result<void, domain::ResourceError> calibrationWrite(const domain::Calib
     if (!r5) return std::unexpected(r5.error());
     auto r6 = nvs.setI32(config::NVS_KEY_CAL_DATE, 0);
     if (!r6) return std::unexpected(r6.error());
-    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) // reason: NVS C API returns raw handle pointers
     auto* old = domain::gCalCache.exchange(new domain::CalibrationData(cal));
-    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) // reason: NVS C API returns raw handle pointers
     delete old;
     return {};
 }

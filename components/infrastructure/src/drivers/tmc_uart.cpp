@@ -32,7 +32,7 @@ uint8_t TmcUart::computeCrc(const uint8_t* data, size_t len) {
     return crc;
 }
 
-bool TmcUart::init(gpio_num_t txPin, gpio_num_t rxPin, uint32_t baud) {
+bool TmcUart::init(gpio_num_t txPin, gpio_num_t rxPin, uint32_t baud) { // NOLINT(readability-function-cognitive-complexity) // reason: UART init with TMC2209 register configuration
     if (initialized_) deinit();
 
     txPin_ = txPin;
@@ -86,7 +86,7 @@ void TmcUart::deinit() {
     }
 }
 
-bool TmcUart::writeRegister(uint8_t reg, uint32_t value) const {
+bool TmcUart::writeRegister(uint8_t reg, uint32_t value) const { // NOLINT(readability-function-cognitive-complexity) // reason: half-duplex UART write with sync + CRC
     if (!initialized_) return false;
 
     uint8_t buf[8];
@@ -116,7 +116,7 @@ bool TmcUart::writeRegister(uint8_t reg, uint32_t value) const {
     return true;
 }
 
-bool TmcUart::readRegister(uint8_t reg, uint32_t& value) const {
+bool TmcUart::readRegister(uint8_t reg, uint32_t& value) const { // NOLINT(readability-function-cognitive-complexity) // reason: half-duplex UART read with retry + CRC validate
     if (!initialized_) return false;
 
     // Send read request: sync 0x07, register, CRC
@@ -173,7 +173,7 @@ bool TmcUart::readRegister(uint8_t reg, uint32_t& value) const {
     return true;
 }
 
-bool TmcUart::testConnection() {
+bool TmcUart::testConnection() const { // NOLINT(readability-function-cognitive-complexity) // reason: IOIN register sanity check with error recovery
     uint32_t ioin = 0;
     if (!readRegister(TMC_REG_IOIN, ioin)) {
         ESP_LOGE(TAG, "testConnection: failed to read IOIN");

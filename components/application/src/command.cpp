@@ -96,7 +96,7 @@ constexpr CommandType lookupCmdType(std::string_view name) {
 
 } // anonymous namespace
 
-std::expected<Command, domain::ProtocolError> parseCommand(
+std::expected<Command, domain::ProtocolError> parseCommand( // NOLINT(readability-function-cognitive-complexity) // reason: JSON command parser, 11 command types
     std::string_view jsonStr) {
   auto j = json::parse(jsonStr, nullptr, false);
   if (j.is_discarded()) {
@@ -308,7 +308,7 @@ std::expected<size_t, domain::ProtocolError> serializeToBuffer(
 CommandResponse makeSingleResponse(std::string_view payload, size_t size) {
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
-  std::string payloadStr(payload.data(), size);
+  std::string payloadStr(payload.substr(0, size));
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
                     R"({"status":"ok","data":%s})",

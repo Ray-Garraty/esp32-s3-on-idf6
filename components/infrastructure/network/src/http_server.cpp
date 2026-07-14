@@ -44,7 +44,7 @@ HttpServer::~HttpServer() {
     }
 }
 
-std::expected<void, domain::AppError> HttpServer::init() {
+std::expected<void, domain::AppError> HttpServer::init() { // NOLINT(readability-function-cognitive-complexity) // reason: httpd config + URI handler registration
     if (handle_) return {};
 
     diag::FfiGuard guard(80);
@@ -108,7 +108,8 @@ esp_err_t captive_wifi_page_handler(httpd_req_t* req) {
     return serve_wifi_page(req);
 }
 
-esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
+// NOLINTBEGIN(cppcoreguidelines-owning-memory) // reason: ESP-IDF httpd C API returns raw pointers
+esp_err_t captive_wifi_connect_handler(httpd_req_t* req) { // NOLINT(readability-function-cognitive-complexity) // reason: captive portal WiFi connect + JSON parse
     diag::FfiGuard guard(81);
 
     auto* server = static_cast<HttpServer*>(req->user_ctx);
@@ -177,6 +178,7 @@ esp_err_t captive_wifi_connect_handler(httpd_req_t* req) {
     free(password);
     return ESP_OK;
 }
+// NOLINTEND(cppcoreguidelines-owning-memory) // reason: END httpd C API suppressions
 
 esp_err_t captive_wifi_status_handler(httpd_req_t* req) {
     diag::FfiGuard guard(81);
@@ -409,7 +411,7 @@ esp_err_t api_logs_download_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
-esp_err_t ws_handler(httpd_req_t* req) {
+esp_err_t ws_handler(httpd_req_t* req) { // NOLINT(readability-function-cognitive-complexity) // reason: WebSocket frame parser + command dispatch
     diag::FfiGuard guard(83);
 
     // ESP-IDF handles the HTTP_GET WebSocket upgrade internally
@@ -488,7 +490,7 @@ esp_err_t webui_file_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
-esp_err_t root_handler(httpd_req_t* req) {
+esp_err_t root_handler(httpd_req_t* req) { // NOLINT(readability-function-cognitive-complexity) // reason: static file serving with fallback chain
     diag::FfiGuard guard(81);
 
     ESP_LOGI(TAG, "Root handler called for /");

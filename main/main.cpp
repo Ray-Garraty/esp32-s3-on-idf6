@@ -86,7 +86,7 @@ static uint16_t adcSampleRead() {
     return 0;
 }
 
-extern "C" void app_main(void)
+extern "C" void app_main(void) // NOLINT(readability-function-cognitive-complexity) // reason: boot sequence 9 steps + event loop
 {
     std::printf("BOOT OK: ecotiter v%s [%s] (git: %s)\n", ecotiter::app_version, ecotiter::build_date, ecotiter::git_hash);
     fflush(stdout);
@@ -120,7 +120,7 @@ extern "C" void app_main(void)
     {
         auto bootCal = infrastructure::storage::calibrationRead();
         if (bootCal) {
-            // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+            // NOLINTNEXTLINE(cppcoreguidelines-owning-memory) // reason: heap-allocated CalibrationData stored in gCalCache
             domain::gCalCache.store(new domain::CalibrationData(*bootCal), std::memory_order_release);
         }
     }
@@ -470,7 +470,7 @@ extern "C" void app_main(void)
                 else
                 {
                     auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
-                    errRsp.id = extractCmdId(line->data());
+                    errRsp.id = extractCmdId(lineStr.c_str());
                     sendResponse(errRsp);
                 }
             }

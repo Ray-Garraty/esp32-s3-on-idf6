@@ -44,7 +44,7 @@ RmtCopyEncoder::~RmtCopyEncoder() {
     }
 }
 
-RgbLed::RgbLed(gpio_num_t pin)
+RgbLed::RgbLed(gpio_num_t pin) // NOLINT(readability-function-cognitive-complexity) // reason: WS2812 RMT encoder: color -> symbol timing
     : pin_(pin), channel_(pin, config::LED_RMT_RES_HZ), encoder_() {
     if (channel_.handle == nullptr) {
         ESP_LOGE(TAG, "Failed to create RMT TX channel on GPIO %d", pin_);

@@ -28,7 +28,7 @@ using domain::BuretteState;
 static constexpr uint32_t HOME_INTERVAL_US = 1'000'000 / 1500;
 static constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
 
-void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) {
+void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) { // NOLINT(readability-function-cognitive-complexity) // reason: homing sequence with timeout + limit switch polling
     puts("DBG: run_homing START"); fflush(stdout);
 
     diag::FfiGuard guard(config::FFI_HOMING);

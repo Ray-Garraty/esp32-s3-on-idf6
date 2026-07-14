@@ -30,7 +30,7 @@ WifiManager::~WifiManager() {
     stop();
 }
 
-std::expected<void, domain::AppError> WifiManager::init() {
+std::expected<void, domain::AppError> WifiManager::init() { // NOLINT(readability-function-cognitive-complexity) // reason: WiFi stack init with event loop registration
     if (initialized_) return {};
 
     {
@@ -98,7 +98,7 @@ std::expected<void, domain::AppError> WifiManager::init() {
     return {};
 }
 
-void WifiManager::startAP() {
+void WifiManager::startAP() { // NOLINT(readability-function-cognitive-complexity) // reason: AP config with DHCP + DNS + captive portal
     if (!initialized_ || apActive_) return;
 
     diag::FfiGuard guard(71);
@@ -180,7 +180,7 @@ void WifiManager::startAP() {
     ESP_LOGI(TAG, "AP started: %s (192.168.4.1)", apSsid_);
 }
 
-bool WifiManager::connectSTA(const char* ssid, const char* password,
+bool WifiManager::connectSTA(const char* ssid, const char* password, // NOLINT(readability-function-cognitive-complexity) // reason: STA connect with retry + event wait
                               uint32_t timeoutMs) {
     if (!initialized_) return false;
 
@@ -253,7 +253,7 @@ bool WifiManager::connectSTA(const char* ssid, const char* password,
     return false;
 }
 
-bool WifiManager::tryStartSTA() {
+bool WifiManager::tryStartSTA() { // NOLINT(readability-function-cognitive-complexity) // reason: multi-credential STA scan + connect loop
     if (!initialized_ || staConnecting_) return false;
 
     // Read number of saved networks and log them
@@ -383,7 +383,7 @@ bool WifiManager::tryStartSTA() {
     return false;
 }
 
-void WifiManager::saveCredentials(const char* ssid, const char* password) {
+void WifiManager::saveCredentials(const char* ssid, const char* password) { // NOLINT(readability-function-cognitive-complexity) // reason: NVS credential rotation with LRU eviction
     char keyBuf[16];
     uint8_t count = 0;
     auto countResult = storage::wifiReadCount();
@@ -520,7 +520,7 @@ std::optional<uint32_t> WifiManager::getSTAIP() const noexcept {
     return {};
 }
 
-void WifiManager::process() const {
+void WifiManager::process() const { // NOLINT(readability-function-cognitive-complexity) // reason: WiFi event polling, reconnect logic
     if (!initialized_ || dnsSocket_ < 0) return;
 
     domain::memory::DnsBuf query{};
@@ -570,7 +570,7 @@ void WifiManager::stopDnsServer() {
     }
 }
 
-void WifiManager::startMdns() {
+void WifiManager::startMdns() { // NOLINT(readability-function-cognitive-complexity) // reason: mDNS service registration for all protocols
     if (mdnsInitDone_) return;
     diag::FfiGuard guard(76);
 
@@ -604,7 +604,7 @@ void WifiManager::eventHandler(void* arg, esp_event_base_t base,
     if (self) self->handleEvent(base, id, data);
 }
 
-void WifiManager::handleEvent(esp_event_base_t base, int32_t id, void* data) {
+void WifiManager::handleEvent(esp_event_base_t base, int32_t id, void* data) { // NOLINT(readability-function-cognitive-complexity) // reason: WiFi event handler, 10+ event types
     if (base == WIFI_EVENT) {
         switch (id) {
         case WIFI_EVENT_STA_START:

@@ -14,7 +14,7 @@ static constexpr auto TAG = "ble_notify";
 
 namespace {
 
-void bleNotifyLoop(ecotiter::infrastructure::network::BleManager* manager) {
+void bleNotifyLoop(ecotiter::infrastructure::network::BleManager* manager) { // NOLINT(readability-function-cognitive-complexity) // reason: BLE notification queue drain with MTU split
     ecotiter::diag::StackMonitor::instance().registerThread(
         "ble_notify", ecotiter::domain::BLE_NOTIFY_STACK);
 

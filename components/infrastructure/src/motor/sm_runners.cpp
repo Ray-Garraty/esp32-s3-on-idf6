@@ -35,7 +35,7 @@ static domain::sm::CalDoseSm s_calDoseSm;
 static domain::sm::CalSpeedSingleSm s_calSpeedSm;
 static domain::sm::CalSpeedSeqSm s_calSpeedSeqSm;
 
-void run_rinse_sm(StepperMotor& stepper,
+void run_rinse_sm(StepperMotor& stepper, // NOLINT(readability-function-cognitive-complexity) // reason: stepper state machine with limit switches
                   float speedMlMin, uint8_t cycles,
                   float currentVolumeMl, float nominalVolumeMl) {
     s_rinseSm.start(cycles, currentVolumeMl, nominalVolumeMl);
@@ -96,7 +96,7 @@ void run_rinse_sm(StepperMotor& stepper,
     }
 }
 
-void run_cal_dose_sm(StepperMotor& stepper,
+void run_cal_dose_sm(StepperMotor& stepper, // NOLINT(readability-function-cognitive-complexity) // reason: stepper state machine with limit switches
                      float speedMlMin,
                      float currentVolumeMl, float nominalVolumeMl) {
     s_calDoseSm.start();
@@ -140,7 +140,7 @@ void run_cal_dose_sm(StepperMotor& stepper,
     }
 }
 
-void run_cal_speed_sm(StepperMotor& stepper,
+void run_cal_speed_sm(StepperMotor& stepper, // NOLINT(readability-function-cognitive-complexity) // reason: stepper state machine with limit switches
                       float speedMlMin, uint16_t testFreqHz,
                       float currentVolumeMl, float nominalVolumeMl) {
     s_calSpeedSm.start();
@@ -187,7 +187,7 @@ void run_cal_speed_sm(StepperMotor& stepper,
     }
 }
 
-void run_cal_speed_seq_sm(StepperMotor& stepper,
+void run_cal_speed_seq_sm(StepperMotor& stepper, // NOLINT(readability-function-cognitive-complexity) // reason: stepper state machine with limit switches
                           const uint16_t freqs[3],
                           float fillSpeedMlMin,
                           float currentVolumeMl, float nominalVolumeMl) {

@@ -117,7 +117,7 @@ BleManager::~BleManager() {
     s_instance = nullptr;
 }
 
-std::expected<void, domain::AppError> BleManager::init() {
+std::expected<void, domain::AppError> BleManager::init() { // NOLINT(readability-function-cognitive-complexity) // reason: BLE stack init with GATT services
     puts("DBG: BLE init ENTER"); fflush(stdout);
     if (initialized_) return {};
 
@@ -193,7 +193,7 @@ std::expected<void, domain::AppError> BleManager::init() {
     return {};
 }
 
-void BleManager::process() {
+void BleManager::process() { // NOLINT(readability-function-cognitive-complexity) // reason: BLE event dispatch, command queue drain
     if (!initialized_) return;
 
     {
@@ -268,7 +268,7 @@ bool BleManager::sendNotification(std::string_view data) {
     return true;
 }
 
-void BleManager::onHostSync() {
+void BleManager::onHostSync() { // NOLINT(readability-function-cognitive-complexity) // reason: BLE host state machine, 10+ sync events
     if (s_instance == nullptr) return;
 
     {

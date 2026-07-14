@@ -22,7 +22,7 @@ public:
 
     [[nodiscard]] bool writeRegister(uint8_t reg, uint32_t value) const;
     [[nodiscard]] bool readRegister(uint8_t reg, uint32_t& value) const;
-    [[nodiscard]] bool testConnection();
+    [[nodiscard]] bool testConnection() const;
 
 private:
     static uint8_t computeCrc(const uint8_t* data, size_t len);

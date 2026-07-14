@@ -44,7 +44,7 @@ static constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
 void assert_rmt_preconditions() {
 }
 
-extern "C" void motorTaskEntry(void* pvParameters) {
+extern "C" void motorTaskEntry(void* pvParameters) { // NOLINT(readability-function-cognitive-complexity) // reason: motor command dispatch, 11 command types
     (void)pvParameters;
 
     puts("DBG: motorEntry START"); fflush(stdout);

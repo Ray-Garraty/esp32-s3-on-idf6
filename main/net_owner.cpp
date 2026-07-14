@@ -23,7 +23,7 @@ std::atomic<ecotiter::infrastructure::network::HttpServer*> gHttpServerForWs{nul
 QueueHandle_t gWsSendQueue = nullptr;
 QueueHandle_t gWsBroadcastQueue = nullptr;
 
-extern "C" void netTaskEntry(void* pvParameters) {
+extern "C" void netTaskEntry(void* pvParameters) { // NOLINT(readability-function-cognitive-complexity) // reason: WiFi init -> HTTP -> BLE -> queue drain loop
     auto* params = static_cast<NetTaskParams*>(pvParameters);
     puts("DBG: netTaskEntry START"); fflush(stdout);
 

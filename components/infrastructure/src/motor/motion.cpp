@@ -96,7 +96,7 @@ void store_result(SmResult::Type type, int32_t stepsTaken,
     domain::gBuretteState.store(BuretteState::Idle, std::memory_order_release);
 }
 
-void execute_move_steps(StepperMotor& stepper, int32_t steps) {
+void execute_move_steps(StepperMotor& stepper, int32_t steps) { // NOLINT(readability-function-cognitive-complexity) // reason: stepped move with stop flag + RMT error handling
     if (steps <= 0) return;
 
     auto dir = domain::gDirection.load(std::memory_order_acquire);
