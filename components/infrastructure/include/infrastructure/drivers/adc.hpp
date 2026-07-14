@@ -12,8 +12,11 @@
 
 namespace ecotiter::infrastructure::drivers {
 
+class AdcDriver; // forward decl for gAdcDriver
+
 inline std::atomic<uint16_t> gCoeffAX1000{1000};
 inline std::atomic<int16_t> gCoeffB{0};
+inline AdcDriver* gAdcDriver{nullptr};
 
 [[nodiscard]] int16_t calibratedFromRaw(uint16_t raw);
 

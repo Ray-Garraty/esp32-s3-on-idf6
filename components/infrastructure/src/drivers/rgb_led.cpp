@@ -3,7 +3,6 @@
 #include <cstring>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "driver/rmt_tx.h"
 #include "infrastructure/config.hpp"
 
@@ -127,10 +126,6 @@ void RgbLed::refresh() {
         return;
     }
 
-    err = rmt_tx_wait_all_done(reinterpret_cast<rmt_channel_handle_t>(channel_), pdMS_TO_TICKS(10));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "rmt_tx_wait_all_done failed: %s", esp_err_to_name(err));
-    }
 }
 
 void RgbLed::setTransportMode(domain::TransportMode mode, bool error) {

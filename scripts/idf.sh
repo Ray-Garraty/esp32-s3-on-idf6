@@ -243,6 +243,14 @@ case "$CMD" in
         else
             do_build
         fi
+        # Semgrep enforcement gate (Fix 8)
+        if command -v semgrep &>/dev/null; then
+            echo "Running main loop blocking check..."
+            semgrep --config="$PROJECT_DIR/.semgrep/main_loop_blocking.yaml" --error "$PROJECT_DIR/main/main.cpp"
+        else
+            echo "⚠️  semgrep not installed — skipping main loop blocking check"
+            echo "   Install: pip install semgrep"
+        fi
         PORT=$(python3 "$SCRIPT_DIR/find_port.py") || {
             echo "❌ No ESP32 port found"
             exit 1
@@ -277,6 +285,16 @@ case "$CMD" in
         ./scripts/lint.sh "${@:2}"
         ;;
 
+    check)
+        if command -v semgrep &>/dev/null; then
+            echo "Running main loop blocking check..."
+            semgrep --config="$PROJECT_DIR/.semgrep/main_loop_blocking.yaml" --error "$PROJECT_DIR/main/main.cpp"
+        else
+            echo "❌ semgrep not installed — install: pip install semgrep"
+            exit 1
+        fi
+        ;;
+
     reconfigure)
         rm -f "$PROJECT_DIR/sdkconfig"
         idf.py reconfigure
@@ -308,9 +326,10 @@ case "$CMD" in
         echo ""
         echo "COMMANDS"
         echo "  build                 Clean build — removes build/, injects timestamp + git hash"
+        echo "  check                 Semgrep enforcement gate (main loop blocking rules)"
         echo "  flash [port]          Flash firmware (auto-detect port, stale source check)"
         echo "  monitor [port]        Serial monitor, 30s timeout"
-        echo "  smoke [--force-build] Build (if stale) + flash + 30s monitor (full pipeline test)"
+        echo "  smoke [--force-build] Build (if stale) + semgrep + flash + 30s monitor"
         echo "  test                  Run host unit tests (Catch2)"
         echo "  test --build          Configure + build tests only, don't run"
         echo "  test --list           List test case names"
@@ -350,7 +369,7 @@ case "$CMD" in
         ;;
 
     *)
-        echo "Usage: $0 {build|flash|monitor|smoke|test|tidy|uart|reconfigure|clean|erase-flash|erase-nvs|help}"
+        echo "Usage: $0 {build|check|flash|monitor|smoke|test|tidy|uart|reconfigure|clean|erase-flash|erase-nvs|help}"
         exit 1
         ;;
 esac

@@ -1,0 +1,90 @@
+rules:
+  - id: art-I-no-rmt-wait
+    languages: [cpp]
+    pattern: rmt_tx_wait_all_done(...)
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. I violation: rmt_tx_wait_all_done() blocks main loop.
+      Use fire-and-forget or move to motor task.
+    severity: ERROR
+
+  - id: art-I-no-blocking-queue-send
+    languages: [cpp]
+    patterns:
+      - pattern: xQueueSend($QUEUE, $ITEM, $TIMEOUT)
+      - metavariable-comparison:
+          metavariable: $TIMEOUT
+          comparison: $TIMEOUT > 0
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. I violation: xQueueSend with timeout=$TIMEOUT (>0) blocks main loop.
+      Use timeout=0 for non-blocking push.
+    severity: ERROR
+
+  - id: art-I-no-blocking-queue-receive
+    languages: [cpp]
+    patterns:
+      - pattern: xQueueReceive($QUEUE, $ITEM, $TIMEOUT)
+      - metavariable-comparison:
+          metavariable: $TIMEOUT
+          comparison: $TIMEOUT > 0
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. I violation: xQueueReceive with timeout=$TIMEOUT (>0) blocks main loop.
+      Use timeout=0 for non-blocking poll.
+    severity: ERROR
+
+  - id: art-I-no-vtaskdelay
+    languages: [cpp]
+    patterns:
+      - pattern: vTaskDelay($TIMEOUT)
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. I violation: vTaskDelay() blocks main loop.
+      Use vTaskDelayUntil() for pacing.
+    severity: ERROR
+
+  - id: art-II-no-ble-send-notification
+    languages: [cpp]
+    pattern: bleManager.sendNotification(...)
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. II violation: cross-task NimBLE call from main loop.
+      Push to notifyQueue and let ble_notify_thread handle.
+    severity: ERROR
+
+  - id: art-II-no-httpd-broadcast
+    languages: [cpp]
+    pattern: broadcastWsEvent(...)
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. II violation: cross-task httpd call from main loop.
+      Push to wsBroadcastQueue and let net_owner handle.
+    severity: ERROR
+
+  - id: art-II-no-ble-process
+    languages: [cpp]
+    patterns:
+      - pattern: bleManager.process()
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. II violation: BLE host call from main loop.
+      Move to net_owner's loop.
+    severity: ERROR
+
+  - id: art-II-no-gatts-notify
+    languages: [cpp]
+    pattern: ble_gatts_notify_custom(...)
+    paths:
+      include: ["**/main/main.cpp"]
+    message: >-
+      Art. II violation: direct NimBLE GATT call from main loop.
+      Route through notifyQueue.
+    severity: ERROR

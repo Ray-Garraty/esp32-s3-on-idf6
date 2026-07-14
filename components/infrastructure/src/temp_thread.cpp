@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 
 #include "infrastructure/config.hpp"
+#include "infrastructure/drivers/adc.hpp"
 #include "infrastructure/drivers/onewire.hpp"
 #include "domain/types.hpp"
 #include "diag/stack_monitor.hpp"
@@ -38,6 +39,15 @@ void run_temp_loop() {
                 ecotiter::domain::gTempCX100.store(-99999,
                     std::memory_order_release);
                 ESP_LOGW(TAG, "Temperature read failed, sentinel stored");
+            }
+
+            // Also sample ADC every iteration (1000ms)
+            auto* adc = ecotiter::infrastructure::drivers::gAdcDriver;
+            if (adc) {
+                int16_t mv = adc->calibratedMv();
+                if (mv < 0) mv = 0;
+                ecotiter::domain::gLastMv.store(static_cast<uint16_t>(mv),
+                    std::memory_order_release);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

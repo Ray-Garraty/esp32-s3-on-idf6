@@ -33,6 +33,7 @@
 #include "interface/broadcast.hpp"
 #include "version.h"
 #include "interface/serial.hpp"
+#include "domain/calibration.hpp"
 #include "domain/log_buffer.hpp"
 
 // Manual JSON id extractor — avoids nlohmann dependency in main.cpp
@@ -81,8 +82,14 @@ struct WsSendEntry {
 };
 static QueueHandle_t gWsSendQueue = nullptr;
 
-// ADC driver pointer for dispatch.cpp sample read callback
-namespace { ecotiter::infrastructure::drivers::AdcDriver* gAdcDriver{nullptr}; }
+struct WsBroadcastEntry {
+    char data[ecotiter::domain::memory::MAX_RSP_SIZE];
+    size_t len;
+};
+static QueueHandle_t gWsBroadcastQueue = nullptr;
+
+// ADC driver pointer for temp_thread — set in app_main after AdcDriver creation
+using ecotiter::infrastructure::drivers::gAdcDriver;
 
 static uint16_t adcSampleRead() {
     if (gAdcDriver) {
@@ -251,6 +258,11 @@ extern "C" void netTaskEntry(void* pvParameters) {
         ESP_LOGE("net_owner", "Failed to create ws_send_queue");
     }
 
+    gWsBroadcastQueue = xQueueCreate(4, sizeof(WsBroadcastEntry));
+    if (gWsBroadcastQueue == nullptr) {
+        ESP_LOGE("net_owner", "Failed to create ws_broadcast_queue");
+    }
+
     // LL-038: async log worker
     TaskHandle_t logWorkerHandle = nullptr;
     xTaskCreate(ecotiter::domain::LogBuffer::workerTaskEntry,
@@ -271,10 +283,18 @@ extern "C" void netTaskEntry(void* pvParameters) {
             while (gWsSendQueue && xQueueReceive(gWsSendQueue, &wsEntry, 0) == pdTRUE) {
                 hs->broadcastWsEvent(wsEntry.data, wsEntry.len);
             }
+            // Drain ws_broadcast_queue
+            WsBroadcastEntry bcEntry;
+            while (gWsBroadcastQueue && xQueueReceive(gWsBroadcastQueue, &bcEntry, 0) == pdTRUE) {
+                hs->broadcastWsEvent(bcEntry.data, bcEntry.len);
+            }
         }
 
         wifiManager.process();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        if (params && params->bleManager) {
+            params->bleManager->process();
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // nosemgrep: art-I-no-vtaskdelay
     }
 }
 
@@ -307,6 +327,14 @@ extern "C" void app_main(void)
     domain::gStallGuardThreshold.store(
         infrastructure::storage::stallguardReadThreshold(),
         std::memory_order_release);
+
+    // Populate NVS calibration cache once at boot (Fix 5)
+    {
+        auto bootCal = infrastructure::storage::calibrationRead();
+        if (bootCal) {
+            domain::gCalCache.store(new domain::CalibrationData(*bootCal), std::memory_order_release);
+        }
+    }
 
     // ====== Step 2: BlackBox ======
     puts("DBG: step 2 - blackbox");
@@ -445,10 +473,13 @@ extern "C" void app_main(void)
                 buf[len++] = '\n';
             }
             serial.write({buf.data(), len});
-            // Also send over BLE if connected
-            if (bleManager.isConnected())
-            {
-                std::ignore = bleManager.sendNotification({buf.data(), len});
+            // Also send over BLE if connected (non-blocking queue push)
+            if (bleManager.notifyQueue()) {
+                ecotiter::infrastructure::network::BleNotifyItem item;
+                size_t copyLen = std::min(len, sizeof(item.data));
+                std::memcpy(item.data, buf.data(), copyLen);
+                item.len = copyLen;
+                xQueueSend(bleManager.notifyQueue(), &item, 0);
             }
         }
     };
@@ -457,176 +488,197 @@ extern "C" void app_main(void)
 
     while (true)
     {
-        ecotiter::diag::TickWatchdog watchdog;
-        (void)watchdog;
-
         // Feed RWDT every main loop iteration (10ms).
         // If ANY task holds a spinlock > 6s, RWDT fires → RESET_SYSTEM.
         rtcWdt.feed();
         esp_task_wdt_reset();
 
-        scheduler.tick();
-
-        static TickType_t last_heap_log = 0;
-        TickType_t now_ticks = xTaskGetTickCount();
-        if (now_ticks - last_heap_log > pdMS_TO_TICKS(60000)) {
-            ecotiter::diag::print_heap_stats();
-            last_heap_log = now_ticks;
-        }
-
-        if (scheduler.shouldCheckWatermarks()) {
-            stackmon.logAllWatermarks();
-        }
-        appStateMachine.tick(application::gTick.load(std::memory_order_acquire));
-
-        if (scheduler.shouldSample())
+        // TickWatchdog measures body execution time only (excludes vTaskDelayUntil sleep)
         {
-            ecotiter::diag::FfiGuard guard(50);
-            int16_t mv = adc.calibratedMv();
-            if (mv < 0)
+            ecotiter::diag::TickWatchdog watchdog;
+            (void)watchdog;
+
+            scheduler.tick();
+
+            appStateMachine.tick(application::gTick.load(std::memory_order_acquire));
+
+            if (scheduler.shouldBroadcast())
             {
-                mv = 0;
-            }
-            ecotiter::domain::gLastMv.store(static_cast<uint16_t>(mv), std::memory_order_release);
-        }
+                auto brtState = ecotiter::domain::gBuretteState.load(std::memory_order_acquire);
+                bool motorMoving = brtState != ecotiter::domain::BuretteState::Idle;
+                ecotiter::domain::gMotorIsMoving.store(motorMoving, std::memory_order_release);
+                ecotiter::domain::gSpeedMlMin.store(
+                    ecotiter::domain::gSpeed.load(std::memory_order_acquire) > 0 ? 10.0f : 0.0f,
+                    std::memory_order_release);
 
-        if (scheduler.shouldBroadcast())
-        {
-            auto brtState = ecotiter::domain::gBuretteState.load(std::memory_order_acquire);
-            bool motorMoving = brtState != ecotiter::domain::BuretteState::Idle;
-            ecotiter::domain::gMotorIsMoving.store(motorMoving, std::memory_order_release);
-            ecotiter::domain::gSpeedMlMin.store(
-                ecotiter::domain::gSpeed.load(std::memory_order_acquire) > 0 ? 10.0f : 0.0f,
-                std::memory_order_release);
+                ecotiter::interface::BroadcastEvent evt{
+                    .tick = ecotiter::application::gTick.load(std::memory_order_acquire),
+                    .tempCX100 = ecotiter::domain::gTempCX100.load(std::memory_order_acquire),
+                    .mv = ecotiter::domain::gLastMv.load(std::memory_order_acquire),
+                    .vlv = ecotiter::domain::gValvePosition.load(std::memory_order_acquire),
+                    .brt = brtState,
+                    .volumeMl = ecotiter::domain::gVolumeMl.load(std::memory_order_acquire),
+                    .speedMlMin = motorMoving
+                        ? ecotiter::domain::gSpeedMlMin.load(std::memory_order_acquire)
+                        : 0.0f,
+                    .limitFull = ecotiter::domain::gStopFull.load(std::memory_order_acquire),
+                    .limitEmpty = ecotiter::domain::gStopEmpty.load(std::memory_order_acquire),
+                    .usbSerialConnected = ecotiter::domain::gUsbHandshakeReceived.load(std::memory_order_acquire),
+                    .bleConnected = bleManager.isConnected(),
+                    .stepperDrvConnected = true,
+                    .stepperDrvOtpw = false,
+                    .stepperDrvOt = false,
+                    .stallGuardValue = 0,
+                    .isStalled = false,
+                    .stallGuardThreshold = ecotiter::domain::gStallGuardThreshold.load(std::memory_order_acquire),
+                    .motorIsMoving = motorMoving,
+                    .stepsTaken = ecotiter::domain::gDispensedSteps.load(std::memory_order_acquire)};
 
-            ecotiter::interface::BroadcastEvent evt{
-                .tick = ecotiter::application::gTick.load(std::memory_order_acquire),
-                .tempCX100 = ecotiter::domain::gTempCX100.load(std::memory_order_acquire),
-                .mv = ecotiter::domain::gLastMv.load(std::memory_order_acquire),
-                .vlv = ecotiter::domain::gValvePosition.load(std::memory_order_acquire),
-                .brt = brtState,
-                .volumeMl = ecotiter::domain::gVolumeMl.load(std::memory_order_acquire),
-                .speedMlMin = motorMoving
-                    ? ecotiter::domain::gSpeedMlMin.load(std::memory_order_acquire)
-                    : 0.0f,
-                .limitFull = ecotiter::domain::gStopFull.load(std::memory_order_acquire),
-                .limitEmpty = ecotiter::domain::gStopEmpty.load(std::memory_order_acquire),
-                .usbSerialConnected = ecotiter::domain::gUsbHandshakeReceived.load(std::memory_order_acquire),
-                .bleConnected = bleManager.isConnected(),
-                .stepperDrvConnected = true,
-                .stepperDrvOtpw = false,
-                .stepperDrvOt = false,
-                .stallGuardValue = 0,
-                .isStalled = false,
-                .stallGuardThreshold = ecotiter::domain::gStallGuardThreshold.load(std::memory_order_acquire),
-                .motorIsMoving = motorMoving,
-                .stepsTaken = ecotiter::domain::gDispensedSteps.load(std::memory_order_acquire)};
-
-            // Compact format → Serial + BLE
-            {
-                ecotiter::domain::memory::ResponseBuffer buf{};
-                auto sv = ecotiter::interface::serializeBroadcastCompact(evt, buf);
-                if (!sv.empty())
+                // Compact format → Serial + BLE
                 {
-                    serial.write(sv);
-                    serial.write({"\n", 1});
-                    if (bleManager.isConnected())
+                    ecotiter::domain::memory::ResponseBuffer buf{};
+                    auto sv = ecotiter::interface::serializeBroadcastCompact(evt, buf);
+                    if (!sv.empty())
                     {
-                        std::string_view bleSv(sv.data(), sv.size());
-                        std::ignore = bleManager.sendNotification(bleSv);
-                        std::ignore = bleManager.sendNotification({"\n", 1});
+                        serial.write(sv);
+                        serial.write({"\n", 1});
+                        if (bleManager.notifyQueue()) {
+                            ecotiter::infrastructure::network::BleNotifyItem item;
+                            std::memcpy(item.data, sv.data(), std::min(sv.size(), sizeof(item.data)));
+                            if (sv.size() < sizeof(item.data)) {
+                                item.data[sv.size()] = '\n';
+                                item.len = sv.size() + 1;
+                            } else {
+                                item.len = sv.size();
+                            }
+                            xQueueSend(bleManager.notifyQueue(), &item, 0);
+                        }
                     }
                 }
-            }
 
-            // Extended format → WebSocket
-            {
-                ecotiter::domain::memory::ResponseBuffer buf{};
-                auto sv = ecotiter::interface::serializeBroadcastExtended(evt, buf);
-                if (!sv.empty())
+                // Extended format → WebSocket
                 {
-                    auto* hs = gHttpServerForWs.load(std::memory_order_acquire);
-                    if (hs) {
-                        hs->broadcastWsEvent(sv.data(), sv.size());
+                    ecotiter::domain::memory::ResponseBuffer buf{};
+                    auto sv = ecotiter::interface::serializeBroadcastExtended(evt, buf);
+                    if (!sv.empty())
+                    {
+                        if (gWsBroadcastQueue) {
+                            WsBroadcastEntry entry;
+                            size_t copyLen = std::min(sv.size(), sizeof(entry.data));
+                            std::memcpy(entry.data, sv.data(), copyLen);
+                            entry.len = copyLen;
+                            xQueueSend(gWsBroadcastQueue, &entry, 0);
+                        }
                     }
                 }
             }
-        }
 
-        // Process BLE zombie detection
-        bleManager.process();
-
-        // Update RGB LED based on BLE/USB state
-        {
-            domain::TransportMode newLedMode;
-            bool newLedError;
-
-            if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire))
+            // Update RGB LED based on BLE/USB state
             {
-                // USB active takes priority — LED off
-                newLedMode = domain::TransportMode::UsbActive;
-                newLedError = false;
+                domain::TransportMode newLedMode;
+                bool newLedError;
+
+                if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire))
+                {
+                    // USB active takes priority — LED off
+                    newLedMode = domain::TransportMode::UsbActive;
+                    newLedError = false;
+                }
+                else if (domain::gBleError.load(std::memory_order_acquire))
+                {
+                    // BLE error — red
+                    newLedMode = domain::TransportMode::BleAdvertising;
+                    newLedError = true;
+                }
+                else if (bleManager.isConnected())
+                {
+                    // BLE connected — green
+                    newLedMode = domain::TransportMode::BleConnected;
+                    newLedError = false;
+                }
+                else
+                {
+                    // Advertising (not connected, no error) — blue
+                    newLedMode = domain::TransportMode::BleAdvertising;
+                    newLedError = false;
+                }
+
+                if (newLedMode != currentLedMode || newLedError != currentLedError)
+                {
+                    char dbg[80];
+                    std::snprintf(dbg, sizeof(dbg), "DBG: LED %d->%d err=%d isConnected=%d gBleErr=%d",
+                                  static_cast<int>(currentLedMode),
+                                  static_cast<int>(newLedMode),
+                                  static_cast<int>(newLedError),
+                                  static_cast<int>(bleManager.isConnected()),
+                                  static_cast<int>(domain::gBleError.load(std::memory_order_acquire)));
+                    puts(dbg); fflush(stdout);
+                    currentLedMode = newLedMode;
+                    currentLedError = newLedError;
+                    rgbLed.setTransportMode(currentLedMode, currentLedError);
+                }
             }
-            else if (domain::gBleError.load(std::memory_order_acquire))
-            {
-                // BLE error — red
-                newLedMode = domain::TransportMode::BleAdvertising;
-                newLedError = true;
-            }
-            else if (bleManager.isConnected())
-            {
-                // BLE connected — green
-                newLedMode = domain::TransportMode::BleConnected;
-                newLedError = false;
-            }
-            else
-            {
-                // Advertising (not connected, no error) — blue
-                newLedMode = domain::TransportMode::BleAdvertising;
-                newLedError = false;
+
+            // Update transport state in appStateMachine
+            if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire)) {
+                appStateMachine.setTransportState(application::TransportState::UsbActive);
+            } else if (bleManager.isConnected()) {
+                appStateMachine.setTransportState(application::TransportState::BleConnected);
+            } else {
+                appStateMachine.setTransportState(application::TransportState::BleDisconnected);
             }
 
-            if (newLedMode != currentLedMode || newLedError != currentLedError)
+            // Drain BLE command queue (only if initialized — commandQueue is created during init())
+            if (bleManager.isInitialized())
             {
-                char dbg[80];
-                std::snprintf(dbg, sizeof(dbg), "DBG: LED %d->%d err=%d isConnected=%d gBleErr=%d",
-                              static_cast<int>(currentLedMode),
-                              static_cast<int>(newLedMode),
-                              static_cast<int>(newLedError),
-                              static_cast<int>(bleManager.isConnected()),
-                              static_cast<int>(domain::gBleError.load(std::memory_order_acquire)));
-                puts(dbg); fflush(stdout);
-                currentLedMode = newLedMode;
-                currentLedError = newLedError;
-                rgbLed.setTransportMode(currentLedMode, currentLedError);
+                ecotiter::infrastructure::network::BleCmdItem bleItem;
+                while (xQueueReceive(bleManager.commandQueue(), &bleItem, 0) == pdTRUE)
+                {
+                    ESP_LOGI(TAG, "BLE RX: %s", bleItem.data);
+
+                    std::string_view line(bleItem.data);
+                    auto cmd = ecotiter::application::parseCommand(line);
+                    if (cmd)
+                    {
+                        auto rsp = ecotiter::application::dispatch(*cmd);
+                        if (rsp)
+                        {
+                            // Save cmd id for result correlation
+                            if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
+                            {
+                                ecotiter::domain::gLastCmdId.store(
+                                    cmd->id, std::memory_order_release);
+                            }
+                            sendResponse(*rsp);
+                        }
+                        else
+                        {
+                            sendResponse(ecotiter::application::makeErrorResponse("dispatch failed"));
+                        }
+                    }
+                    else
+                    {
+                        auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
+                        errRsp.id = extractCmdId(bleItem.data);
+                        sendResponse(errRsp);
+                    }
+                }
             }
-        }
 
-        // Update transport state in appStateMachine
-        if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire)) {
-            appStateMachine.setTransportState(application::TransportState::UsbActive);
-        } else if (bleManager.isConnected()) {
-            appStateMachine.setTransportState(application::TransportState::BleConnected);
-        } else {
-            appStateMachine.setTransportState(application::TransportState::BleDisconnected);
-        }
-
-        // Drain BLE command queue (only if initialized — commandQueue is created during init())
-        if (bleManager.isInitialized())
-        {
-            ecotiter::infrastructure::network::BleCmdItem bleItem;
-            while (xQueueReceive(bleManager.commandQueue(), &bleItem, 0) == pdTRUE)
+            // Process serial commands
+            auto line = serial.process();
+            if (line.has_value())
             {
-                ESP_LOGI(TAG, "BLE RX: %s", bleItem.data);
+                ESP_LOGI(TAG, "RX: %.*s", static_cast<int>(line->size()), line->data());
 
-                std::string_view line(bleItem.data);
-                auto cmd = ecotiter::application::parseCommand(line);
+                ecotiter::domain::gUsbHandshakeReceived.store(true, std::memory_order_release);
+
+                auto cmd = ecotiter::application::parseCommand(*line);
                 if (cmd)
                 {
                     auto rsp = ecotiter::application::dispatch(*cmd);
                     if (rsp)
                     {
-                        // Save cmd id for result correlation
                         if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
                         {
                             ecotiter::domain::gLastCmdId.store(
@@ -642,125 +694,95 @@ extern "C" void app_main(void)
                 else
                 {
                     auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
-                    errRsp.id = extractCmdId(bleItem.data);
+                    errRsp.id = extractCmdId(line->data());
                     sendResponse(errRsp);
                 }
             }
-        }
 
-        // Process serial commands
-        auto line = serial.process();
-        if (line.has_value())
-        {
-            ESP_LOGI(TAG, "RX: %.*s", static_cast<int>(line->size()), line->data());
-
-            ecotiter::domain::gUsbHandshakeReceived.store(true, std::memory_order_release);
-
-            auto cmd = ecotiter::application::parseCommand(*line);
-            if (cmd)
+            // Deliver pending motor result over Serial/BLE
+            if (ecotiter::domain::gHasPendingResult.load(std::memory_order_acquire))
             {
-                auto rsp = ecotiter::application::dispatch(*cmd);
-                if (rsp)
+                uint64_t resultId = ecotiter::domain::gLastCmdId.load(std::memory_order_acquire);
+                auto& smResult = infrastructure::gSmResult;
+
+                ecotiter::domain::memory::ResponseBuffer buf{};
+                size_t off = 0;
+
+                // Use None type as generic "move done" for basic operations
+                if (smResult.type == infrastructure::SmResult::Type::None && smResult.stepsTaken > 0)
                 {
-                    if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
-                    {
-                        ecotiter::domain::gLastCmdId.store(
-                            cmd->id, std::memory_order_release);
-                    }
-                    sendResponse(*rsp);
+                    auto cal = ecotiter::infrastructure::storage::calibrationRead();
+                    float volDispensed = cal
+                        ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
+                        : 0.0f;
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
+                            static_cast<unsigned long long>(resultId),
+                            static_cast<double>(volDispensed)));
+                }
+                else if (smResult.type == infrastructure::SmResult::Type::RinseComplete)
+                {
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"cycles_completed":1}})",
+                            static_cast<unsigned long long>(resultId)));
+                }
+                else if (smResult.type == infrastructure::SmResult::Type::CalDoseComplete)
+                {
+                    auto cal = ecotiter::infrastructure::storage::calibrationRead();
+                    float volDispensed = cal
+                        ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
+                        : 0.0f;
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
+                            static_cast<unsigned long long>(resultId),
+                            static_cast<double>(volDispensed)));
+                }
+                else if (smResult.type == infrastructure::SmResult::Type::CalSpeedComplete)
+                {
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"speed_ml_min":%.2f}})",
+                            static_cast<unsigned long long>(resultId),
+                            static_cast<double>(smResult.measuredSpeedMlMin)));
+                }
+                else if (smResult.type == infrastructure::SmResult::Type::CalSpeedSeqComplete)
+                {
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                            static_cast<unsigned long long>(resultId)));
                 }
                 else
                 {
-                    sendResponse(ecotiter::application::makeErrorResponse("dispatch failed"));
+                    off = static_cast<size_t>(
+                        std::snprintf(buf.data(), buf.size(),
+                            R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
+                            static_cast<unsigned long long>(resultId)));
                 }
-            }
-            else
-            {
-                auto errRsp = ecotiter::application::makeErrorResponse("invalid_params");
-                errRsp.id = extractCmdId(line->data());
-                sendResponse(errRsp);
-            }
-        }
 
-        // Deliver pending motor result over Serial/BLE
-        if (ecotiter::domain::gHasPendingResult.load(std::memory_order_acquire))
-        {
-            uint64_t resultId = ecotiter::domain::gLastCmdId.load(std::memory_order_acquire);
-            auto& smResult = infrastructure::gSmResult;
-
-            ecotiter::domain::memory::ResponseBuffer buf{};
-            size_t off = 0;
-
-            // Use None type as generic "move done" for basic operations
-            if (smResult.type == infrastructure::SmResult::Type::None && smResult.stepsTaken > 0)
-            {
-                auto cal = ecotiter::infrastructure::storage::calibrationRead();
-                float volDispensed = cal
-                    ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
-                    : 0.0f;
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
-                        static_cast<unsigned long long>(resultId),
-                        static_cast<double>(volDispensed)));
-            }
-            else if (smResult.type == infrastructure::SmResult::Type::RinseComplete)
-            {
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"cycles_completed":1}})",
-                        static_cast<unsigned long long>(resultId)));
-            }
-            else if (smResult.type == infrastructure::SmResult::Type::CalDoseComplete)
-            {
-                auto cal = ecotiter::infrastructure::storage::calibrationRead();
-                float volDispensed = cal
-                    ? static_cast<float>(smResult.stepsTaken) / cal->stepsPerMl
-                    : 0.0f;
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"volume_dispensed_ml":%.2f}})",
-                        static_cast<unsigned long long>(resultId),
-                        static_cast<double>(volDispensed)));
-            }
-            else if (smResult.type == infrastructure::SmResult::Type::CalSpeedComplete)
-            {
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"speed_ml_min":%.2f}})",
-                        static_cast<unsigned long long>(resultId),
-                        static_cast<double>(smResult.measuredSpeedMlMin)));
-            }
-            else if (smResult.type == infrastructure::SmResult::Type::CalSpeedSeqComplete)
-            {
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
-                        static_cast<unsigned long long>(resultId)));
-            }
-            else
-            {
-                off = static_cast<size_t>(
-                    std::snprintf(buf.data(), buf.size(),
-                        R"({"id":%llu,"status":"ok","data":{"status":"complete"}})",
-                        static_cast<unsigned long long>(resultId)));
-            }
-
-            if (off > 0 && off < buf.size())
-            {
-                buf[off++] = '\n';
-                serial.write({buf.data(), off});
-                if (bleManager.isConnected())
+                if (off > 0 && off < buf.size())
                 {
-                    std::ignore = bleManager.sendNotification({buf.data(), off});
+                    buf[off++] = '\n';
+                    serial.write({buf.data(), off});
+                    if (bleManager.notifyQueue()) {
+                        ecotiter::infrastructure::network::BleNotifyItem item;
+                        size_t copyLen = std::min(off, sizeof(item.data));
+                        std::memcpy(item.data, buf.data(), copyLen);
+                        item.len = copyLen;
+                        xQueueSend(bleManager.notifyQueue(), &item, 0);
+                    }
                 }
+
+                // Clear result
+                ecotiter::domain::gHasPendingResult.store(false, std::memory_order_release);
+                smResult.type = infrastructure::SmResult::Type::None;
+                smResult.stepsTaken = 0;
             }
 
-            // Clear result
-            ecotiter::domain::gHasPendingResult.store(false, std::memory_order_release);
-            smResult.type = infrastructure::SmResult::Type::None;
-            smResult.stepsTaken = 0;
-        }
+        } // TickWatchdog scope end
 
         vTaskDelayUntil(&lastWake, PACING_TICK);
     }

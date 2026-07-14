@@ -12,10 +12,8 @@ This document defines the operational rules, safety protocols, and workflows for
 
 ### GR-0: PLATINUM RULE — VERIFY EVERYTHING ON REAL HARDWARE
 Before ANY commit or declaring a task done:
-- **Code:** Build, test, lint. Never assume it works.
-- **Runtime:** If touching firmware, MUST run `scripts/idf.sh smoke` on real ESP32-S3. Building and passing unit tests is INSUFFICIENT — only a smoke test on hardware proves the firmware works.
-- **Changes:** `git diff` to confirm only intended changes.
-- **Silence = trusted.** Only trusted code ships.
+`scripts/idf.sh smoke` — the only final gate. Build/test/tidy may be used during work for syntax checks, but the sole acceptance criterion is smoke on real ESP32-S3. Do NOT ask permission, do NOT check connectivity, do NOT resolve the port — just run it blindly. Build and unit tests are INSUFFICIENT — only smoke on hardware proves the firmware works. If smoke fails, show logs and stop.
+
 
 ### GR-10: ONLY THE USER ASSESSES PHYSICAL STATE
 The AI MUST NEVER claim physical observations (LED colors, motor movements, relay clicks, valve position).

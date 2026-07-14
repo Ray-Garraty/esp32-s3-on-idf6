@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <expected>
@@ -110,5 +111,7 @@ struct VolumeTracker {
         currentVolumeMl = cal.nominalVolumeMl;
     }
 };
+
+inline std::atomic<CalibrationData*> gCalCache{nullptr};
 
 } // namespace ecotiter::domain

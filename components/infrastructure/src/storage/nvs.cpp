@@ -259,6 +259,8 @@ domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead()
         auto r = nvs.getU32(config::NVS_KEY_CAL_MAX_FREQ);
         cal.maxFreqHz = (r && r->has_value()) ? static_cast<uint16_t>(r->value() & 0xFFFF) : domain::CalibrationData::kDefaultMaxFreqHz;
     }
+    domain::CalibrationData* old = domain::gCalCache.exchange(new domain::CalibrationData(cal));
+    delete old;
     return cal;
 }
 
@@ -278,6 +280,8 @@ domain::Result<void, domain::ResourceError> calibrationWrite(const domain::Calib
     if (!r5) return std::unexpected(r5.error());
     auto r6 = nvs.setI32(config::NVS_KEY_CAL_DATE, 0);
     if (!r6) return std::unexpected(r6.error());
+    domain::CalibrationData* old = domain::gCalCache.exchange(new domain::CalibrationData(cal));
+    delete old;
     return {};
 }
 

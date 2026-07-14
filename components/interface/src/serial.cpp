@@ -38,7 +38,7 @@ Result<void> SerialReader::init() noexcept {
     esp_err_t err = uart_driver_install(
         UART_NUM_0,
         INPUT_BUF_SIZE,
-        0,
+        1024,
         10,
         nullptr,
         0
