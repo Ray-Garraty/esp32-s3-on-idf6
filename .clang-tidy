@@ -3,22 +3,26 @@ Checks: >
   -*,
   bugprone-*,
   concurrency-*,
-  cppcoreguidelines-*,
-  modernize-*,
   performance-*,
-  readability-*,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -readability-magic-numbers,
-  -modernize-use-trailing-return-type,
-  -readability-identifier-length,
-  -cppcoreguidelines-pro-type-const-cast,
-  -cppcoreguidelines-avoid-do-while,
-  -readability-uppercase-literal-suffix,
+  clang-diagnostic-*,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-owning-memory,
+  readability-function-cognitive-complexity,
+  readability-make-member-function-const,
   -bugprone-easily-swappable-parameters,
-  -bugprone-branch-clone
+  -bugprone-branch-clone,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-bounds-*,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -readability-braces-around-statements,
+  -readability-identifier-naming
 WarningsAsErrors: ''
 HeaderFilterRegex: '(components|main)/.*'
 CheckOptions:
+  - key: readability-function-cognitive-complexity.Threshold
+    value: '25'
   - key: readability-identifier-naming.ClassCase
     value: CamelCase
   - key: readability-identifier-naming.FunctionCase

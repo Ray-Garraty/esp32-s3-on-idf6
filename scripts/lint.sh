@@ -3,7 +3,13 @@ set -euo pipefail
 
 # Lint wrapper — find clang-tidy, run against IDF build + host tests.
 # Usage:
-#   ./scripts/lint.sh [--fix] [--all] [file.cpp ...]
+#   ./scripts/lint.sh [--full] [--fix] [--all] [file.cpp ...]
+
+FULL=false
+if [[ "${1:-}" == "--full" ]]; then
+  FULL=true
+  shift
+fi
 
 FIX=false
 if [[ "${1:-}" == "--fix" ]]; then
@@ -58,6 +64,10 @@ for dir in ~/.espressif/tools/xtensa-esp-elf/esp-*/xtensa-esp-elf; do
 done
 
 EXTRA_ARGS=""
+if $FULL; then
+  # Full review — all checks, ~30-40 min
+  EXTRA_ARGS+=" --checks=-*,bugprone-*,concurrency-*,cppcoreguidelines-*,modernize-*,performance-*,readability-*,-cppcoreguidelines-avoid-magic-numbers,-readability-magic-numbers,-modernize-use-trailing-return-type,-readability-identifier-length,-cppcoreguidelines-pro-type-const-cast,-cppcoreguidelines-avoid-do-while,-readability-uppercase-literal-suffix,-bugprone-easily-swappable-parameters,-bugprone-branch-clone"
+fi
 if [[ -n "$GCC_CXX_INCLUDE" ]]; then
   EXTRA_ARGS+=" --extra-arg-before=-isystem$GCC_CXX_INCLUDE"
   if [[ -d "$GCC_CXX_ARCH_INCLUDE" ]]; then
@@ -65,9 +75,6 @@ if [[ -n "$GCC_CXX_INCLUDE" ]]; then
   fi
   EXTRA_ARGS+=" --extra-arg-before=-isystem$GCC_PICOLIBC_INCLUDE"
 fi
-
-# Disable stylistic clang-tidy checks — keep only clang-diagnostic (real errors)
-EXTRA_ARGS+=" --checks=-readability-*,-cppcoreguidelines-*,-modernize-*,-bugprone-*,-cert-*,-misc-*,-performance-*,-concurrency-*,-portability-*,-google-*,-llvm-*,-clang-analyzer-*"
 
 # --- Check build directories ---
 if [[ ! -f build/compile_commands.json ]]; then
@@ -171,9 +178,13 @@ run_tidy() {
     || true)
 
   local errors
+  # Only errors from our source tree (not ESP-IDF / toolchain headers)
+  local project_root
+  project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || true
   errors=$(echo "$filtered" \
     | grep -E "^.*error:" \
     | grep -v "unknown argument:" \
+    | grep -F "$project_root" \
     || true)
 
   # Count unique warning types
