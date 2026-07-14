@@ -16,19 +16,7 @@ The diagnostic subsystem provides crash capture and pre-crash forensic data for 
 Exception → panic handler → BlackBox dump → ESP-IDF real handler → core dump → monitor.py capture → crash_analyzer.py classification
 ```
 
-Each layer had known gaps (documented in the Gaps section below). All 12 gaps were fixed on 2026-07-13 per the implementation plan.
-
-### Current State (2026-07-14)
-
-All 12 diagnostic gaps are implemented. The system now produces:
-1. ✅ A complete panic header with `exccause`, `excvaddr`, `pc`, and all 16 registers
-2. ✅ Diverse BlackBox events: FfiEnter/FfiExit, StateTransition, Error, TickDuration
-3. ✅ Core dump captured to `dumps/*.coredump.base64` (122 KB in latest crash)
-4. ✅ Correct classification — `InstrFetchProhibited` detected, `0xa5a5a5a5` canary detected
-
-**Remaining issue:** The firmware still crashes (`InstrFetchProhibited excvaddr=0x00000000` — null pointer call) after WiFi AP + HTTP server init. This is a pre-existing bug now visible because AP/HTTP start immediately (before homing). It was previously masked because HTTP never ran before homing completed.
-
----
+Each layer had known gaps (documented in the Gaps section below). All 13 gaps were fixed (12 on 2026-07-13, 1 on 2026-07-14) per the implementation plan.
 
 ## Component Map
 
@@ -529,6 +517,41 @@ Only `FfiGuard` pushes events to BlackBox. StateTracer, TickWatchdog, StackMonit
 
 ---
 
+### Gap 13: `monitor.py` Trigger `esp_core_dump_uart:` Matches Boot-Time Init, Duplicating Log to `.coredump.base64`
+
+**Status:** ✅ FIXED (2026-07-14)
+
+**Files:** `scripts/monitor.py`
+
+**Problem:**
+The trigger condition ``"esp_core_dump_uart:" in line`` on line 150 was too broad. Every ESP-IDF boot prints:
+```
+I (873) esp_core_dump_uart: Init core dump to UART
+```
+This set ``capturing_coredump = True`` on every single boot, regardless of whether a crash occurred. Since no ``Rebooting...`` appears in a normal session, capture stayed active for the entire monitor session (~30 s), accumulating all UART data into ``coredump_buffer``. At session end, the fallback path (`base64.b64decode` + `\x7fELF` search) failed because the buffer was mostly normal log text, so the entire buffer was saved as ``dumps/*.coredump.base64`` — a near-duplicate of the ``.log`` file.
+
+A concrete example: session `19-01-39` (no crash) produced a 49.5 KB `.coredump.base64` file, of which 47.7 KB was identical content to the `.log` file — only the monitor's metadata lines (timestamps, connection banners) differed.
+
+**Fix (three parts):**
+
+**Part A — Precise trigger conditions.** Replaced the loose ``"esp_core_dump_uart:"`` match with exact matches:
+- ``"=== CRASH ==="`` (custom panic handler)
+- ``"Print core dump to uart"`` (ESP-IDF coredump trigger, printed ONLY during an actual dump, NOT at boot)
+- ``"CORE DUMP START"`` (start of base64 payload block)
+
+The boot-time init line ``I (873) esp_core_dump_uart: Init core dump to UART`` no longer triggers capture.
+
+**Part B — Marker-based payload isolation.** Rewrote the save logic to extract only the base64 content between ``CORE DUMP START`` / ``CORE DUMP END`` marker lines, using the new ``_extract_coredump()`` function. If no markers are present (normal session), no file is saved. If markers are present, the payload is decoded; ``\x7fELF`` → binary ``.coredump``, otherwise raw base64 → ``.coredump.base64``.
+
+**Part C — Testable extracted functions.** Moved the trigger logic into ``_update_capture_state(state, line)`` and the extraction into ``_extract_coredump(data)`` — both pure functions, fully covered by tests in ``scripts/utils/test_coredump_capture.py`` (25 tests including regression, edge cases, and integration).
+
+**Key design decisions:**
+- ``_update_capture_state`` evaluates lines in the order they appear; if a single line contains both a start and stop marker, the start marker wins (crash on reboot line takes priority).
+- ``Rebooting...`` and ``ESP-ROM:`` remain the only stop conditions.
+- ``CORE DUMP START`` is treated as a re-trigger (if capture was already active, it stays active).
+
+---
+
 ## Priority Matrix
 
 | Gap | Area | Severity | Status | Priority |
@@ -545,12 +568,13 @@ Only `FfiGuard` pushes events to BlackBox. StateTracer, TickWatchdog, StackMonit
 | 10 | StackMonitor — internal tasks | P3 | ✅ Fixed | **10** |
 | 11 | HeapSnapshot — no .cpp | P3 | ✅ Fixed | **11** |
 | 12 | BlackBox — event diversity | P3 | ✅ Fixed | **12** |
+| 13 | monitor.py — false-positive boot trigger duplicates log | P0 | ✅ Fixed | **13** |
 
 ---
 
 ## Verification
 
-### Verification (2026-07-14 — all 12 gaps fixed)
+### Verification (2026-07-14 — all 13 gaps fixed)
 
 The system was verified on a real crash (`InstrFetchProhibited excvaddr=0x00000000`):
 
@@ -558,10 +582,12 @@ The system was verified on a real crash (`InstrFetchProhibited excvaddr=0x000000
 |-------|--------|
 | `exccause=` and register dump in crash header | ✅ Printed |
 | `0xa5a5a5a5` canary detection | ✅ Classified as `stack_overflow` |
-| Core dump captured | ✅ 122497 bytes saved to `dumps/*.coredump.base64` |
+| Core dump captured | ✅ 122497 bytes saved to `dumps/*.coredump` |
 | `crash_analyzer.py` classification | ✅ `InstrFetchProhibited` detected |
 | RWDT fired during dump | ❌ NO — core dump completed before reset |
 | BlackBox diverse events | ✅ StateTransition, Error events present |
+| Non-crash session creates no `.coredump.*` | ✅ Verified — boot init no longer triggers capture |
+| Gap 13 regression tests | ✅ 25 tests in `test_coredump_capture.py` all pass |
 
 ### CI Integration
 
@@ -575,6 +601,13 @@ ls -la dumps/
 
 ---
 
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-07-14 | Gap 13 — monitor.py false-positive boot trigger (`esp_core_dump_uart: Init core dump to UART`) fixed. Extracted `_update_capture_state()` and `_extract_coredump()` into pure functions with 25 regression tests. Non-crash sessions no longer produce `.coredump.*` files. |
+| 2026-07-13 | Gaps 1–12 implemented: complete crash pipeline (panic header, BlackBox diversity, core dump capture, canary detection, RWDT feeding, thread IDs, StackMonitor coverage, HeapSnapshot impl). |
+
 ## Related Documents
 
 | Document | Link |
@@ -585,5 +618,6 @@ ls -la dumps/
 | LL-001: Stack overflow → check watermark | [../lessons_learned/LL-001.yaml](../lessons_learned/LL-001.yaml) |
 | LL-046: Sub-agent scope creep | [../lessons_learned/LL-046.yaml](../lessons_learned/LL-046.yaml) |
 | LL-047: RWDT not fed | [../lessons_learned/LL-047.yaml](../lessons_learned/LL-047.yaml) |
+| Gap 13 regression tests | `scripts/utils/test_coredump_capture.py` |
 | ESP-IDF panic handler source | `/home/vlabe/Downloads/esp-idf-master/components/esp_system/src/panic_handler.c` |
 | ESP-IDF core dump UART source | `/home/vlabe/Downloads/esp-idf-master/components/esp_system/src/esp_core_dump_uart.c` |
