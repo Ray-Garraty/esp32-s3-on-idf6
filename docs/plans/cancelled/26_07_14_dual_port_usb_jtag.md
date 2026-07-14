@@ -8,7 +8,8 @@ description: >
   panic handler). BLE and WiFi channels remain unchanged.
 tags: [usb, serial, jtag, uart, dual-port, architecture]
 timestamp: 2026-07-14
-status: verified
+status: superseded
+superseded_by: 26_07_14_dual_port_uart1.md
 ---
 
 # Dual-Port USB Migration: UART0 → USB Serial/JTAG for Command Traffic
