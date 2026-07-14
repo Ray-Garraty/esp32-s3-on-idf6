@@ -20,7 +20,9 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(PROJECT_DIR / "utils"))
 from find_port import find_esp32_port
+from utils.log_utils import sanitize_line
 
 try:
     import serial
@@ -43,7 +45,7 @@ def log(msg: str):
     global log_file
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 

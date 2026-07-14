@@ -31,6 +31,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 sys.path.insert(0, str(PROJECT_DIR / "utils"))
 
 from boot_detect import BootDetector, BOOT_OK_MARKER, wait_for_boot
+from utils.log_utils import sanitize_line
 from broadcast_validator import validate_broadcast_format, diagnose_broadcast_intervals
 
 try:
@@ -63,6 +64,7 @@ SERIAL_BAUD = 115200
 PASS = 0
 FAIL = 0
 log_file = None
+serial_log_file = None
 boot_detector = BootDetector()
 
 
@@ -71,7 +73,7 @@ def status(msg: str) -> None:
     print(msg, flush=True)
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 
@@ -79,7 +81,7 @@ def log(msg: str) -> None:
     global log_file
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 
@@ -95,7 +97,8 @@ def fail_msg(msg: str) -> None:
     status(f"  ==> FAIL: {msg}")
 
 
-def serial_reader_thread(ser, buf: deque, stop_event: threading.Event) -> None:
+def serial_reader_thread(ser, buf: deque, stop_event: threading.Event,
+                         slog_file=None) -> None:
     """Background serial reader — feeds raw lines into buf for optional boot detection."""
     partial = b""
     while not stop_event.is_set():
@@ -108,6 +111,10 @@ def serial_reader_thread(ser, buf: deque, stop_event: threading.Event) -> None:
                     line_str = line.decode("utf-8", errors="replace").strip("\r")
                     if line_str:
                         buf.append(line_str)
+                        if slog_file:
+                            ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                            slog_file.write(f"[{ts}] {sanitize_line(line_str)}\n")
+                            slog_file.flush()
             else:
                 time.sleep(0.005)
         except serial.SerialException:
@@ -267,15 +274,22 @@ class BleApiTest:
 
 # ── Main ────────────────────────────────────────────────────────────────
 
+def make_serial_log_path(log_dir: str) -> Path:
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return Path(log_dir) / f"ble_serial_{ts}.log"
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="BLE API format validation test")
     p.add_argument("--no-serial", action="store_true", help="Skip serial boot detection")
     p.add_argument("-p", "--port", default=None, help="Serial port for boot detection")
+    p.add_argument("--serial-log-dir", default=None,
+                   help="Directory for serial log file (default: scripts/testing/logs/)")
     return p.parse_args()
 
 
 def main() -> int:
-    global PASS, FAIL, log_file, boot_detector
+    global PASS, FAIL, log_file, serial_log_file, boot_detector
 
     args = parse_args()
 
@@ -288,6 +302,9 @@ def main() -> int:
     log_file.write("=" * 60 + "\n")
     log_file.flush()
     status(f"Log: {log_path}")
+
+    serial_log_dir = args.serial_log_dir or str(log_dir)
+    serial_log_path = make_serial_log_path(serial_log_dir)
 
     # ── Optional serial boot detection ──
     serial_buf: deque = deque()
@@ -309,9 +326,16 @@ def main() -> int:
                 time.sleep(0.3)
                 ser.reset_input_buffer()
 
+                Path(serial_log_path).parent.mkdir(parents=True, exist_ok=True)
+                serial_log_file = open(serial_log_path, "w", encoding="utf-8")
+                serial_log_file.write(f"BLE serial log — {ts}\n")
+                serial_log_file.write("=" * 60 + "\n")
+                serial_log_file.flush()
+                status(f"Serial log: {serial_log_path}")
+
                 serial_thread = threading.Thread(
                     target=serial_reader_thread,
-                    args=(ser, serial_buf, serial_stop), daemon=True
+                    args=(ser, serial_buf, serial_stop, serial_log_file), daemon=True
                 )
                 serial_thread.start()
 
@@ -389,6 +413,8 @@ def main() -> int:
     serial_stop.set()
     if serial_thread:
         serial_thread.join(timeout=3)
+    if serial_log_file:
+        serial_log_file.close()
 
     # ── Summary ──
     total = PASS + FAIL

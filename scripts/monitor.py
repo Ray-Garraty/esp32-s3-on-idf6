@@ -28,15 +28,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from find_port import find_esp32_port
 from utils.monitor_classifier import SerialClassifier, ResultCode, DedupTracker
 from utils.boot_detect import BootDetector
+from utils.log_utils import sanitize_line
 
 BAUDRATE = 115200
 PROJECT_DIR = SCRIPT_DIR.parent
 DEFAULT_LOG_DIR = str(PROJECT_DIR / "logs")
-
-
-def _clean(line: str) -> str:
-    """Remove non-printable characters except common whitespace."""
-    return ''.join(c for c in line if c.isprintable() or c in '\n\r\t')
 
 
 def _update_capture_state(state: bool, line: str) -> bool:
@@ -156,7 +152,7 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
         ser.rts = False
 
         def writeline(line: str, always_visible: bool = False, end: str = "\n"):
-            line = _clean(line)
+            line = sanitize_line(line)
             if always_visible or verbose:
                 try:
                     print(line, end=end, flush=True)

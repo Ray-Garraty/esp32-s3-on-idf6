@@ -38,6 +38,7 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
+from utils.log_utils import sanitize_line
 from boot_detect import BootDetector, BOOT_OK_MARKER
 
 SERIAL_BAUD = 115200
@@ -56,7 +57,7 @@ def status(msg: str) -> None:
     print(msg, flush=True)
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 
@@ -64,7 +65,7 @@ def log(msg: str) -> None:
     global log_file
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 

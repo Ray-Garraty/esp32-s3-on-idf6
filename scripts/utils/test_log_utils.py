@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-Unit tests for sanitize_line from utils/log_utils.py.
+Unit tests for log_utils sanitize_line.
 
-Sanitize_line was originally monitor.py's _clean; migrated to a shared
-module so all integration tests benefit from the same binary-garbage
-protection.
-
-Run:  python3 -m unittest scripts/utils/test_monitor_clean.py -v
+Run:  python3 -m unittest scripts/utils/test_log_utils.py -v
 """
 
 import unittest
+import io
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils.log_utils import sanitize_line
+from utils.log_utils import sanitize_line, write_sanitized
 
 
-class TestClean(unittest.TestCase):
+class TestSanitizeLine(unittest.TestCase):
     def test_keeps_printable_ascii(self):
         self.assertEqual(sanitize_line("hello world"), "hello world")
 
@@ -55,6 +52,23 @@ class TestClean(unittest.TestCase):
         raw = "I (476) cpu_start\x00: Single core mode\n"
         expected = "I (476) cpu_start: Single core mode\n"
         self.assertEqual(sanitize_line(raw), expected)
+
+
+class TestWriteSanitized(unittest.TestCase):
+    def setUp(self):
+        self.buf = io.StringIO()
+
+    def test_writes_sanitized_line(self):
+        write_sanitized(self.buf, "hello\x00world")
+        self.assertEqual(self.buf.getvalue(), "helloworld\n")
+
+    def test_writes_printable_unchanged(self):
+        write_sanitized(self.buf, "hello world")
+        self.assertEqual(self.buf.getvalue(), "hello world\n")
+
+    def test_preserves_tab(self):
+        write_sanitized(self.buf, "a\tb")
+        self.assertEqual(self.buf.getvalue(), "a\tb\n")
 
 
 if __name__ == "__main__":

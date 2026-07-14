@@ -36,6 +36,7 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
+from utils.log_utils import sanitize_line
 from boot_detect import BootDetector, BOOT_OK_MARKER, wait_for_boot as shared_wait_for_boot
 from broadcast_validator import validate_broadcast_format, diagnose_broadcast_intervals
 
@@ -54,7 +55,7 @@ def status(msg: str) -> None:
     print(msg, flush=True)
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 
@@ -62,7 +63,7 @@ def log(msg: str) -> None:
     global log_file
     if log_file:
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        log_file.write(f"[{ts}] {msg}\n")
+        log_file.write(f"[{ts}] {sanitize_line(msg)}\n")
         log_file.flush()
 
 
@@ -134,9 +135,13 @@ def send_and_expect(
     ser, buf: deque, cmd: str, cmd_id: int,
     expect_keys: list | None = None,
     expect_error: bool = False,
+    params: dict | None = None,
     timeout_s: float = CMD_TIMEOUT_S,
 ) -> dict | None:
-    payload = json.dumps({"id": cmd_id, "cmd": cmd}) + "\n"
+    payload_dict = {"id": cmd_id, "cmd": cmd}
+    if params:
+        payload_dict.update(params)
+    payload = json.dumps(payload_dict) + "\n"
     log(f"  >>> {payload.strip()}")
     ser.write(payload.encode())
 
@@ -207,6 +212,111 @@ def collect_broadcasts(buf: deque, duration_s: float) -> list[tuple[dict, float]
 
 
 
+
+
+# ── Valve helpers ─────────────────────────────────────────────────────
+
+def read_valve_position_from_broadcast(
+    buf: deque, timeout_s: float = 3
+) -> str | None:
+    """Read broadcast messages from buf, return last seen vlv value."""
+    deadline = time.time() + timeout_s
+    last_vlv: str | None = None
+    while time.time() < deadline:
+        while buf:
+            line = buf.popleft()
+            boot_detector.add_line(line)
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "id" in obj or "cmd" in obj:
+                continue
+            vlv = obj.get("vlv")
+            if vlv in ("in", "out"):
+                last_vlv = vlv
+                log(f"  broadcast vlv={vlv}")
+        time.sleep(0.01)
+    return last_vlv
+
+
+def wait_for_valve_position(
+    buf: deque, target_vlv: str, timeout_s: float = 5
+) -> bool:
+    """Wait for a broadcast with vlv matching target_vlv."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        while buf:
+            line = buf.popleft()
+            boot_detector.add_line(line)
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "id" in obj or "cmd" in obj:
+                continue
+            vlv = obj.get("vlv")
+            if vlv == target_vlv:
+                return True
+        time.sleep(0.01)
+    return False
+
+
+def validate_spec_response(
+    resp: dict | None, cmd_id: int, expect_data_keys: list[str] | None = None
+) -> bool:
+    """Validate command response follows COMMS_PROTOCOL.md single-phase format.
+    
+    Single-phase spec pattern:
+      {"id": <uint64>, "status": "ok", "data": {...}}
+      {"id": <uint64>, "status": "error", "message": "<code>"}
+    """
+    if resp is None:
+        return False
+    if resp.get("id") != cmd_id:
+        log(f"  spec validation: id mismatch — expected {cmd_id}, got {resp.get('id')}")
+        return False
+    st = resp.get("status")
+    if st not in ("ok", "error"):
+        log(f"  spec validation: status expected ok|error, got {st!r}")
+        return False
+    if st == "ok" and expect_data_keys:
+        data = resp.get("data", {})
+        missing = [k for k in expect_data_keys if k not in data]
+        if missing:
+            log(f"  spec validation: data missing keys {missing}")
+            return False
+    if st == "error" and "message" not in resp:
+        log(f"  spec validation: error response missing 'message' field")
+        return False
+    return True
+
+
+def collect_broadcast_vlv_values(buf: deque, duration_s: float) -> list[str]:
+    """Collect vlv field values from broadcast messages over a period."""
+    vlv_values: list[str] = []
+    deadline = time.time() + duration_s
+    while time.time() < deadline:
+        while buf:
+            line = buf.popleft()
+            boot_detector.add_line(line)
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "id" in obj or "cmd" in obj:
+                continue
+            vlv = obj.get("vlv")
+            if vlv in ("in", "out", "unk"):
+                vlv_values.append(vlv)
+        time.sleep(0.01)
+    return vlv_values
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -329,7 +439,82 @@ def main() -> int:
     time.sleep(0.5)
     drain_buf(buf)
 
-    # ── Step 7: Collect + validate broadcast messages ─────────────
+    # ── Step 7: Valve toggle + broadcast confirmation ──────────────
+    status("\n=== Valve toggle test ===")
+    cur_vlv = read_valve_position_from_broadcast(buf, timeout_s=3)
+    if cur_vlv is None:
+        fail_msg("Could not determine current valve position from broadcasts")
+    else:
+        target_vlv = "out" if cur_vlv == "in" else "in"
+        target_pos = "output" if target_vlv == "out" else "input"
+
+        # ── 7a: Toggle to opposite position ──
+        status(f"  (7a) Current vlv={cur_vlv}, toggling to {target_pos}")
+        rsp6 = send_and_expect(ser, buf, "valve.setPosition", cmd_id=6,
+                               params={"position": target_pos},
+                               expect_keys=["position"])
+        if rsp6 and validate_spec_response(rsp6, 6, ["position"]):
+            pass_msg(f"valve.setPosition({target_pos}): response conforms to spec format")
+        elif rsp6:
+            fail_msg(f"valve.setPosition({target_pos}): response spec format violation")
+
+        time.sleep(0.3)
+        if wait_for_valve_position(buf, target_vlv, timeout_s=5):
+            pass_msg(f"valve.setPosition({target_pos}): broadcast confirmed vlv={target_vlv}")
+            # Log vlv transition sequence observed during the wait
+            vlv_seq = collect_broadcast_vlv_values(buf, 0.5)
+            if vlv_seq:
+                log(f"  vlv values after toggle: original={cur_vlv}, transition={vlv_seq}")
+        else:
+            fail_msg(f"valve.setPosition({target_pos}): broadcast did not show vlv={target_vlv} in 5s")
+
+        time.sleep(0.3)
+        drain_buf(buf)
+
+        # ── 7b: Idempotency — set to same position (should return ok) ──
+        status(f"  (7b) Idempotency: setting to same position ({target_pos})")
+        rsp_idem = send_and_expect(ser, buf, "valve.setPosition", cmd_id=7,
+                                   params={"position": target_pos},
+                                   expect_keys=["position"])
+        if rsp_idem and validate_spec_response(rsp_idem, 7, ["position"]):
+            pass_msg(f"valve.setPosition({target_pos}): idempotent set returns ok")
+        time.sleep(0.3)
+        drain_buf(buf)
+
+        # ── 7c: Invalid parameter error ──
+        status("  (7c) Error case: invalid position 'garbage'")
+        rsp_err = send_and_expect(ser, buf, "valve.setPosition", cmd_id=8,
+                                  params={"position": "garbage"},
+                                  expect_error=True)
+        if rsp_err and validate_spec_response(rsp_err, 8):
+            msg = rsp_err.get("message")
+            if msg == "invalid_params":
+                pass_msg("valve.setPosition('garbage'): returns invalid_params per spec")
+            else:
+                fail_msg(f"valve.setPosition('garbage'): expected message='invalid_params', got {msg!r}")
+        time.sleep(0.3)
+        drain_buf(buf)
+
+        # ── 7d: Restore original position ──
+        status(f"  (7d) Restoring to {cur_vlv}")
+        rsp_restore = send_and_expect(ser, buf, "valve.setPosition", cmd_id=9,
+                                      params={"position": cur_vlv},
+                                      expect_keys=["position"])
+        if rsp_restore and validate_spec_response(rsp_restore, 9, ["position"]):
+            pass_msg(f"valve.setPosition({cur_vlv}): response conforms to spec format")
+        elif rsp_restore:
+            fail_msg(f"valve.setPosition({cur_vlv}): response spec format violation")
+
+        time.sleep(0.3)
+        if wait_for_valve_position(buf, cur_vlv, timeout_s=5):
+            pass_msg(f"valve.setPosition({cur_vlv}): broadcast confirmed vlv={cur_vlv}")
+        else:
+            fail_msg(f"valve.setPosition({cur_vlv}): broadcast did not show vlv={cur_vlv} in 5s")
+
+        time.sleep(0.3)
+        drain_buf(buf)
+
+    # ── Step 8: Collect + validate broadcast messages ─────────────
     status(f"\n=== Broadcast collection ({BROADCAST_COLLECT_S}s) ===")
     time.sleep(1)
     drain_buf(buf)
