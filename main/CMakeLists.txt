@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp" "version.cpp"
+    SRCS "main.cpp" "version.cpp" "gpio_config.cpp" "log_capture.cpp" "net_owner.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         diag

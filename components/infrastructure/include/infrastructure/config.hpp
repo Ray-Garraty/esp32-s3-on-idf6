@@ -101,12 +101,29 @@ inline constexpr int32_t MIN_STEPS_THRESHOLD = 10;
 inline constexpr float   RINSE_DEFAULT_SPEED_ML_MIN = 50.0f;
 inline constexpr float   FILL_DEFAULT_SPEED_ML_MIN = 20.0f;
 inline constexpr uint8_t MAX_CAL_SEQ_POINTS = 3;
+inline constexpr uint8_t MAX_STORED_RESULTS = 3;
+inline constexpr uint32_t MOTOR_MIN_DRAM = 8192;
+inline constexpr uint8_t  MOTOR_CMD_QUEUE_LEN = 4;
+inline constexpr uint32_t MOTOR_POLL_MS = 100;
+inline constexpr uint32_t STOP_SETTLE_MS = 50;
+inline constexpr uint32_t DIR_SETUP_MS = 1;
+inline constexpr uint32_t VALVE_SETTLE_MS = 50;
+
+// ── Memory safety margins ────────────────────────────────────────
+inline constexpr uint32_t DRAM_SAFETY_MARGIN = 4096;
+
+// ── Task timing ──────────────────────────────────────────────────
+inline constexpr uint32_t NET_OWNER_POLL_MS = 100;
 
 // ── ADC ──────────────────────────────────────────────────────────
 inline constexpr int ADC_UNIT = 0;          // ADC_UNIT_1
 inline constexpr int ADC_CHANNEL = 3;       // ADC_CHANNEL_3
 
+// ── Display constants ─────────────────────────────────────────────
+inline constexpr float BROADCAST_SPEED_WHEN_MOVING_ML_MIN = 10.0f;
+
 // ── FfiGuard boundary IDs ───────────────────────────────────────
 inline constexpr uint16_t FFI_BOOT_SEQUENCE = 50;
+inline constexpr uint16_t FFI_HOMING = 30;
 
 } // namespace ecotiter::config

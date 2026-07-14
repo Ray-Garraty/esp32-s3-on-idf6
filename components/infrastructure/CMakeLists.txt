@@ -8,7 +8,10 @@ idf_component_register(
         "src/drivers/adc.cpp"
         "src/drivers/onewire.cpp"
         "src/storage/nvs.cpp"
-        "src/motor_task.cpp"
+        "src/motor/task.cpp"
+        "src/motor/motion.cpp"
+        "src/motor/sm_runners.cpp"
+        "src/motor/homing.cpp"
         "src/temp_thread.cpp"
         "network/src/ble.cpp"
         "network/src/ble_notify_thread.cpp"
@@ -17,6 +20,8 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
         "network/include"
+    PRIV_INCLUDE_DIRS
+        "src/motor"
     REQUIRES
         domain
         diag

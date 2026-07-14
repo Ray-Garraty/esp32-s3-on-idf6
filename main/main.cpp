@@ -39,6 +39,10 @@
 #include "domain/calibration.hpp"
 #include "domain/log_buffer.hpp"
 
+#include "gpio_config.hpp"
+#include "log_capture.hpp"
+#include "net_owner.hpp"
+
 using namespace ecotiter;
 
 // Manual JSON id extractor — avoids nlohmann dependency in main.cpp
@@ -64,34 +68,12 @@ static void logDramBeforeTask(const char* name, size_t stackSize)
     auto largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     ESP_LOGI(TAG, "Creating %s, stack=%lu, largest_free=%lu", name, (unsigned long)stackSize,
              (unsigned long)largest);
-    if (largest < stackSize + 4096)
+    if (largest < stackSize + config::DRAM_SAFETY_MARGIN)
     {
         ESP_LOGW(TAG, "DRAM pressure! Largest free block %lu < needed %lu", (unsigned long)largest,
-                 (unsigned long)(stackSize + 4096));
+                 (unsigned long)(stackSize + config::DRAM_SAFETY_MARGIN));
     }
 }
-
-// Struct for passing parameters to net_owner task
-struct NetTaskParams {
-    ecotiter::infrastructure::network::BleManager* bleManager;
-};
-
-// Global pointer for WebSocket broadcast — set by net_owner task after init
-// Must be atomic for cross-task visibility (GR-1: no blocking, no mutex)
-namespace { std::atomic<ecotiter::infrastructure::network::HttpServer*> gHttpServerForWs{nullptr}; }
-
-// ws_send_queue: log_worker pushes JSON, net_owner drains and broadcasts via WebSocket
-struct WsSendEntry {
-    char data[config::WS_BUF_SIZE];
-    size_t len;
-};
-static QueueHandle_t gWsSendQueue = nullptr;
-
-struct WsBroadcastEntry {
-    char data[ecotiter::domain::memory::MAX_RSP_SIZE];
-    size_t len;
-};
-static QueueHandle_t gWsBroadcastQueue = nullptr;
 
 // ADC driver pointer for temp_thread — set in app_main after AdcDriver creation
 using ecotiter::infrastructure::drivers::gAdcDriver;
@@ -102,214 +84,6 @@ static uint16_t adcSampleRead() {
         if (raw) return *raw;
     }
     return 0;
-}
-
-// ── ESP_LOG capture → LogBuffer ───────────────────────────────────
-static int logVprintf(const char* fmt, va_list args) {
-    char buf[config::WS_BUF_SIZE];
-    int n = std::vsnprintf(buf, sizeof(buf), fmt, args);
-    if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
-        const char* level = "INFO";
-        if (buf[0] == 'W' && buf[1] == ' ') level = "WARN";
-        else if (buf[0] == 'E' && buf[1] == ' ') level = "ERROR";
-        else if (buf[0] == 'D' && buf[1] == ' ') level = "DEBUG";
-        uint32_t ts = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        ecotiter::domain::LogBuffer::instance().push(ts, level, buf);
-    }
-    // LL-026: use fwrite/fflush instead of uart_write_bytes — the UART driver
-    // (esp_driver_uart) is not installed at the time ESP_LOGI is first called
-    // from app_main. uart_write_bytes requires uart_driver_install(), while
-    // fwrite/fflush uses the VFS layer with uart_tx_chars (HAL, no driver needed).
-    if (n > 0) {
-        fwrite(buf, 1, static_cast<size_t>(n), stdout);
-        fflush(stdout);
-    }
-    return n;
-}
-
-// WebSocket log push callback — formats JSON and pushes to ws_send_queue
-// net_owner drains the queue and calls broadcastWsEvent (GR-14)
-static void wsLogCallback(const ecotiter::domain::LogEntry& entry) {
-    char buf[config::WS_BUF_SIZE];
-    int n = std::snprintf(buf, sizeof(buf),
-        R"({"event":"log","data":{"level":"%s","msg":")", entry.level);
-
-    const char* src = entry.message;
-    while (*src && static_cast<size_t>(n) < sizeof(buf) - 6) {
-        if (*src == '"') { buf[n++] = '\''; }
-        else if (*src == '\\') { buf[n++] = '/'; }
-        else if (*src == '\n') { buf[n++] = '\\'; buf[n++] = 'n'; }
-        else if (*src == '\r') { buf[n++] = '\\'; buf[n++] = 'r'; }
-        else if (*src == '\t') { buf[n++] = '\\'; buf[n++] = 't'; }
-        else { buf[n++] = *src; }
-        ++src;
-    }
-    buf[n] = '\0';
-
-    n = std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n),
-        R"("}})");
-    if (n < 0) return;
-    n = static_cast<int>(std::strlen(buf));
-    if (n <= 0) return;
-
-    WsSendEntry wsEntry;
-    size_t copyLen = static_cast<size_t>(n) > sizeof(wsEntry.data) - 1
-                     ? sizeof(wsEntry.data) - 1
-                     : static_cast<size_t>(n);
-    std::memcpy(wsEntry.data, buf, copyLen);
-    wsEntry.data[copyLen] = '\0';
-    wsEntry.len = copyLen;
-    if (gWsSendQueue) {
-        xQueueSend(gWsSendQueue, &wsEntry, 0);
-    }
-}
-
-// Centralised GPIO init — runs in app_main BEFORE any task creation.
-// All gpio_config/gpio_set_direction calls are here to avoid spinlock
-// deadlock with PHY calibration (LL-031). Drivers only use gpio_set_level
-// and gpio_get_level which do not take gpio_spinlock.
-static void configureGpioPins() {
-    using namespace ecotiter;
-    // DIR pin (GPIO5) — safe
-    gpio_set_direction(config::PIN_DIR, GPIO_MODE_OUTPUT);
-    gpio_set_level(config::PIN_DIR, 0);
-
-    // EN pin (GPIO13) — safe (moved from GPIO27: LL-027 PSRAM D3)
-    gpio_set_direction(config::PIN_EN, GPIO_MODE_OUTPUT);
-    gpio_set_level(config::PIN_EN, 0);  // Active LOW: enable driver
-
-    // VALVE pin (GPIO14)
-    gpio_set_direction(config::PIN_VALVE, GPIO_MODE_OUTPUT);
-    gpio_set_level(config::PIN_VALVE, 0);  // Default: input position
-
-    // FULL endstop (GPIO7) — input with pull-down, pos-edge interrupt
-    gpio_config_t fullConf = {};
-    fullConf.pin_bit_mask = (1ULL << config::PIN_LIMIT_FULL);
-    fullConf.mode = GPIO_MODE_INPUT;
-    fullConf.pull_up_en = GPIO_PULLUP_DISABLE;
-    fullConf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    fullConf.intr_type = GPIO_INTR_POSEDGE;
-    ESP_ERROR_CHECK(gpio_config(&fullConf));
-
-    // EMPTY endstop (GPIO15) — input, floating, pos-edge interrupt
-    gpio_config_t emptyConf = {};
-    emptyConf.pin_bit_mask = (1ULL << config::PIN_LIMIT_EMPTY);
-    emptyConf.mode = GPIO_MODE_INPUT;
-    emptyConf.pull_up_en = GPIO_PULLUP_DISABLE;
-    emptyConf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    emptyConf.intr_type = GPIO_INTR_POSEDGE;
-    ESP_ERROR_CHECK(gpio_config(&emptyConf));
-
-    // DS18B20 (GPIO6) — open-drain with pull-up for OneWire bitbang
-    gpio_config_t dsConf = {};
-    dsConf.pin_bit_mask = (1ULL << config::PIN_DS18B20);
-    dsConf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
-    dsConf.pull_up_en = GPIO_PULLUP_ENABLE;
-    dsConf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    dsConf.intr_type = GPIO_INTR_DISABLE;
-    ESP_ERROR_CHECK(gpio_config(&dsConf));
-
-    // Install ISR service once (for all limit switch pins)
-    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
-}
-
-// GR-3: net_owner thread — WiFi init → HTTP server → BLE init → process loop
-extern "C" void netTaskEntry(void* pvParameters) {
-    auto* params = static_cast<NetTaskParams*>(pvParameters);
-    puts("DBG: netTaskEntry START"); fflush(stdout);
-
-    using namespace ecotiter::infrastructure::network;
-    ecotiter::diag::StackMonitor::instance().registerThread(
-        "net_owner", ecotiter::domain::NET_OWNER_STACK);
-    esp_task_wdt_add(NULL);
-
-    WifiManager wifiManager;
-    auto wifiResult = wifiManager.init();
-    if (!wifiResult) {
-        ESP_LOGE("net_owner", "WiFi init failed");
-        vTaskDelete(nullptr);
-        return;
-    }
-
-    // Try STA first — iterates through saved NVS networks, blocks per slot
-    bool staConnected = wifiManager.tryStartSTA();
-    if (!staConnected) {
-        wifiManager.startAP();
-    }
-
-    // GR-3: HTTP server immediately after WiFi. All tasks independent.
-    HttpServer httpServer;
-    httpServer.setWifiManager(&wifiManager);
-    auto httpResult = httpServer.init();
-    if (httpResult) {
-        httpServer.registerRoutes();
-        gHttpServerForWs.store(&httpServer, std::memory_order_release);
-        ecotiter::domain::LogBuffer::instance().setCallback(wsLogCallback);
-
-        if (staConnected) {
-            ESP_LOGI("net_owner", "HTTP server ready (STA mode)");
-        } else {
-            ESP_LOGI("net_owner", "HTTP server ready on 192.168.4.1:80 (AP mode)");
-        }
-    } else {
-        ESP_LOGW("net_owner", "HTTP server init failed");
-    }
-
-    // GR-3: BLE init after HTTP server — ensures 12KB+ contiguous DRAM is available
-    if (params && params->bleManager) {
-        auto bleResult = params->bleManager->init();
-        if (bleResult) {
-            ESP_LOGI("net_owner", "BLE initialized successfully");
-            startBleNotifyThread(*params->bleManager);
-        } else {
-            ESP_LOGW("net_owner", "BLE init skipped (insufficient heap or HW error)");
-        }
-    }
-
-    // Create ws_send_queue for log_worker → net_owner log forwarding (GR-14)
-    gWsSendQueue = xQueueCreate(config::WS_SEND_QUEUE_DEPTH, sizeof(WsSendEntry));
-    if (gWsSendQueue == nullptr) {
-        ESP_LOGE("net_owner", "Failed to create ws_send_queue");
-    }
-
-    gWsBroadcastQueue = xQueueCreate(config::WS_BROADCAST_QUEUE_DEPTH, sizeof(WsBroadcastEntry));
-    if (gWsBroadcastQueue == nullptr) {
-        ESP_LOGE("net_owner", "Failed to create ws_broadcast_queue");
-    }
-
-    // LL-038: async log worker
-    TaskHandle_t logWorkerHandle = nullptr;
-    xTaskCreate(ecotiter::domain::LogBuffer::workerTaskEntry,
-                "log_worker", ecotiter::domain::LOG_WORKER_STACK / sizeof(configSTACK_DEPTH_TYPE),
-                nullptr, 0, &logWorkerHandle);
-    if (logWorkerHandle != nullptr) {
-        ecotiter::diag::StackMonitor::instance().registerByHandle(
-            logWorkerHandle, "log_worker", ecotiter::domain::LOG_WORKER_STACK);
-    }
-
-    while (true) {
-        esp_task_wdt_reset();
-
-        // Drain ws_send_queue: broadcast log messages via WebSocket (GR-14)
-        auto* hs = gHttpServerForWs.load(std::memory_order_acquire);
-        if (hs) {
-            WsSendEntry wsEntry;
-            while (gWsSendQueue && xQueueReceive(gWsSendQueue, &wsEntry, 0) == pdTRUE) {
-                hs->broadcastWsEvent(wsEntry.data, wsEntry.len);
-            }
-            // Drain ws_broadcast_queue
-            WsBroadcastEntry bcEntry;
-            while (gWsBroadcastQueue && xQueueReceive(gWsBroadcastQueue, &bcEntry, 0) == pdTRUE) {
-                hs->broadcastWsEvent(bcEntry.data, bcEntry.len);
-            }
-        }
-
-        wifiManager.process();
-        if (params && params->bleManager) {
-            params->bleManager->process();
-        }
-        vTaskDelay(pdMS_TO_TICKS(100)); // nosemgrep: art-I-no-vtaskdelay
-    }
 }
 
 extern "C" void app_main(void)
@@ -377,10 +151,6 @@ extern "C" void app_main(void)
     }
 
     // ====== Step 5: RWDT (RTC Watchdog) — ultimate hang protection ======
-    // RWDT runs on RTC slow clock, independent of CPU interrupts.
-    // If ANY task holds a spinlock > 6s (or the system freezes entirely),
-    // RWDT fires → RESET_SYSTEM → reboot with RTCWDT_SYS_RESET in boot log.
-    // Configured BEFORE BLE init so it covers the PHY calibration window too.
     puts("DBG: step 5 - RWDT configured");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::RtcWdt, std::memory_order_release);
@@ -388,18 +158,12 @@ extern "C" void app_main(void)
     diag::gRtcWdt = &rtcWdt;
 
     // ====== Step 6: BLE object construction (init deferred to net_owner) ======
-    // GR-3: BLE init moved to net_owner thread after HTTP server to ensure
-    // 12KB+ contiguous DRAM is available for httpd_start(). The BleManager
-    // object is constructed here so the main loop can access it, but init()
-    // is called from netTaskEntry after WiFi + HTTP.
     puts("DBG: step 6 - BLE object created");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::BleInit, std::memory_order_release);
     infrastructure::network::BleManager bleManager;
 
     // ====== Step 7: GPIO init (all gpio_config/gpio_set_direction) ======
-    // Centralized before any task creation to avoid PHY calibration
-    // gpio_spinlock deadlock (LL-031).
     puts("DBG: step 7 - configureGpioPins");
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::PhyWait, std::memory_order_release);
@@ -409,8 +173,6 @@ extern "C" void app_main(void)
 
     // ====== Step 7b: RGB LED ======
     infrastructure::drivers::RgbLed rgbLed(config::PIN_LED_RGB);
-    // Default to advertising (blue) — LED state machine will converge to correct
-    // state (error red if BLE init fails, connected green if BLE connected, etc.)
     domain::TransportMode currentLedMode = domain::TransportMode::BleAdvertising;
     bool currentLedError = false;
     rgbLed.setTransportMode(currentLedMode, currentLedError);
@@ -450,7 +212,7 @@ extern "C" void app_main(void)
     fflush(stdout);
     domain::gBootProgress.store(domain::BootProgress::NetOwner, std::memory_order_release);
     logDramBeforeTask("net_owner", domain::NET_OWNER_STACK);
-    if (!diag::HeapSnapshot::assertCanAllocate(domain::NET_OWNER_STACK + 4096)) {
+    if (!diag::HeapSnapshot::assertCanAllocate(domain::NET_OWNER_STACK + config::DRAM_SAFETY_MARGIN)) {
         ESP_LOGW(TAG, "Low DRAM before net_owner task creation");
     }
     NetTaskParams netParams{&bleManager};
@@ -507,7 +269,6 @@ extern "C" void app_main(void)
     while (true)
     {
         // Feed RWDT every main loop iteration (10ms).
-        // If ANY task holds a spinlock > 6s, RWDT fires → RESET_SYSTEM.
         rtcWdt.feed();
         esp_task_wdt_reset();
 
@@ -525,8 +286,8 @@ extern "C" void app_main(void)
                 auto brtState = ecotiter::domain::gBuretteState.load(std::memory_order_acquire);
                 bool motorMoving = brtState != ecotiter::domain::BuretteState::Idle;
                 ecotiter::domain::gMotorIsMoving.store(motorMoving, std::memory_order_release);
-                ecotiter::domain::gSpeedMlMin.store(
-                    ecotiter::domain::gSpeed.load(std::memory_order_acquire) > 0 ? 10.0f : 0.0f,
+                    ecotiter::domain::gSpeedMlMin.store(
+                    ecotiter::domain::gSpeed.load(std::memory_order_acquire) > 0 ? config::BROADCAST_SPEED_WHEN_MOVING_ML_MIN : 0.0f,
                     std::memory_order_release);
 
                 ecotiter::interface::BroadcastEvent evt{
@@ -598,25 +359,21 @@ extern "C" void app_main(void)
 
                 if (domain::gUsbHandshakeReceived.load(std::memory_order_acquire))
                 {
-                    // USB active takes priority — LED off
                     newLedMode = domain::TransportMode::UsbActive;
                     newLedError = false;
                 }
                 else if (domain::gBleError.load(std::memory_order_acquire))
                 {
-                    // BLE error — red
                     newLedMode = domain::TransportMode::BleAdvertising;
                     newLedError = true;
                 }
                 else if (bleManager.isConnected())
                 {
-                    // BLE connected — green
                     newLedMode = domain::TransportMode::BleConnected;
                     newLedError = false;
                 }
                 else
                 {
-                    // Advertising (not connected, no error) — blue
                     newLedMode = domain::TransportMode::BleAdvertising;
                     newLedError = false;
                 }
@@ -748,4 +505,3 @@ extern "C" void app_main(void)
         vTaskDelayUntil(&lastWake, PACING_TICK);
     }
 }
-
