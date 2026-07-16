@@ -38,7 +38,9 @@ void run_temp_loop() {
             } else {
                 ecotiter::domain::gTempCX100.store(-99999,
                     std::memory_order_release);
-                ESP_LOGW(TAG, "Temperature read failed, sentinel stored");
+                static int failCount = 0;
+                if (failCount++ % 60 == 0)
+                    ESP_LOGW(TAG, "Temperature read failed, sentinel stored");
             }
 
             // Also sample ADC every iteration (1000ms)

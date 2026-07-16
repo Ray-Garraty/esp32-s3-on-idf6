@@ -92,7 +92,7 @@ std::array<uint8_t, 9> OneWireBus::readScratchpad() {
 
 std::optional<float> readSensor(OneWireBus& bus) { // NOLINT(readability-function-cognitive-complexity) // reason: DS18B20 protocol: reset -> convert -> read scratchpad
     if (!bus.reset()) {
-        ESP_LOGW(TAG, "DS18B20 not detected (no presence pulse)");
+        ESP_LOGD(TAG, "DS18B20 not detected (no presence pulse)");
         gTempCX100.store(std::numeric_limits<int32_t>::min(), std::memory_order_relaxed);
         return std::nullopt;
     }
