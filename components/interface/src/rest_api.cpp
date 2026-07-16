@@ -70,56 +70,6 @@ std::expected<size_t, int> handleCommandCore(
     return *serialized;
 }
 
-std::expected<size_t, int> handleValveGetCore(
-    domain::memory::ResponseBuffer& buf) {
-    auto pos = domain::gValvePosition.load(std::memory_order_acquire);
-    const char* s = (pos == domain::ValvePosition::Input) ? "input" : "output";
-    int n = std::snprintf(buf.data(), buf.size(),
-        R"({"valve":"%s"})", s);
-    if (n < 0) return std::unexpected(500);
-    return static_cast<size_t>(n);
-}
-
-std::expected<size_t, int> handleValvePostCore(
-    std::string_view body,
-    domain::memory::ResponseBuffer& buf) {
-    auto j = nlohmann::json::parse(body, nullptr, false);
-    if (j.is_discarded()) {
-        int n = std::snprintf(buf.data(), buf.size(),
-            R"({"error":"invalid_json"})");
-        if (n < 0) return std::unexpected(500);
-        return std::unexpected(400);
-    }
-
-    auto it = j.find("position");
-    if (it == j.end() || !it->is_string()) {
-        int n = std::snprintf(buf.data(), buf.size(),
-            R"({"error":"missing_position"})");
-        if (n < 0) return std::unexpected(500);
-        return std::unexpected(400);
-    }
-
-    std::string posStr = it->get<std::string>();
-    domain::ValvePosition pos;
-    if (posStr == "input") {
-        pos = domain::ValvePosition::Input;
-    } else if (posStr == "output") {
-        pos = domain::ValvePosition::Output;
-    } else {
-        int n = std::snprintf(buf.data(), buf.size(),
-            R"({"error":"invalid_position"})");
-        if (n < 0) return std::unexpected(500);
-        return std::unexpected(400);
-    }
-
-    domain::gValvePosition.store(pos, std::memory_order_release);
-
-    int n = std::snprintf(buf.data(), buf.size(),
-        R"({"valve":"%s"})", posStr.c_str());
-    if (n < 0) return std::unexpected(500);
-    return static_cast<size_t>(n);
-}
-
 } // namespace ecotiter::interface
 
 // ---------------------------------------------------------------------------
@@ -239,7 +189,8 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req) {
 
 esp_err_t ecotiter::interface::valve_get_handler(httpd_req_t* req) {
     domain::memory::ResponseBuffer buf{};
-    auto result = handleValveGetCore(buf);
+    auto result = handleCommandCore(
+        R"({"cmd":"valve.getState"})", buf);
     if (!result) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "internal error");
         return ESP_FAIL;
@@ -261,9 +212,42 @@ esp_err_t ecotiter::interface::valve_post_handler(httpd_req_t* req) {
     }
     bodyLen = static_cast<size_t>(ret);
 
+    auto j = nlohmann::json::parse(body.data(), body.data() + bodyLen, nullptr, false);
+    if (j.is_discarded()) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, R"({"status":"error","message":"invalid_json"})",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    auto it = j.find("position");
+    if (it == j.end() || !it->is_string()) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, R"({"status":"error","message":"missing_position"})",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    std::string posStr = it->get<std::string>();
+    if (posStr != "input" && posStr != "output") {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_send(req, R"({"status":"error","message":"invalid_position"})",
+                        HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    domain::memory::CommandBuffer cmdBuf{};
+    int n = std::snprintf(cmdBuf.data(), cmdBuf.size(),
+        R"({"cmd":"valve.setPosition","position":"%s"})", posStr.c_str());
+    if (n < 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "internal error");
+        return ESP_FAIL;
+    }
+
     domain::memory::ResponseBuffer rspBuf{};
-    auto result = handleValvePostCore(
-        std::string_view(body.data(), bodyLen), rspBuf);
+    auto result = handleCommandCore(
+        std::string_view(cmdBuf.data(), static_cast<size_t>(n)), rspBuf);
     if (!result) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_status(req, "400 Bad Request");

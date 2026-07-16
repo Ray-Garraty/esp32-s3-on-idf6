@@ -22,8 +22,7 @@ enum class MotorCommandType : uint8_t {
     StartRinse,
     StartCalDose,
     StartCalSpeed,
-    StartCalSpeedSeq,
-    SetValve
+    StartCalSpeedSeq
 };
 
 struct StartRinseParams {
@@ -51,7 +50,6 @@ struct MotorCommand {
     domain::Direction direction;
     uint32_t speedHz;
     uint32_t accelHzPerS;
-    domain::ValvePosition valvePos;
     StartRinseParams startRinse;
     StartCalDoseParams startCalDose;
     StartCalSpeedParams startCalSpeed;

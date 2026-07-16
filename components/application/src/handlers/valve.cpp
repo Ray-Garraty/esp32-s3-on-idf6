@@ -5,7 +5,10 @@
 
 #include "application/command.hpp"
 #include "domain/memory.hpp"
-#include "infrastructure/motor_task.hpp"
+#include "domain/types.hpp"
+#include "freertos/FreeRTOS.h"
+#include "infrastructure/config.hpp"
+#include "infrastructure/drivers/valve.hpp"
 
 namespace ecotiter::application::handlers::valve {
 
@@ -14,13 +17,9 @@ std::expected<CommandResponse, domain::AppError> handleSetPosition(
   if (!pos) {
     return makeErrorResponse("invalid_params");
   }
-  infrastructure::MotorCommand cmd{};
-  cmd.type = infrastructure::MotorCommandType::SetValve;
-  cmd.valvePos = *pos;
-  if (infrastructure::gMotorCmdQueue == nullptr ||
-      xQueueSend(infrastructure::gMotorCmdQueue, &cmd, 0) != pdTRUE) {
-    return makeErrorResponse("start_failed");
-  }
+  infrastructure::drivers::gValve.setPosition(*pos);
+  domain::gValvePosition.store(*pos, std::memory_order_release);
+  vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
   const char* posStr = (*pos == domain::ValvePosition::Input) ? "input" : "output";
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;

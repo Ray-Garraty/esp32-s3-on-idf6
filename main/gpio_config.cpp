@@ -15,10 +15,6 @@ void configureGpioPins() {
     gpio_set_direction(config::PIN_EN, GPIO_MODE_OUTPUT);
     gpio_set_level(config::PIN_EN, 0);  // Active LOW: enable driver
 
-    // VALVE pin (GPIO14)
-    gpio_set_direction(config::PIN_VALVE, GPIO_MODE_OUTPUT);
-    gpio_set_level(config::PIN_VALVE, 0);  // Default: input position
-
     // FULL endstop (GPIO7) — input with pull-down, pos-edge interrupt
     gpio_config_t fullConf = {};
     fullConf.pin_bit_mask = (1ULL << config::PIN_LIMIT_FULL);

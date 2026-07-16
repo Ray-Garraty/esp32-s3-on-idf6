@@ -1,6 +1,9 @@
 #include "infrastructure/drivers/valve.hpp"
+#include "infrastructure/config.hpp"
 
 namespace ecotiter::infrastructure::drivers {
+
+Valve gValve(config::PIN_VALVE);
 
 Valve::Valve(gpio_num_t pin)
     : pin_(pin) {

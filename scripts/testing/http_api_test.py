@@ -38,7 +38,7 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
-from utils.log_utils import sanitize_line
+from utils.log_utils import sanitize_line, write_sanitized
 from boot_detect import BootDetector, BOOT_OK_MARKER
 
 SERIAL_BAUD = 115200
@@ -137,9 +137,37 @@ def try_parse_json(raw: str) -> dict | None:
         return None
 
 
+# ── Serial reader ────────────────────────────────────────────────────
+
+def serial_reader_thread(ser, stop_event: threading.Event,
+                         slog_file) -> None:
+    """Background serial reader — logs all lines to slog_file."""
+    partial = b""
+    boot_detector = BootDetector()
+    while not stop_event.is_set():
+        try:
+            if ser.in_waiting:
+                data = ser.read(ser.in_waiting)
+                partial += data
+                while b"\n" in partial:
+                    line, partial = partial.split(b"\n", 1)
+                    line_str = line.decode("utf-8", errors="replace").strip("\r")
+                    if line_str:
+                        write_sanitized(slog_file, line_str)
+                        boot_detector.add_line(line_str)
+            else:
+                time.sleep(0.005)
+        except serial.SerialException:
+            break
+    if boot_detector.reboot_detected:
+        log(f"WARNING: ESP32-S3 reboot detected during HTTP test "
+            f"(BOOT OK: seen {boot_detector.count} times)")
+
+
 # ── IP discovery from serial ─────────────────────────────────────────
 
-def find_ip_from_serial(port: str | None = None) -> str | None:
+def find_ip_from_serial(port: str | None = None,
+                        keep_open: bool = False) -> str | tuple | None:
     """Read serial output until we see an IP address."""
     if pyserial is None:
         return None
@@ -190,6 +218,8 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
                 ip = m.group(1)
                 for out in dedup.flush():
                     log(f"  {out}")
+                if keep_open:
+                    return ip, ser
                 ser.close()
                 status(f"Device STA IP: {ip}")
                 return ip
@@ -203,6 +233,8 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
                 elif ip != "0.0.0.0" and not ip.startswith("0."):
                     for out in dedup.flush():
                         log(f"  {out}")
+                    if keep_open:
+                        return ip, ser
                     ser.close()
                     status(f"Device IP: {ip}")
                     return ip
@@ -213,6 +245,8 @@ def find_ip_from_serial(port: str | None = None) -> str | None:
         log(f"  {out}")
     if detector.reboot_detected:
         log(f"  WARNING: ESP32-S3 reboot detected (BOOT OK: seen {detector.count} times)")
+    if keep_open:
+        return None, ser
     ser.close()
     if fallback_ap:
         status("")
@@ -512,10 +546,26 @@ def main() -> int:
     args = parse_args()
     base_url = args.ip
 
+    serial_stop = threading.Event()
+    serial_thread = None
+    slog_file = None
+    ser_for_log = None
+
     if not base_url:
         status("Auto-detecting device IP from serial...")
-        base_url = find_ip_from_serial(args.port)
-        if not base_url:
+        result = find_ip_from_serial(args.port, keep_open=True)
+        if isinstance(result, tuple):
+            base_url, ser_for_log = result
+            if not base_url:
+                status("ERROR: Could not determine device IP. Use --ip 192.168.x.x")
+                try:
+                    ser_for_log.close()
+                except Exception:
+                    pass
+                return 1
+        elif result:
+            base_url = result
+        else:
             status("ERROR: Could not determine device IP. Use --ip 192.168.x.x")
             return 1
 
@@ -530,6 +580,21 @@ def main() -> int:
     log_file.flush()
     status(f"Log: {log_path}")
     status(f"Target: http://{base_url}")
+
+    # Start background serial reader if we have an open port
+    if ser_for_log:
+        slog_path = log_dir / f"http_serial_{ts}.log"
+        slog_file = open(slog_path, "w", encoding="utf-8")
+        slog_file.write(f"HTTP API serial log — {ts}\n")
+        slog_file.write(f"Target: http://{base_url}\n")
+        slog_file.write("=" * 60 + "\n")
+        slog_file.flush()
+        serial_thread = threading.Thread(
+            target=serial_reader_thread,
+            args=(ser_for_log, serial_stop, slog_file), daemon=True
+        )
+        serial_thread.start()
+        status(f"Serial log: {slog_path}")
 
     # ── REST endpoint tests ───────────────────────────────────────
 
@@ -548,7 +613,8 @@ def main() -> int:
     run_http_test(base_url, "GET /api/valve", "GET", "/api/valve",
                   expect_fn=lambda r: (
                       (j := try_parse_json(r)) is not None
-                      and j.get("valve") in ("input", "output")
+                      and j.get("status") == "ok"
+                      and j.get("data", {}).get("position") in ("input", "output")
                   ))
 
     # 4. POST /api/valve (set output)
@@ -556,7 +622,8 @@ def main() -> int:
                   body={"position": "output"},
                   expect_fn=lambda r: (
                       (j := try_parse_json(r)) is not None
-                      and j.get("valve") == "output"
+                      and j.get("status") == "ok"
+                      and j.get("data", {}).get("position") == "output"
                   ))
 
     # 5. POST /api/valve (restore input)
@@ -564,7 +631,8 @@ def main() -> int:
                   body={"position": "input"},
                   expect_fn=lambda r: (
                       (j := try_parse_json(r)) is not None
-                      and j.get("valve") == "input"
+                      and j.get("status") == "ok"
+                      and j.get("data", {}).get("position") == "input"
                   ))
 
     # 6. GET /api/logs
@@ -644,6 +712,18 @@ def main() -> int:
         status("ALL CHECKS PASSED")
     else:
         status("SOME CHECKS FAILED")
+
+    # ── Serial reader cleanup ──────────────────────────────────────
+    serial_stop.set()
+    if serial_thread:
+        serial_thread.join(timeout=3)
+    if slog_file:
+        slog_file.close()
+    if ser_for_log:
+        try:
+            ser_for_log.close()
+        except Exception:
+            pass
 
     if log_file:
         log_file.write("=" * 60 + "\n")

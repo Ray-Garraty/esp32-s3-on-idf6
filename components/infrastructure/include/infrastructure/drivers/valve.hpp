@@ -25,4 +25,6 @@ private:
     domain::ValvePosition position_{domain::ValvePosition::Input};
 };
 
+extern Valve gValve;
+
 } // namespace ecotiter::infrastructure::drivers

@@ -45,7 +45,11 @@ public:
     void addSession(int fd);
     void removeSession(int fd);
 
-    static constexpr size_t STACK_SIZE = 12288;
+    // Increased from 12288 to 16384 after investigation confirmed
+    // POST /api/valve handler chain uses ~10588 bytes of stack,
+    // leaving only 1700 bytes before the deepest call (handleSetPosition),
+    // causing stack overflow into FreeRTOS scheduler data (LL-050).
+    static constexpr size_t STACK_SIZE = 16384;
 
 private:
     httpd_handle_t handle_{nullptr};

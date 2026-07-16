@@ -10,6 +10,7 @@
 
 #include "infrastructure/config.hpp"
 #include "infrastructure/drivers/stepper.hpp"
+#include "infrastructure/drivers/valve.hpp"
 #include "domain/types.hpp"
 #include "domain/calibration.hpp"
 #include "domain/errors.hpp"
@@ -26,7 +27,7 @@ using domain::BuretteState;
 using domain::ValvePosition;
 
 void set_valve(ValvePosition pos) {
-    gpio_set_level(config::PIN_VALVE, (pos == ValvePosition::Output) ? 1 : 0);
+    drivers::gValve.setPosition(pos);
     domain::gValvePosition.store(pos, std::memory_order_release);
 }
 
@@ -72,6 +73,7 @@ void move_to_endstop(StepperMotor& stepper, Direction dir,
 void move_fill(StepperMotor& stepper, uint32_t speedHz) {
     ESP_LOGI("motor_task", "fill: valve=INPUT, dir=LIQ_IN");
     set_valve(ValvePosition::Input);
+    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
     domain::gBuretteState.store(BuretteState::Filling, std::memory_order_release);
     move_to_endstop(stepper, Direction::LiqIn, speedHz, domain::gStopFull);
 }
@@ -79,6 +81,7 @@ void move_fill(StepperMotor& stepper, uint32_t speedHz) {
 void move_empty(StepperMotor& stepper, uint32_t speedHz) {
     ESP_LOGI("motor_task", "empty: valve=OUTPUT, dir=LIQ_OUT");
     set_valve(ValvePosition::Output);
+    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
     domain::gBuretteState.store(BuretteState::Emptying, std::memory_order_release);
     move_to_endstop(stepper, Direction::LiqOut, speedHz, domain::gStopEmpty);
 }

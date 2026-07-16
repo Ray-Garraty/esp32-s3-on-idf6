@@ -79,7 +79,8 @@ inline constexpr size_t NET_OWNER_STACK = 20480;
 inline constexpr size_t LOG_WORKER_STACK = 12288;
 inline constexpr size_t TEMP_THREAD_STACK = 16384;
 inline constexpr size_t BLE_NOTIFY_STACK = 8192;
-inline constexpr size_t HTTP_SERVER_STACK = 12288;
+// Matches HttpServer::STACK_SIZE (both must be kept in sync)
+inline constexpr size_t HTTP_SERVER_STACK = 16384;
 
 // Default runtime values
 inline constexpr uint32_t DEFAULT_SPEED_HZ = 1000;
