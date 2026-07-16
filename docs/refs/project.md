@@ -189,7 +189,7 @@ HTTP SERVER (FreeRTOS internal, `domain::HTTP_SERVER_STACK`):
 
 ### Stack budgets
 
-См. [memory_spec.md §5.4](../refs/memory_spec.md#54-task-stack-budgets) для полной таблицы бюджетов, headroom deficits, call chain analysis и measurement methodology.
+See [memory_spec.md §5.4](../refs/memory_spec.md#54-task-stack-budgets) for the full budget table, headroom deficits, call chain analysis, and measurement methodology.
 
 ## Task Independence Principle (CRITICAL)
 

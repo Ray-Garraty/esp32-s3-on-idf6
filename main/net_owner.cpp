@@ -107,7 +107,7 @@ extern "C" void netTaskEntry(void* pvParameters) { // NOLINT(readability-functio
                 hs->broadcastWsEvent(wsEntry.data, wsEntry.len);
             }
             // Drain ws_broadcast_queue
-            WsBroadcastEntry bcEntry;
+            static WsBroadcastEntry bcEntry;
             while (gWsBroadcastQueue && xQueueReceive(gWsBroadcastQueue, &bcEntry, 0) == pdTRUE) {
                 hs->broadcastWsEvent(bcEntry.data, bcEntry.len);
             }

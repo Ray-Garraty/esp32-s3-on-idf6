@@ -1,7 +1,7 @@
 ---
 type: Known Issue
 title: No systematic task stack sizing process — sizes determined reactively after crashes
-description: "All 6 task stack sizes were bumped reactively after stack overflow crashes. No proactive measurement, no documented budgets, no CI gate. StackMonitor gaps leave tasks untracked. ~17 ResponseBuffer (2048 B each) allocated on stack across codebase. Phase 1 done 2026-07-16: MAX_THREADS 8->16, periodic watermarks in log_worker (60s), panic-safe dump in crash_handler, log_worker stack 12K->16K. Phase 2 done 2026-07-16: 11 of 13 HTTP server ResponseBuffers migrated to PsramBuffer (22 KB off stack). Phase 3 done 2026-07-16: Full stack budget table documented in memory_spec.md §5.4 with call chain analysis and headroom deficits. Phase 4 done 2026-07-16: check_watermarks.py CI gate integrated into pre_commit.sh --fast."
+description: "All 6 task stack sizes were bumped reactively after stack overflow crashes. No proactive measurement, no documented budgets, no CI gate. StackMonitor gaps leave tasks untracked. ~17 ResponseBuffer (2048 B each) allocated on stack across codebase. Phase 1 done 2026-07-16: MAX_THREADS 8->16, periodic watermarks in log_worker (60s), panic-safe dump in crash_handler, log_worker stack 12K->16K. Phase 2 done 2026-07-16: 11 of 13 HTTP server ResponseBuffers migrated to PsramBuffer (22 KB off stack). Phase 3 done 2026-07-16: Full stack budget table documented in memory_spec.md §5.4 with call chain analysis and headroom deficits. Phase 4 done 2026-07-16: check_watermarks.py CI gate integrated into pre_commit.sh --fast. Phase 5 done 2026-07-16: GR-15 in AGENTS.md, stack checklist in coding_style.md, PR template with Stack impact section."
 tags: [stack, architecture, process, diagnostic]
 timestamp: 2026-07-16
 status: active
@@ -47,7 +47,7 @@ Every task stack size in this firmware was determined reactively: write code →
 
    **(Phase 2: 11 of 13 HTTP server instances migrated to PsramBuffer (PSRAM heap). 2 init-only instances left as-is. CommandResponse::body investigated — BLE notify does NOT use it on stack, skipped.)**
 
-7. **No formal process for stack impact review.** When adding or modifying code that runs in a task context, there is no requirement to measure watermark impact or update the task's budget.
+7. **No formal process for stack impact review.** When adding or modifying code that runs in a task context, there is no requirement to measure watermark impact or update the task's budget. **(Fixed in Phase 5 — GR-15 in AGENTS.md, stack checklist in coding_style.md §13, PR template with Stack impact section)**
 
 ### ResponseBuffer usage audit (updated 2026-07-16 — Phase 2 complete)
 
@@ -285,47 +285,32 @@ Integrated into `pre_commit.sh --fast` as step 5.5 (after unit tests, before doc
 
 ### Phase 5 — Process enforcement
 
+**Status:** Done (2026-07-16)
+
 **Goal:** Stack impact is considered in every code review. Blind stack increases are forbidden.
 
-| Step | File | Change |
-|------|------|--------|
-| 5.1 | `AGENTS.md` | Add hard rule: "Never blindly increase stack size" |
-| 5.2 | `docs/refs/coding_style.md` §13 Pre-Merge Checklist | Add stack impact items |
-| 5.3 | `.github/PULL_REQUEST_TEMPLATE.md` | Add Stack impact section |
+**Completed:**
 
-**5.1 AGENTS.md rule (add to Core Directives):**
+| Step | File | Change | Status |
+|------|------|--------|--------|
+| 5.1 | `AGENTS.md` | Added GR-15: "Never blindly increase stack size" after GR-14 | ✅ Done |
+| 5.2 | `docs/refs/coding_style.md` §13 | Added **Stack** subsection with 3 checklist items | ✅ Done |
+| 5.3 | `.github/PULL_REQUEST_TEMPLATE.md` | Created with Stack impact section | ✅ Done |
 
-```markdown
-### GR-NEW: NEVER BLINDLY INCREASE STACK SIZE
-When a stack overflow is detected:
-1. DO NOT double the stack size.
-2. Analyze the call chain for hidden allocations (std::string, json, large arrays).
-3. Move heavy objects to PSRAM via PsramBuffer or PMR allocator.
-4. Increase stack only if mathematically proven necessary, and update budget table in memory_spec.md §5.4.
-```
-
-**5.2 coding_style.md §13 Pre-Merge Checklist additions:**
-
-```markdown
-- [ ] Stack impact: If this change adds frames to an existing task, measured watermark before/after
-- [ ] Stack budget: If this change adds a new task, registered with StackMonitor and budget in project.md
-- [ ] Buffer placement: No buffers >512 B on stack without justification (use PsramBuffer/heap)
-```
-
-**5.3 PR template:**
-
-```
-## Stack impact
-- Task affected: {name} ({stack_size} B)
-- Watermark before: {n} B ({pct}% used)
-- Watermark after: {n} B ({pct}% used)
-- Headroom: {n} B ({pct}%) — OK (≥25%) / **BELOW THRESHOLD**
-```
+Additionally:
+- `AGENTS.md` §3.1: `30s monitor` → `70s monitor` in smoke command
+- `AGENTS.md` §3.5: `→ stack watermark check` added to `--fast` mode steps
+- `AGENTS.md` Final Commit Checklist: `70s` + stack budget/watermark item
+- `.github/PULL_REQUEST_TEMPLATE.md` created (didn't exist before)
 
 **Acceptance criteria:**
-- AGENTS.md contains the blind-increase rule
-- coding_style.md checklist updated
-- PR template exists with stack impact section
+
+| Criterion | Status | Notes |
+|-----------|--------|-------|
+| AGENTS.md contains blind-increase rule | ✅ | GR-15 with 4-step procedure |
+| coding_style.md checklist updated | ✅ | Stack subsection in §13 (3 items) |
+| PR template exists with stack impact | ✅ | `.github/PULL_REQUEST_TEMPLATE.md` |
+| Smoke test — no regressions | ⏩ Skipped (docs-only change) | — |
 
 ## Risks & mitigations
 
@@ -345,7 +330,7 @@ When a stack overflow is detected:
 | 2 | — | Phase 3 (need accurate watermark after eviction) | Done (~3h inc. 11 PsramBuffer migrations + smoke) | With 1 |
 | 3 | Phase 1, 2 | Phase 4 (need documented budgets to know expected tasks) | Done (~2h inc. call chain analysis + smoke) | After 1+2 |
 | 4 | Phase 1 (periodic logging) | Phase 5 | Done (~1h inc. script + pre-commit integration + smoke) | After 1 |
-| 5 | All prior | — | 1h | After all |
+| 5 | All prior | — | Done (~1h inc. AGENTS.md, coding_style, PR template) | After all |
 
 **Total: ~10-15 hours**
 

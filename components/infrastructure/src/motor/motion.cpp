@@ -47,7 +47,7 @@ void move_to_endstop(StepperMotor& stepper, Direction dir,
     vTaskDelay(pdMS_TO_TICKS(config::DIR_SETUP_MS));
 
     uint32_t intervalUs = 1'000'000 / speedHz;
-    uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
+    static uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
     for (auto& i : intervals) i = intervalUs;
 
     stopFlag.store(false, std::memory_order_release);
@@ -112,7 +112,7 @@ void execute_move_steps(StepperMotor& stepper, int32_t steps) { // NOLINT(readab
 
     uint32_t intervalUs = 1'000'000 / speed;
 
-    uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
+    static uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
     for (size_t i = 0; i < config::RMT_CHUNK_SYMBOLS; ++i) {
         intervals[i] = intervalUs;
     }

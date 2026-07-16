@@ -44,6 +44,13 @@ Git is strictly read-only for all agents unless the user explicitly asks for a c
 - **Forbidden:** `checkout`, `restore`, `switch`, `stash`, `reset`, `merge`, `rebase`, `bisect`, `branch` (create/delete), `push`, `pull`, `fetch`.
 - **Commit:** Allowed ONLY when the user explicitly says "commit" or equivalent. Never commit as part of any automated workflow or because "it seems done".
 
+### GR-15: NEVER BLINDLY INCREASE STACK SIZE
+When a stack overflow is detected:
+1. DO NOT double the stack size.
+2. Analyze the call chain for hidden allocations (std::string, json, large arrays).
+3. Move heavy objects to PSRAM via PsramBuffer or PMR allocator.
+4. Increase stack only if mathematically proven necessary, and update budget table in memory_spec.md §5.4.
+
 ## 2. ARCHITECTURAL REFERENCES
 Agents MUST read and obey `docs/refs/CONSTITUTION.md`. Key pillars:
 1. **Non-Blocking Main Loop** (No `rmt_tx_wait_all_done`, `lock()`, or >10ms delays in main).
@@ -61,7 +68,7 @@ NEVER call `idf.py` directly. Always use `scripts/idf.sh`.
 | `scripts/idf.sh build` | Clean build (auto-removes stale `sdkconfig`) |
 | `scripts/idf.sh flash` | Flash firmware |
 | `scripts/idf.sh monitor` | Serial monitor (live log) |
-| `scripts/idf.sh smoke` | Automated smoke test (build + flash + 30s monitor) |
+| `scripts/idf.sh smoke` | Automated smoke test (build + flash + 70s monitor) |
 | `scripts/idf.sh test` | Host unit tests (Catch2) |
 | `scripts/idf.sh tidy` | clang-tidy static analysis (requires build first) |
 | `scripts/pre_commit.sh` | Pre-commit validation suite (see §3.5) |
@@ -69,7 +76,7 @@ NEVER call `idf.py` directly. Always use `scripts/idf.sh`.
 ### 3.5 Pre-Commit Script
 | Mode | Steps included |
 |---|---|
-| `scripts/pre_commit.sh --fast` | Staged files scan → clang-format → semgrep → unit tests → docs OKF → sdkconfig constraint (~30s) |
+| `scripts/pre_commit.sh --fast` | Staged files scan → clang-format → semgrep → unit tests → docs OKF → sdkconfig constraint → stack watermark check (~30s) |
 | `scripts/pre_commit.sh` (full) | Fast + build + clang-tidy + serial API hardware test (~5 min) |
 
 Each step fails fast with a clear error message. The hardware serial test (step 10) is the only non-fatal step.
@@ -105,7 +112,8 @@ Each step fails fast with a clear error message. The hardware serial test (step 
 ### Final Commit Checklist
 - [ ] `scripts/idf.sh build` — 0 errors, 0 warnings
 - [ ] `scripts/idf.sh test` — all pass
-- [ ] `scripts/idf.sh smoke` — 30s on real ESP32-S3: no Guru Meditation, no WDT panics
+- [ ] `scripts/idf.sh smoke` — 70s on real ESP32-S3: no Guru Meditation, no WDT panics
 - [ ] No blocking ops in main loop (Constitution Art. I)
 - [ ] No cross-task coupling (Constitution Art. II)
 - [ ] `CONFIG_FREERTOS_UNICORE=n` (Constitution Art. III)
+- [ ] Stack budget/watermark checked against memory_spec.md §5.4

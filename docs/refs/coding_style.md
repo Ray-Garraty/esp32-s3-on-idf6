@@ -405,6 +405,11 @@ stepper.moveSteps(STEPS_HOMING, Hz{HOMING_SPEED_HZ});
 - [ ] `scripts/idf.sh tidy` — 0 warnings
 - [ ] `scripts/idf.sh build` — 0 errors, 0 warnings
 
+### Stack
+- [ ] Stack impact: If this change adds frames to an existing task, measured watermark before/after
+- [ ] Stack budget: If this change adds a new task, registered with StackMonitor and budget in memory_spec.md §5.4
+- [ ] Buffer placement: No buffers >512 B on stack without justification (use PsramBuffer/heap)
+
 ## Summary
 
 | Principle | Rule |

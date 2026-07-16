@@ -133,7 +133,7 @@ domain::Result<void, domain::StepperError> StepperMotor::moveStepsIntervals(
             chunkSize = config::RMT_CHUNK_SYMBOLS;
         }
 
-        uint32_t symbols[config::RMT_CHUNK_SYMBOLS];
+        static uint32_t symbols[config::RMT_CHUNK_SYMBOLS];
         for (size_t i = 0; i < chunkSize; ++i) {
             uint32_t interval = intervals[offset + i];
             uint32_t pulseUs = 5;

@@ -6,9 +6,10 @@ description: >
   allocation patterns via PMR, runtime verification, and anti-patterns.
   Covers the DRAM Triangle interaction, DMA constraints, and cache eviction risks.
 tags: [memory, psram, dram, esp32-s3, allocation, heap-caps, pmr]
-timestamp: 2026-07-13
-revision: '1 (post-implementation sync)'
+timestamp: 2026-07-16
+revision: '2 (static buffer migration — net_owner + motor)'
 changelog:
+  - "2026-07-16: Phase 6 — WsBroadcastEntry→static (net_owner 98%→88%), uint32_t[128]→static ×4 (motor 91%→87%). Updated budget table with new watermarks."
   - "2026-07-13: Synced code listings to actual implementation. Key changes: throw→abort, computeRamp defaults, LogBuffer init(), ALLOW_BSS_SEG=n, monitoring→diag/."
 ---
 
@@ -474,13 +475,13 @@ Measured at ~62s after cold boot (first `logAllWatermarks()` from log_worker at 
 |------|-----------|---------------|----------|--------|------------|-------------------|----------------|
 | HTTP server¹ | 16384 | — | — | — | — | `valve_post_handler`→`handleCommandCore`→`dispatch`→`handleSetPosition`→gpio (≈12 frames) | `uint8_t buf[1024]` (ws_handler), `LogEntry entries[50]` (~1600 B), `CommandBuffer body[256]` |
 | Main (`app_main`) | 32768 | 25980 | 6788 | 20% | **80%** ✅ | `sendResponse`→`serializeToBuffer`→`serializeStatusJson` (≈6 frames) | `ResponseBuffer[2048]` ×4 (non-nested) — left as-is per Phase 2, `BroadcastEvent`, `BleCmdItem` |
-| Motor | 16384 | 1460 | 14924 | 91% | **9%** ❌ | `motorTaskEntry`→`run_rinse_sm`→`move_fill`→`set_valve`→`move_to_endstop`→`stepper.moveStepsIntervals`→RMT (≈10 frames) | `uint32_t intervals[128]` (512 B), `MotorCommand` |
-| Temperature | 16384 | 2148 | 14236 | 86% | **14%** ❌ | `tempTaskEntry`→`run_temp_loop`→`readSensor`→OneWire bitbang→`calibratedMv` (≈8 frames) | `OneWireBus`, `FfiGuard` |
-| Net owner | 20480 | 220 | 20260 | 98% | **2%** ❌ | `netTaskEntry`→`wifiManager.init()`→`httpServer.init()`→`httpd_start`→`bleManager.init()`→`startBleNotifyThread` (≈15 frames during init) | `WifiManager`, `HttpServer`, `WsSendEntry`, `WsBroadcastEntry` |
-| Log worker | 16384 | 2140 | 14244 | 86% | **14%** ❌ | `workerTaskEntry`→`xQueueReceive`→callback→`logAllWatermarks`→printf (≈8 frames, 60s) | `LogEntry` (384 B + strings), `WsSendEntry` |
+| Motor | 16384 | 1972 | 14412 | 87% | **13%** ⚠️ | `motorTaskEntry`→`run_rinse_sm`→`move_fill`→`set_valve`→`move_to_endstop`→`stepper.moveStepsIntervals`→RMT (≈10 frames) | ~~`uint32_t intervals[128]` (512 B)~~ → `static` (Phase 6), `MotorCommand` |
+| Temperature | 16384 | 2148 | 14236 | 86% | **14%** ⚠️ | `tempTaskEntry`→`run_temp_loop`→`readSensor`→OneWire bitbang→`calibratedMv` (≈8 frames) | `OneWireBus`, `FfiGuard` |
+| Net owner | 20480 | 2272 | 18208 | 88% | **12%** ⚠️ | `netTaskEntry`→`wifiManager.init()`→`httpServer.init()`→`httpd_start`→`bleManager.init()`→`startBleNotifyThread` (≈15 frames during init) | `WifiManager`, `HttpServer`, ~~`WsBroadcastEntry` (2056 B)~~ → `static` (Phase 6), `WsSendEntry` |
+| Log worker | 16384 | 2140 | 14244 | 86% | **14%** ⚠️ | `workerTaskEntry`→`xQueueReceive`→callback→`logAllWatermarks`→printf (≈8 frames, 60s) | `LogEntry` (384 B + strings), `WsSendEntry` |
 | BLE notify | 8192 | 5272 | 2920 | 35% | **65%** ✅ | `bleNotifyLoop`→`manager->sendNotification`→`ble_gatts_notify` (≈5 frames) | `BleNotifyItem` (~2052 B) |
-| ipc0² | 4096 | 476 | 3620 | 88% | **12%** ❌ | ESP-IDF internal IPC | N/A (ESP-IDF internal) |
-| ipc1² | 4096 | 560 | 3536 | 86% | **14%** ❌ | ESP-IDF internal IPC | N/A (ESP-IDF internal) |
+| ipc0² | 4096 | 476 | 3620 | 88% | **12%** ⚠️ | ESP-IDF internal IPC | N/A (ESP-IDF internal) |
+| ipc1² | 4096 | 560 | 3536 | 86% | **14%** ⚠️ | ESP-IDF internal IPC | N/A (ESP-IDF internal) |
 
 ¹ **HTTP server** is created by `httpd_start()` internally and not registered with StackMonitor. Stack size set via `HttpServer::STACK_SIZE = 16384` in `http_server.hpp:52`. Cannot be measured directly without registration.
 
@@ -494,8 +495,8 @@ Measured at ~62s after cold boot (first `logAllWatermarks()` from log_worker at 
 **Headroom target:** ≥25% (75% usage threshold). Tasks below target:
 | Task | Headroom | Action needed |
 |------|----------|---------------|
-| Motor | 9% | Refactor: move `uint32_t intervals[128]` to heap or increase stack to 24 KB |
-| Net owner | 2% | Init objects (WifiManager, HttpServer, BleManager via params) dominate. Move large init objects to heap or increase stack to 32 KB |
+| Motor | 13% | ~~`uint32_t intervals[128]` (512 B) × 2~~ → ✅ `static` in Phase 6. 4% improvement (91%→87%). Further headroom requires increase to 20 KB or heap allocation |
+| Net owner | 12% | ~~`WsBroadcastEntry` (2056 B)~~ → ✅ `static` in Phase 6. 10% improvement (98%→88%). Further headroom requires moving WifiManager/HttpServer to heap or increase to 24 KB |
 | Temperature | 14% | Refactor: smaller stack acceptable if call chain verified; or increase to 20 KB |
 | Log worker | 14% | Monitor: Phase 1 bumped to 16 KB (was 12 KB at 90%). Acceptable risk for diagnostic task |
 | ipc0/ipc1 | 12-14% | ESP-IDF internal — not user-configurable |

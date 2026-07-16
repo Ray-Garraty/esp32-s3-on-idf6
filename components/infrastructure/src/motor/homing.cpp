@@ -45,7 +45,7 @@ void run_homing(StepperMotor& stepper, LimitSwitch& fullSwitch) { // NOLINT(read
     fullSwitch.clear();
     domain::gStopFull.store(false, std::memory_order_release);
 
-    uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
+    static uint32_t intervals[config::RMT_CHUNK_SYMBOLS];
     for (size_t i = 0; i < config::RMT_CHUNK_SYMBOLS; ++i) {
         intervals[i] = HOME_INTERVAL_US;
     }
