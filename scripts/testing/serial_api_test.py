@@ -36,7 +36,7 @@ except ImportError:
 
 from find_port import find_esp32_port
 from utils.monitor_classifier import DedupTracker
-from utils.log_utils import sanitize_line
+from utils.log_utils import is_broadcast_line, sanitize_line
 from boot_detect import BootDetector, BOOT_OK_MARKER, wait_for_boot as shared_wait_for_boot
 from broadcast_validator import validate_broadcast_format, diagnose_broadcast_intervals
 
@@ -198,13 +198,12 @@ def collect_broadcasts(buf: deque, duration_s: float) -> list[tuple[dict, float]
             line = buf.popleft()
             boot_detector.add_line(line)
             log(f"  broadcast raw: {line}")
-            if line.startswith("{"):
+            if is_broadcast_line(line):
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if "id" not in obj and "cmd" not in obj:
-                    results.append((obj, time.monotonic()))
+                results.append((obj, time.monotonic()))
         time.sleep(0.01)
 
     status(f"Collected {len(results)} broadcast messages in {duration_s}s")
@@ -226,13 +225,11 @@ def read_valve_position_from_broadcast(
         while buf:
             line = buf.popleft()
             boot_detector.add_line(line)
-            if not line.startswith("{"):
+            if not is_broadcast_line(line):
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
-                continue
-            if "id" in obj or "cmd" in obj:
                 continue
             vlv = obj.get("vlv")
             if vlv in ("in", "out"):
@@ -251,13 +248,11 @@ def wait_for_valve_position(
         while buf:
             line = buf.popleft()
             boot_detector.add_line(line)
-            if not line.startswith("{"):
+            if not is_broadcast_line(line):
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
-                continue
-            if "id" in obj or "cmd" in obj:
                 continue
             vlv = obj.get("vlv")
             if vlv == target_vlv:
@@ -304,13 +299,11 @@ def collect_broadcast_vlv_values(buf: deque, duration_s: float) -> list[str]:
         while buf:
             line = buf.popleft()
             boot_detector.add_line(line)
-            if not line.startswith("{"):
+            if not is_broadcast_line(line):
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
-                continue
-            if "id" in obj or "cmd" in obj:
                 continue
             vlv = obj.get("vlv")
             if vlv in ("in", "out", "unk"):

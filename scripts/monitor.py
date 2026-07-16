@@ -14,6 +14,8 @@ Usage:
     python scripts/monitor.py --no-reset             # skip DTR reset
     python scripts/monitor.py --no-log               # terminal only, no file
     python scripts/monitor.py --log-dir /tmp/logs
+    python scripts/monitor.py --broadcast-dir /tmp/broadcasts
+    python scripts/monitor.py --no-broadcast-log     # no broadcast log
 """
 
 import serial
@@ -28,7 +30,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from find_port import find_esp32_port
 from utils.monitor_classifier import SerialClassifier, ResultCode, DedupTracker
 from utils.boot_detect import BootDetector
-from utils.log_utils import sanitize_line
+from utils.log_utils import is_broadcast_line, sanitize_line
 
 BAUDRATE = 115200
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -120,11 +122,19 @@ def make_log_filename(log_dir: str) -> Path:
     return Path(log_dir) / f"serial_{ts}.log"
 
 
+def make_broadcast_filename(log_dir: str) -> Path:
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return Path(log_dir) / f"broadcast_{ts}.log"
+
+
 def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
-                 no_log=False, log_path=None, verbose=False):
+                 no_log=False, log_path=None, verbose=False,
+                 broadcast_dir=None, no_broadcast_log=False):
     classifier = SerialClassifier(max_last_lines=5)
     boot_detector = BootDetector()
     log_file = None
+    broadcast_log_file = None
+    broadcast_log_path = None
     if not no_log:
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +145,17 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
             log_file = log_dir / f"{stem}.log"
             counter += 1
         log_path = log_file
+
+    if not no_log and not no_broadcast_log:
+        bc_dir = Path(broadcast_dir) if broadcast_dir else Path(log_dir)
+        bc_dir.mkdir(parents=True, exist_ok=True)
+        broadcast_log_file = make_broadcast_filename(str(bc_dir))
+        counter = 1
+        while broadcast_log_file.exists():
+            stem = f"broadcast_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{counter}"
+            broadcast_log_file = bc_dir / f"{stem}.log"
+            counter += 1
+        broadcast_log_path = broadcast_log_file
 
     try:
         ser = serial.Serial(
@@ -166,6 +187,22 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
                 except OSError:
                     pass
 
+        def write_broadcast_line(line: str, ts: str):
+            line = sanitize_line(line)
+            prefixed = f"[{ts}] {line}"
+            if verbose:
+                try:
+                    print(prefixed, flush=True)
+                except UnicodeEncodeError:
+                    safe = prefixed.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+                    print(safe, flush=True)
+            if broadcast_log_file is not None:
+                try:
+                    with open(broadcast_log_file, "a", encoding="utf-8") as f:
+                        f.write(prefixed + "\n")
+                except OSError:
+                    pass
+
         writeline(f"=== Connected to ESP32-S3 on {port} @ {BAUDRATE} baud ===", always_visible=True)
 
         if not no_reset:
@@ -186,6 +223,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
 
         if log_file:
             writeline(f"=== Logging to {log_file} ===", always_visible=True)
+        if broadcast_log_file:
+            writeline(f"=== Broadcast log: {broadcast_log_file} ===", always_visible=True)
 
         deadline = time.time() + timeout
         buf = ""
@@ -230,7 +269,10 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
 
                         classifier.add_line(line)
                         boot_detector.add_line(line)
-                        emit(line, timestamp())
+                        if is_broadcast_line(line):
+                            write_broadcast_line(line, timestamp())
+                        else:
+                            emit(line, timestamp())
                 else:
                     time.sleep(0.01)
             except serial.SerialException:
@@ -276,6 +318,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
                     writeline(f"=== Raw core dump base64 saved to {dump_path} ({len(payload)} bytes) ===",
                               always_visible=True)
 
+        if broadcast_log_file and broadcast_log_file.exists() and broadcast_log_file.stat().st_size == 0:
+            broadcast_log_file.unlink()
         if log_file and log_file.exists() and log_file.stat().st_size == 0:
             log_file.unlink()
 
@@ -295,6 +339,8 @@ def monitor_port(port, timeout=30, log_dir=DEFAULT_LOG_DIR, no_reset=False,
     else:
         if log_path and log_path.exists() and log_path.stat().st_size > 0:
             print(f"Log: {log_path}", flush=True)
+        if broadcast_log_path and broadcast_log_path.exists() and broadcast_log_path.stat().st_size > 0:
+            print(f"Broadcast log: {broadcast_log_path}", flush=True)
         print(classifier.result_message(), flush=True)
         return classifier.result()
 
@@ -307,6 +353,8 @@ def main():
     parser.add_argument("--log-dir", default=DEFAULT_LOG_DIR, help="Directory for log files (default: project_root/logs/)")
     parser.add_argument("--no-log", action="store_true", help="Disable log file saving")
     parser.add_argument("--verbose", action="store_true", help="Echo serial output to terminal (default: quiet, log only)")
+    parser.add_argument("--broadcast-dir", default=None, help="Directory for broadcast log (default: same as --log-dir)")
+    parser.add_argument("--no-broadcast-log", action="store_true", help="Disable broadcast log file saving")
     args = parser.parse_args()
 
     port = args.port or find_esp32_port()
@@ -316,7 +364,9 @@ def main():
 
     return monitor_port(port=port, timeout=args.timeout, log_dir=args.log_dir,
                         no_reset=args.no_reset, no_log=args.no_log,
-                        verbose=args.verbose)
+                        verbose=args.verbose,
+                        broadcast_dir=args.broadcast_dir,
+                        no_broadcast_log=args.no_broadcast_log)
 
 
 if __name__ == "__main__":

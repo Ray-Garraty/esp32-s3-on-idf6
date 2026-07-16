@@ -5,6 +5,21 @@ Eliminates binary garbage (null bytes, control characters) from log files.
 All serial-logging code MUST use sanitize_line() before writing to disk.
 """
 
+import re
+
+BROADCAST_RE = re.compile(r'^\{"ts":\d+,"temp":')
+
+
+def is_broadcast_line(line: str) -> bool:
+    """Check if a serial line is a compact broadcast JSON message.
+
+    Matches the unique prefix ``{"ts":<tick>,"temp":`` format produced by
+    ``serializeBroadcastCompact()`` in broadcast.cpp.
+
+    Reusable by monitor.py, integration tests, and serial log processors.
+    """
+    return bool(BROADCAST_RE.match(line))
+
 
 def sanitize_line(line: str) -> str:
     """Remove non-printable characters except common whitespace.
