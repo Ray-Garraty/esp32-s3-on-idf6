@@ -70,7 +70,9 @@ TEST_CASE("handler: rinse with cycles returns AckThen", "[handlers][burette]") {
 TEST_CASE("handler: setDirection liq_in", "[handlers][burette]") {
   auto rsp = burette_ops::handleSetDirection(Direction::LiqIn);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
+  std::string_view sv(rsp->body.data(), rsp->bodySize);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handler: setDirection missing param returns error", "[handlers][burette]") {
@@ -82,13 +84,17 @@ TEST_CASE("handler: setDirection missing param returns error", "[handlers][buret
 TEST_CASE("handler: setSpeed", "[handlers][burette]") {
   auto rsp = burette_ops::handleSetSpeed(1500u);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
+  std::string_view sv(rsp->body.data(), rsp->bodySize);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handler: setAccel", "[handlers][burette]") {
   auto rsp = burette_ops::handleSetAccel(200u);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
+  std::string_view sv(rsp->body.data(), rsp->bodySize);
+  REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
 TEST_CASE("handler: moveSteps", "[handlers][burette]") {

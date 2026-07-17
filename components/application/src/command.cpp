@@ -307,11 +307,10 @@ std::expected<size_t, domain::ProtocolError> serializeToBuffer(
 CommandResponse makeSingleResponse(std::string_view payload, size_t size) {
   CommandResponse rsp;
   rsp.kind = ResponseKind::Single;
-  std::string payloadStr(payload.substr(0, size));
   rsp.bodySize = static_cast<size_t>(
       std::snprintf(rsp.body.data(), rsp.body.size(),
-                    R"({"status":"ok","data":%s})",
-                    payloadStr.c_str()));
+                    R"({"status":"ok","data":%.*s})",
+                    static_cast<int>(size), payload.data()));
   return rsp;
 }
 

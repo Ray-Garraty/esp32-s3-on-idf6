@@ -13,6 +13,8 @@
 
 namespace ecotiter::application::handlers::burette_ops {
 
+static constexpr auto kStatusOk = R"({"status":"ok"})";
+
 std::expected<CommandResponse, domain::AppError> handleFill() {
   auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
   if (!cached) return makeErrorResponse("start_failed");
@@ -227,7 +229,9 @@ std::expected<CommandResponse, domain::AppError> handleSetDirection(
   if (!application::sendMotorCommand(cmd)) {
       return makeErrorResponse("busy");
   }
-  return makeAckThenResponse();
+  return makeSingleResponse(
+      std::string_view(kStatusOk),
+      std::string_view(kStatusOk).size());
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetSpeed(
@@ -242,7 +246,9 @@ std::expected<CommandResponse, domain::AppError> handleSetSpeed(
   if (!application::sendMotorCommand(cmd)) {
       return makeErrorResponse("busy");
   }
-  return makeAckThenResponse();
+  return makeSingleResponse(
+      std::string_view(kStatusOk),
+      std::string_view(kStatusOk).size());
 }
 
 std::expected<CommandResponse, domain::AppError> handleSetAccel(
@@ -257,7 +263,9 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(
   if (!application::sendMotorCommand(cmd)) {
       return makeErrorResponse("busy");
   }
-  return makeAckThenResponse();
+  return makeSingleResponse(
+      std::string_view(kStatusOk),
+      std::string_view(kStatusOk).size());
 }
 
 } // namespace ecotiter::application::handlers::burette_ops

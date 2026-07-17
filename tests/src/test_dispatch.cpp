@@ -84,12 +84,12 @@ TEST_CASE("dispatch: setDirection returns error without param", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: setDirection with param returns AckThen", "[dispatch]") {
+TEST_CASE("dispatch: setDirection with param returns Single", "[dispatch]") {
   Command cmd{CommandType::SetDirection};
   cmd.direction = Direction::LiqIn;
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("dispatch: setSpeed returns error without param", "[dispatch]") {
@@ -99,12 +99,20 @@ TEST_CASE("dispatch: setSpeed returns error without param", "[dispatch]") {
   REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: setSpeed with param returns AckThen", "[dispatch]") {
+TEST_CASE("dispatch: setSpeed with param returns Single", "[dispatch]") {
   Command cmd{CommandType::SetSpeed};
   cmd.speed = 1500;
   auto rsp = dispatch(cmd);
   REQUIRE(rsp);
-  REQUIRE(rsp->kind == ResponseKind::AckThen);
+  REQUIRE(rsp->kind == ResponseKind::Single);
+}
+
+TEST_CASE("dispatch: setAccel with param returns Single", "[dispatch]") {
+  Command cmd{CommandType::SetAccel};
+  cmd.accel = 200;
+  auto rsp = dispatch(cmd);
+  REQUIRE(rsp);
+  REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("dispatch: moveSteps returns error without param", "[dispatch]") {

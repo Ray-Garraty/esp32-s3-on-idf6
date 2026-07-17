@@ -269,8 +269,15 @@ def find_ip_from_serial(port: str | None = None,
 
 # ── WebSocket broadcast collection ───────────────────────────────────
 
-def collect_ws_broadcasts(base_url: str) -> list[tuple[dict, float]]:
-    """Connect to /ws/stream, collect broadcast JSON messages."""
+def collect_ws_broadcasts(base_url: str,
+                          max_wait: float | None = None
+                          ) -> list[tuple[dict, float]]:
+    """Connect to /ws/stream, collect broadcast JSON messages.
+
+    Args:
+        base_url: Device IP or hostname.
+        max_wait: Collection duration in seconds (defaults to WS_COLLECT_S).
+    """
     ws_available = False
     try:
         import asyncio
@@ -286,6 +293,9 @@ def collect_ws_broadcasts(base_url: str) -> list[tuple[dict, float]]:
     if not ws_available:
         return []
 
+    if max_wait is None:
+        max_wait = WS_COLLECT_S
+
     results: list[tuple[dict, float]] = []
 
     async def _collect():
@@ -298,7 +308,7 @@ def collect_ws_broadcasts(base_url: str) -> list[tuple[dict, float]]:
                 # sends the first data frame. Must send a dummy message.
                 await ws.send(json.dumps({"type": "sub"}))
                 log("  >>> WS sent {type:'sub'} to register session")
-                deadline = time.time() + WS_COLLECT_S
+                deadline = time.time() + max_wait
                 while time.time() < deadline and len(results) < 30:
                     try:
                         raw = await asyncio.wait_for(
@@ -316,7 +326,7 @@ def collect_ws_broadcasts(base_url: str) -> list[tuple[dict, float]]:
             log(f"  <<< WS error: {e}")
 
     asyncio.run(_collect())
-    status(f"Collected {len(results)} WebSocket messages in {WS_COLLECT_S}s")
+    status(f"Collected {len(results)} WebSocket messages in {max_wait}s")
     return results
 
 
@@ -740,6 +750,164 @@ def main() -> int:
     # 13. GET /nonexistent (firmware serves page, no redirect)
     run_http_test(base_url, "GET /nonexistent", "GET", "/nonexistent",
                   expect_code=200)
+
+    # ── WS collection helper for per-operation checks ──────────────────
+
+    def collect_ws_messages(collect_seconds: float,
+                            label: str) -> list[tuple[dict, float]]:
+        """Collect WS messages for `collect_seconds` seconds, return list."""
+        status(f"  Collecting WS ({label}, {collect_seconds}s)...")
+        msgs = collect_ws_broadcasts(base_url, max_wait=collect_seconds)
+        if msgs:
+            pass_msg(f"WS {label}: {len(msgs)} messages received")
+        else:
+            fail_msg(f"WS {label}: 0 messages received")
+        return msgs
+
+    # ── Motor control test ────────────────────────────────────────
+    status("\n=== Motor Control Test ===")
+
+    # ── Step 1: Wait for homing ─────────────────────────────────────
+    status("Waiting for homing to complete...")
+    homing_deadline = time.time() + 10
+    homing_done = False
+    while time.time() < homing_deadline:
+        code, body = http_get(base_url, "/api/status")
+        if code == 200:
+            obj = try_parse_json(body)
+            if obj:
+                brt = obj.get("burette", {})
+                brt_sts = brt.get("status", "")
+                if brt_sts != "homing":
+                    homing_done = True
+                    break
+        time.sleep(0.5)
+    if homing_done:
+        pass_msg("Homing completed")
+    else:
+        fail_msg("Homing did not complete within timeout")
+
+    # ── Step 2: Baseline WS collection ──────────────────────────────
+    ws_baseline = collect_ws_messages(5, "baseline")
+    if ws_baseline:
+        # Validate format on baseline messages
+        valid = 0
+        for obj, _ in ws_baseline:
+            issues = _check_ws_broadcast(obj)
+            if issues:
+                for i in issues:
+                    log(f"  WS baseline format issue: {i}")
+            else:
+                valid += 1
+        if valid == len(ws_baseline):
+            pass_msg(f"WS baseline: all {len(ws_baseline)} messages have valid format")
+        else:
+            fail_msg(f"WS baseline: {valid}/{len(ws_baseline)} messages have valid format")
+
+    # ── Step 3: burette.setDirection ────────────────────────────────
+    status("Sending burette.setDirection...")
+    dir_start = time.monotonic()
+    code, body = http_post(base_url, "/api/command",
+                           {"id": 100, "cmd": "burette.setDirection",
+                            "direction": "liq_in"})
+    dir_elapsed = time.monotonic() - dir_start
+    if code == 200:
+        pass_msg(f"burette.setDirection: HTTP 200 ({dir_elapsed:.1f}s)")
+        if dir_elapsed >= 2.0:
+            fail_msg(f"burette.setDirection took {dir_elapsed:.1f}s "
+                     f"(expected < 2s, was likely blocked by 60s timeout)")
+        else:
+            pass_msg(f"burette.setDirection responded in {dir_elapsed:.1f}s "
+                     f"(< 2s — no freeze)")
+    else:
+        fail_msg(f"burette.setDirection: expected HTTP 200, got {code}")
+
+    # ── Step 4: After setDirection WS collection ────────────────────
+    ws_after_setdir = collect_ws_messages(3, "after setdir")
+    if ws_after_setdir:
+        valid = 0
+        for obj, _ in ws_after_setdir:
+            issues = _check_ws_broadcast(obj)
+            if issues:
+                for i in issues:
+                    log(f"  WS after-setdir format issue: {i}")
+            else:
+                valid += 1
+        if valid == len(ws_after_setdir):
+            pass_msg(f"WS after-setdir: all {len(ws_after_setdir)} messages have valid format")
+        else:
+            fail_msg(f"WS after-setdir: {valid}/{len(ws_after_setdir)} messages have valid format")
+
+    # ── Step 5: burette.moveSteps (background thread) ──────────────
+    move_steps_code = [0]
+    move_steps_body = [""]
+
+    def do_move_steps():
+        c, b = http_post(base_url, "/api/command",
+                         {"id": 101, "cmd": "burette.moveSteps",
+                          "steps": 3000})
+        move_steps_code[0] = c
+        move_steps_body[0] = b
+
+    status("Sending burette.moveSteps (background thread)...")
+    t = threading.Thread(target=do_move_steps, daemon=True)
+    t.start()
+    time.sleep(0.5)  # Let the HTTP request start
+
+    # ── Step 5a: WS collection during move ──────────────────────────
+    ws_during = collect_ws_messages(3, "during move")
+    if ws_during:
+        valid = 0
+        for obj, _ in ws_during:
+            issues = _check_ws_broadcast(obj)
+            if issues:
+                for i in issues:
+                    log(f"  WS during-move format issue: {i}")
+            else:
+                valid += 1
+        if valid == len(ws_during):
+            pass_msg(f"WS during-move: all {len(ws_during)} messages have valid format")
+        else:
+            fail_msg(f"WS during-move: {valid}/{len(ws_during)} messages have valid format")
+
+    # ── Step 5b: Stop the motor ────────────────────────────────────
+    status("Sending burette.stop...")
+    code_stop, body_stop = http_post(base_url, "/api/command",
+                                     {"id": 102, "cmd": "burette.stop"})
+    if code_stop == 200:
+        pass_msg("burette.stop: HTTP 200 (motor stopped)")
+    else:
+        fail_msg(f"burette.stop: expected HTTP 200, got {code_stop}")
+
+    t.join(timeout=10)
+
+    if move_steps_code[0] == 200:
+        pass_msg("burette.moveSteps: HTTP 200 (motor started)")
+    else:
+        fail_msg(f"burette.moveSteps: expected HTTP 200, got {move_steps_code[0]}")
+
+    # ── Step 6: After stop WS collection ────────────────────────────
+    ws_after = collect_ws_messages(5, "after stop")
+
+    idle_found = False
+    for obj, _ in ws_after:
+        brt = obj.get("brt", {})
+        if brt.get("sts") == "idle":
+            idle_found = True
+            break
+    if idle_found:
+        pass_msg("WS broadcasts show burette status 'idle' after stop")
+    else:
+        # Fallback to /api/status
+        code, body = http_get(base_url, "/api/status")
+        if code == 200:
+            obj = try_parse_json(body)
+            if obj and obj.get("burette", {}).get("status") == "idle":
+                pass_msg("/api/status shows burette status 'idle' after stop")
+                idle_found = True
+        if not idle_found:
+            fail_msg("No WS broadcast or /api/status showed burette "
+                     "status 'idle' after stop — motor may still be running")
 
     # ── WebSocket broadcast collection + validation ───────────────
     status(f"\n=== WebSocket broadcast collection ({WS_COLLECT_S}s) ===")
