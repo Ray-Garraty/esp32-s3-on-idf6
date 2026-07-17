@@ -153,8 +153,6 @@ def validate_file(filepath: Path) -> bool:
             print(f"  ({len(cyrillic_matches) - 10} more Cyrillic character(s))")
         ok = False
 
-    if ok:
-        print(f"  OK: {rel}")
     return ok
 
 
