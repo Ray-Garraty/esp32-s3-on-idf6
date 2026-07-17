@@ -78,7 +78,7 @@ fi
 echo "=== 4. Semgrep (main loop blocking) ==="
 if ! command -v semgrep &>/dev/null; then
   echo "  ❌ FAIL: semgrep not installed"
-  echo "  Install: pip install semgrep"
+  echo "  Install: pip install --break-system-packages semgrep"
   exit 1
 fi
 semgrep --config "$PROJECT_DIR/.semgrep/main_loop_blocking.yaml" --error "$PROJECT_DIR/main/main.cpp"
@@ -126,9 +126,9 @@ echo "  ✅ CONFIG_ESP_WIFI_RX_BA_WIN ($rx_ba_win) ≤ CONFIG_ESP_WIFI_DYNAMIC_R
 # ============================================================
 # Full mode
 if [ "$fast_mode" = false ]; then
-  echo "=== 8. Build ==="
-  "$SCRIPT_DIR/idf.sh" build
-  echo "  ✅ Build succeeded"
+  echo "=== 8. Smoke test (build + flash + 70s monitor) ==="
+  "$SCRIPT_DIR/idf.sh" smoke
+  echo "  ✅ Smoke test passed"
 
   echo "=== 9. clang-tidy ==="
   if [[ ! -f "$PROJECT_DIR/build/compile_commands.json" ]]; then
