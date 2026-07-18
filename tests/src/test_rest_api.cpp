@@ -116,10 +116,9 @@ TEST_CASE("handleCommandCore: valve.setPosition accepted immediately", "[rest_ap
     REQUIRE(*result > 0);
     std::string_view sv(buf.data(), *result);
     auto j = json::parse(sv);
-    // Response is AckThen — "accepted" returned immediately, position set right away
     REQUIRE(j["status"] == "ok");
-    REQUIRE(j["data"]["status"] == "accepted");
     REQUIRE(j["data"]["position"] == "input");
+    // Global state is updated immediately
     REQUIRE(gValvePosition.load(std::memory_order_acquire) == ValvePosition::Input);
 }
 

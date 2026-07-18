@@ -415,15 +415,15 @@ TEST_CASE("handler: temperature.read handles invalid temp", "[handlers][sensors]
     REQUIRE(sv.find("0.0") != std::string_view::npos);
 }
 
-TEST_CASE("handler: stallGuard.get", "[handlers][sensors]")
+TEST_CASE("handler: stallGuard.get returns accepted immediately", "[handlers][sensors]")
 {
     auto rsp = sensors::handleStallGuardGet(0);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
     std::string_view sv(rsp->body.data(), rsp->bodySize);
-    REQUIRE(sv.find("stallGuard.get") != std::string_view::npos);
-    REQUIRE(sv.find("sg_result") != std::string_view::npos);
-    REQUIRE(sv.find("drv_status") != std::string_view::npos);
+    REQUIRE(sv.find("accepted") != std::string_view::npos);
+    // NOTE: TMC register reads are now fire-and-forget via motor task queue.
+    // Results arrive asynchronously via WS `stallguard_result` event.
 }
 
 TEST_CASE("handler: stallGuard.setThreshold", "[handlers][sensors]")
@@ -459,24 +459,21 @@ TEST_CASE("handler: adc.cal.get", "[handlers][sensors]")
 
 // --- valve ---
 
-TEST_CASE("handler: valve.setPosition output returns AckThen with position", "[handlers][valve]")
+TEST_CASE("handler: valve.setPosition output returns Single", "[handlers][valve]")
 {
     auto rsp = valve::handleSetPosition(ValvePosition::Output);
     REQUIRE(rsp);
-    REQUIRE(rsp->kind == ResponseKind::AckThen);
-    // Response must include position for backward compat with serial/BLE clients
+    REQUIRE(rsp->kind == ResponseKind::Single);
     std::string_view sv(rsp->body.data(), rsp->bodySize);
-    REQUIRE(sv.find(R"("status":"accepted")") != std::string_view::npos);
     REQUIRE(sv.find(R"("position":"output")") != std::string_view::npos);
 }
 
-TEST_CASE("handler: valve.setPosition input returns AckThen with position", "[handlers][valve]")
+TEST_CASE("handler: valve.setPosition input returns Single", "[handlers][valve]")
 {
     auto rsp = valve::handleSetPosition(ValvePosition::Input);
     REQUIRE(rsp);
-    REQUIRE(rsp->kind == ResponseKind::AckThen);
+    REQUIRE(rsp->kind == ResponseKind::Single);
     std::string_view sv(rsp->body.data(), rsp->bodySize);
-    REQUIRE(sv.find(R"("status":"accepted")") != std::string_view::npos);
     REQUIRE(sv.find(R"("position":"input")") != std::string_view::npos);
 }
 

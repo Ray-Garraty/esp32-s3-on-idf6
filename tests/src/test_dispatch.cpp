@@ -154,13 +154,13 @@ TEST_CASE("dispatch: valve.setPosition returns error without param", "[dispatch]
     REQUIRE(rsp->kind == ResponseKind::Error);
 }
 
-TEST_CASE("dispatch: valve.setPosition with param returns AckThen", "[dispatch]")
+TEST_CASE("dispatch: valve.setPosition with param returns Single", "[dispatch]")
 {
     Command cmd{CommandType::ValveSetPosition};
     cmd.valvePos = ValvePosition::Output;
     auto rsp = dispatch(cmd);
     REQUIRE(rsp);
-    REQUIRE(rsp->kind == ResponseKind::AckThen);
+    REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
 TEST_CASE("dispatch: valve.getState returns JSON", "[dispatch]")

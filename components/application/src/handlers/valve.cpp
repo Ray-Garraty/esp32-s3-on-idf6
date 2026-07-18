@@ -35,14 +35,12 @@ handleSetPosition(std::optional<domain::ValvePosition> pos)
     infrastructure::drivers::gValve.setPosition(*pos);
     domain::gValvePosition.store(*pos, std::memory_order_release);
 
-    // Return accepted with position — serial/BLE clients read position from response,
-    // HTTP clients get position via WS valve_settled event after settle delay.
     const char* posStr = (*pos == domain::ValvePosition::Input) ? "input" : "output";
     CommandResponse rsp;
-    rsp.kind = ResponseKind::AckThen;
+    rsp.kind = ResponseKind::Single;
     rsp.bodySize = static_cast<size_t>(std::snprintf(
         rsp.body.data(), rsp.body.size(),
-        R"({"status":"ok","data":{"status":"accepted","position":"%s"}})", posStr));
+        R"({"status":"ok","data":{"position":"%s"}})", posStr));
     return rsp;
 }
 
