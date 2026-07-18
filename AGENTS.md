@@ -114,6 +114,7 @@ Each step fails fast with a clear error message. All steps are fatal — a seria
 - [ ] FFI boundary copies data before return?
 - [ ] RMT stop flag included?
 - [ ] Task independence maintained (push to queue, don't call network)?
+- [ ] **Handler return values changed?** (LL-053) — If changing `ESP_OK` ↔ `ESP_FAIL` in any ESP-IDF handler, verify framework behavior in `httpd_main.c`/`httpd_sess.c`/`httpd_parse.c` and document before/after in the plan.
 
 ### Final Commit Checklist
 - [ ] `scripts/idf.sh build` — 0 errors, 0 warnings

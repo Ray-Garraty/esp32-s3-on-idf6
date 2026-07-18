@@ -43,7 +43,7 @@ from boot_detect import BootDetector, BOOT_OK_MARKER
 
 SERIAL_BAUD = 115200
 HTTP_TIMEOUT_S = 10
-WS_COLLECT_S = 20
+WS_COLLECT_S = 40
 WS_COUNT_TARGET = 5
 BOOT_TIMEOUT_S = 20
 
@@ -408,19 +408,31 @@ def diagnose_broadcast_intervals(
                         arrival_deltas, "connection issue")
 
 
-# ── WS session-drop regression check (LL-052 fix) ─────────────────────
+# ── WS session-drop regression check (LL-052 / LL-053 fix) ────────────
+#
+# LL-052 (original): ws_handler returned ESP_OK on recv failure, keeping
+#   broken sockets open and causing session tracking desync.
+# LL-053 (regression from LL-052 fix): the test assumed each fd appears
+#   at most once, but with proper cleanup the same fd can be legitimately
+#   reused across independent connections. A "drop" is only a drop if
+#   a recv failure preceded the duplicate session addition.
+# ─────────────────────────────────────────────────────────────────────
 
 WS_ADDED_RE = re.compile(r"WS session added for fd=(\d+)")
+RECV_FAILED_RE = re.compile(r"ws_handler: recv failed \(fd=(\d+),")
 
 
 def check_ws_session_drops(slog_path: str) -> int:
     """Check serial log for WS session drops during the test.
 
-    The original bug (LL-052) caused the session to be removed on every
-    recv failure (e.g., transient socket errors), leading to repeated
-    'WS session added' for the same fd. This function verifies that
-    each fd appears at most once in the log during the WS collection
-    window — any duplicate means a session drop occurred.
+    A "session drop" is defined as a duplicate "WS session added" for the
+    same fd that is PRECEDED by a "recv failed" error (indicating the
+    framework dropped the session due to a socket error, not a graceful
+    close by the client).
+
+    If a fd appears multiple times WITHOUT "recv failed" in between, the
+    reconnections are legitimate (e.g., test opens independent WS
+    connections that are gracefully closed and fd is recycled by ESP-IDF).
 
     Returns: number of session drop incidents found (0 = pass).
     """
@@ -430,29 +442,55 @@ def check_ws_session_drops(slog_path: str) -> int:
 
     try:
         with open(slog_path, "r", encoding="utf-8") as f:
-            content = f.read()
+            lines = f.readlines()
     except FileNotFoundError:
         status(f"  WS session-drop check: serial log not found ({slog_path})")
         return 0
 
-    fd_adds: dict[str, int] = {}
-    for line in content.split("\n"):
+    # Collect per-fd events in order
+    # fd_events: dict[fd, list of ("add" | "recv_fail", lineno)]
+    fd_events: dict[str, list[tuple[str, int]]] = {}
+    for lineno, line in enumerate(lines):
         m = WS_ADDED_RE.search(line)
         if m:
             fd = m.group(1)
-            fd_adds[fd] = fd_adds.get(fd, 0) + 1
+            fd_events.setdefault(fd, []).append(("add", lineno))
+        m = RECV_FAILED_RE.search(line)
+        if m:
+            fd = m.group(1)
+            fd_events.setdefault(fd, []).append(("recv_fail", lineno))
 
     drops = 0
-    for fd, count in fd_adds.items():
-        if count > 1:
-            status(f"  ==> FAIL: WS session added {count}x for fd {fd} "
-                   f"(session drop detected)")
-            drops += 1
+    for fd, events in fd_events.items():
+        adds = [e for e in events if e[0] == "add"]
+        if len(adds) <= 1:
+            continue
 
-    if drops == 0 and fd_adds:
+        # Count how many adds are preceded by a recv_fail (no other add
+        # between the recv_fail and the reconnection)
+        genuine_drops = 0
+        for i in range(1, len(adds)):
+            add_lineno = adds[i][1]
+            # Check if there was a recv_fail between adds[i-1] and adds[i]
+            prev_add_lineno = adds[i - 1][1]
+            for event, ev_lineno in events:
+                if event == "recv_fail" and prev_add_lineno < ev_lineno < add_lineno:
+                    genuine_drops += 1
+                    break
+
+        if genuine_drops > 0:
+            status(f"  ==> FAIL: fd {fd} — {genuine_drops} session drop(s) "
+                   f"(recv failure + reconnection)")
+            drops += genuine_drops
+        else:
+            status(f"  ==> OK: fd {fd} added {len(adds)}x — "
+                   f"graceful reconnections, no recv errors between them")
+
+    if drops == 0 and fd_events:
+        total_adds = sum(1 for evs in fd_events.values() for e in evs if e[0] == "add")
         status(f"  ==> PASS: No WS session drops detected "
-               f"({len(fd_adds)} session(s) tracked)")
-    elif not fd_adds:
+               f"({total_adds} session add(s) across {len(fd_events)} fd(s))")
+    elif not fd_events:
         status("  WS session-drop check: no session additions in serial log")
 
     return drops

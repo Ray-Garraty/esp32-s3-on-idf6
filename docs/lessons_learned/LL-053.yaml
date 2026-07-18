@@ -1,0 +1,66 @@
+id: LL-053
+date: 2026-07-18
+title: Handler return-value changes must include framework semantic analysis
+category: process
+crash_signature: >
+  Not a crash. Regression: WS session-drop during motor ops.
+  http_api_test.py: "WS session added 2x for fd 51 (session drop detected)".
+  29/30 tests pass, 1 FAIL. No crash, no WDT, no Guru Meditation.
+trigger_patterns:
+  - "WS session added .+x for fd"
+  - "check_ws_session_drops.*!= 0"
+  - "recv failed (fd="
+lesson: >
+  Changing ESP-IDF HTTP/WS handler return values (ESP_OK ↔ ESP_FAIL) has
+  framework-level side effects on socket lifecycle that are NOT obvious
+  from the handler signature alone:
+
+  - ESP_FAIL → httpd_sess_process() returns error → httpd_sess_delete()
+    closes the connection (httpd_main.c:270)
+  - ESP_OK → framework keeps the connection alive, even if the handler
+    encountered an error internally
+
+  In this bug, commit 66d9029 changed the ws_handler recv-failure path
+  from "return err + removeSession(fd)" to "return ESP_OK" (without
+  removeSession). The intent was to keep the session alive on transient
+  errors, but the framework had already closed the broken socket. The
+  stale bookkeeping caused a gap where broadcast messages were missed
+  and duplicate "WS session added" logs appeared.
+
+  KEY RULE: Any change to handler return values MUST be verified against
+  ESP-IDF source (httpd_main.c, httpd_sess.c, httpd_parse.c) and
+  documented in the plan with a before/after table showing the error
+  condition, return value, and framework-level effect.
+diagnostic: |
+  When investigating a regression that appeared after changing a handler:
+
+  1. Check git diff for changes to handler return values (ESP_OK/ESP_FAIL)
+  2. Search ESP-IDF source for the handler's call chain:
+     - httpd_main.c — httpd_sess_process() → handler dispatch
+     - httpd_sess.c — session lifecycle on error
+     - httpd_parse.c — handler return value propagation
+  3. Check if the plan documented framework-level side effects
+  4. If not documented → the change was made without framework analysis
+fix: |
+  Before committing any handler return-value change, add a table to the
+  plan documenting:
+
+  | Error Condition | Before Return | After Return | Framework Effect |
+  |-----------------|--------------|-------------|------------------|
+  | ...             | ...          | ...         | ...              |
+
+  And verify against live ESP-IDF source at:
+  /home/vlabe/Downloads/esp-idf-master/components/esp_http_server/src/
+
+  The Pre-Flight Checklist in AGENTS.md §4 now includes:
+  "Handler return values changed? (LL-053) — If changing ESP_OK ↔ ESP_FAIL
+  in any ESP-IDF handler, verify framework behavior in httpd_main.c/
+  httpd_sess.c/httpd_parse.c and document before/after in the plan."
+refs:
+  - docs/refs/CONSTITUTION.md (Art. VI — Boundary Safety)
+  - AGENTS.md §4 (Pre-Flight Checklist)
+  - /home/vlabe/Downloads/esp-idf-master/components/esp_http_server/src/httpd_main.c (line 270)
+  - /home/vlabe/Downloads/esp-idf-master/components/esp_http_server/src/httpd_sess.c (lines 430-431)
+  - /home/vlabe/Downloads/esp-idf-master/components/esp_http_server/src/httpd_parse.c (lines 830-864)
+  - components/infrastructure/network/src/http_server.cpp (ws_handler)
+  - docs/issues/active/ws_session_drop_during_motor_ops.md

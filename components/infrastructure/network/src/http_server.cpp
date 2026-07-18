@@ -547,7 +547,11 @@ esp_err_t ws_handler(httpd_req_t* req)
             return ESP_FAIL;
         }
         ESP_LOGW(TAG, "ws_handler: recv failed (fd=%d, err=%d)", fd, err);
-        return ESP_OK;
+        if (fd >= 0 && req->user_ctx)
+        {
+            static_cast<HttpServer*>(req->user_ctx)->removeSession(fd);
+        }
+        return ESP_FAIL;
     }
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE)
