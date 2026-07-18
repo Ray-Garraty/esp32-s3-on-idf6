@@ -186,6 +186,70 @@ do_erase_nvs() {
 
 CMD="${1:-build}"
 
+# Locate ESP-IDF clang-format (preferred) or system clang-format
+resolve_clang_format() {
+    for candidate in \
+        "$HOME/.espressif/tools/esp-clang/"*/esp-clang/bin/clang-format \
+        /usr/bin/clang-format-{18,17,19} \
+        /usr/bin/clang-format; do
+        for f in $candidate; do
+            if [ -x "$f" ]; then
+                echo "$f"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+do_format() {
+    local mode="${1:-check}"
+    local scope="${2:-all}"
+    local cf
+    cf=$(resolve_clang_format) || {
+        echo "❌ clang-format not found"
+        echo "   Install: $HOME/.espressif/tools/esp-clang/<version>/esp-clang/bin/clang-format"
+        exit 1
+    }
+    echo "🧹 clang-format: $cf"
+
+    local src_list
+    if [ "$scope" = "staged" ]; then
+        # All uncommitted files (staged + unstaged)
+        src_list=$(git diff --name-only --diff-filter=ACMR \
+            | grep -E '\.(cpp|hpp|h)$' 2>/dev/null || true)
+        if [ -z "$src_list" ]; then
+            echo "ℹ️  No staged C++ files to check"
+            return 0
+        fi
+    else
+        src_list=$(find "$PROJECT_DIR/main" "$PROJECT_DIR/components" "$PROJECT_DIR/tests" \
+            \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+            -not -path '*/managed_components/*' \
+            -not -path '*/build/*' \
+            2>/dev/null)
+    fi
+    local count
+    count=$(echo "$src_list" | grep -c . || true)
+
+    if [ "$mode" = "check" ]; then
+        echo "🔍 Checking $count files..."
+        local violations
+        violations=$(echo "$src_list" | xargs -P"$(nproc)" -I{} "$cf" -n {} 2>&1 | grep -c "error:" || true)
+        if [ "$violations" -eq 0 ]; then
+            echo "✅ All $count files formatted correctly"
+        else
+            echo "❌ $violations violation(s) found"
+            echo "   Run './scripts/idf.sh format' to fix"
+            return 1
+        fi
+    else
+        echo "✏️  Formatting $count files..."
+        echo "$src_list" | xargs -P"$(nproc)" "$cf" -i
+        echo "✅ $count files formatted"
+    fi
+}
+
 case "$CMD" in
     build)
         do_build
@@ -297,6 +361,14 @@ case "$CMD" in
         rm -rf build build-tests
         ;;
 
+    format)
+        if [ "${2:-}" = "--staged" ]; then do_format fix staged; else do_format fix all; fi
+        ;;
+
+    format-check)
+        if [ "${2:-}" = "--staged" ]; then do_format check staged; else do_format check all; fi
+        ;;
+
     erase-flash)
         PORT=$(resolve_port "${2:-}")
         echo "Port: $PORT"
@@ -330,6 +402,8 @@ case "$CMD" in
   "  full-tidy             clang-tidy full analysis (~30-40 min, code-review only)"
         echo "  uart [port]           UART integration test"
         echo "  reconfigure           Remove sdkconfig + idf.py reconfigure"
+        echo "  format [--staged]      Format project C++ sources (or uncommitted files only) via ESP-IDF clang-format"
+        echo "  format-check [--staged] Check formatting (exit 1 if violations exist)"
         echo "  clean                 Remove build/ and build-tests/"
         echo "  erase-flash [port]    Erase ENTIRE flash chip (all data lost)"
         echo "  erase-nvs [port]      Erase NVS partition only (calibration, WiFi creds)"

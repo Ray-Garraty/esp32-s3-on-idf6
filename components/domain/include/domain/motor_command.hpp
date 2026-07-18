@@ -22,7 +22,8 @@ enum class MotorCommandType : uint8_t
     StartRinse,
     StartCalDose,
     StartCalSpeed,
-    StartCalSpeedSeq
+    StartCalSpeedSeq,
+    SetValvePosition
 };
 
 struct StartRinseParams
@@ -60,6 +61,7 @@ struct MotorCommand
     uint32_t speedHz;
     uint32_t accelHzPerS;
     uint8_t stallThreshold;
+    ValvePosition valvePosition;
     StartRinseParams startRinse;
     StartCalDoseParams startCalDose;
     StartCalSpeedParams startCalSpeed;

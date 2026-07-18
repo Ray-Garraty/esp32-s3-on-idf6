@@ -13,11 +13,16 @@
 #include "diag/stack_monitor.hpp"
 #include "diag/state_tracer.hpp"
 #include "domain/calibration.hpp"
+#include "domain/memory.hpp"
 #include "domain/types.hpp"
 #include "infrastructure/config.hpp"
 #include "infrastructure/drivers/limitswitch.hpp"
 #include "infrastructure/drivers/stepper.hpp"
 #include "infrastructure/drivers/tmc_uart.hpp"
+
+// Declared in main/net_owner.hpp — motor task pushes WS broadcast without
+// calling broadcastWsEvent() directly (net_owner drain loop owns the HTTP server)
+extern QueueHandle_t gWsBroadcastQueue;
 
 static constexpr auto TAG = "motor_task";
 
@@ -229,6 +234,31 @@ extern "C" void motorTaskEntry(void* pvParameters)
                 float nominalVol = cal.nominalVolumeMl;
                 float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
                 run_cal_speed_seq_sm(stepper, p.freqs, p.fillSpeedMlMin, curVol, nominalVol);
+                break;
+            }
+
+            case MotorCommandType::SetValvePosition: {
+                ESP_LOGI(TAG, "valve settle: %s",
+                         (cmd.valvePosition == domain::ValvePosition::Input) ? "input" : "output");
+                vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
+                const char* posStr =
+                    (cmd.valvePosition == domain::ValvePosition::Input) ? "input" : "output";
+                // Push WS broadcast with settled position (non-blocking, best-effort)
+                if (gWsBroadcastQueue)
+                {
+                    static struct
+                    {
+                        char data[domain::memory::MAX_RSP_SIZE];
+                        size_t len;
+                    } entry;
+                    int n = std::snprintf(entry.data, sizeof(entry.data),
+                                          R"({"event":"valve_settled","position":"%s"})", posStr);
+                    if (n > 0 && static_cast<size_t>(n) < sizeof(entry.data))
+                    {
+                        entry.len = static_cast<size_t>(n);
+                        xQueueSend(gWsBroadcastQueue, &entry, 0);
+                    }
+                }
                 break;
             }
             }

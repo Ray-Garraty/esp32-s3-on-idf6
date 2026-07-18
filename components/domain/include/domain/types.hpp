@@ -111,7 +111,7 @@ enum class BuretteCommand : uint8_t
 };
 
 // GR-6: stack budget constants
-inline constexpr size_t MOTOR_THREAD_STACK = 16384;
+inline constexpr size_t MOTOR_THREAD_STACK = 20480;
 inline constexpr size_t MAIN_TASK_STACK = 32768;
 inline constexpr size_t NET_OWNER_STACK = 20480;
 inline constexpr size_t LOG_WORKER_STACK = 16384;

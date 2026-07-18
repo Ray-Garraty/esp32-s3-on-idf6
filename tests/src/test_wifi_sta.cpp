@@ -27,7 +27,8 @@
 // The Validator performs hardware-level verification.
 
 // Test that wifiReadCount returns a valid value (stubbed to 0 on host)
-TEST_CASE("wifiReadCount returns a value", "[wifi][nvs]") {
+TEST_CASE("wifiReadCount returns a value", "[wifi][nvs]")
+{
     auto result = ecotiter::infrastructure::storage::wifiReadCount();
     REQUIRE(result.has_value());
     // Stub returns 0; real implementation reads from NVS
@@ -35,13 +36,15 @@ TEST_CASE("wifiReadCount returns a value", "[wifi][nvs]") {
 }
 
 // Test that wifiWriteStr returns success (stubbed on host)
-TEST_CASE("wifiWriteStr returns success", "[wifi][nvs]") {
+TEST_CASE("wifiWriteStr returns success", "[wifi][nvs]")
+{
     auto result = ecotiter::infrastructure::storage::wifiWriteStr("ssid_0", "test");
     REQUIRE(result.has_value());
 }
 
 // Test that wifiWriteCount returns success (stubbed on host)
-TEST_CASE("wifiWriteCount returns success", "[wifi][nvs]") {
+TEST_CASE("wifiWriteCount returns success", "[wifi][nvs]")
+{
     auto result = ecotiter::infrastructure::storage::wifiWriteCount(1);
     REQUIRE(result.has_value());
 }

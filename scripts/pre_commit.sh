@@ -9,29 +9,25 @@ export PATH="$HOME/.local/bin:$PATH"
 fast_mode=false
 [ "${1:-}" = "--fast" ] && fast_mode=true
 
-# --- Locate clang-format (esp-clang preferred) ---
-CLANG_FORMAT=""
-for candidate in \
-  ~/.espressif/tools/esp-clang/*/esp-clang/bin/clang-format \
-  /usr/bin/clang-format-{18,17,19} \
-  /usr/bin/clang-format; do
-  cand_exp=$(eval echo "$candidate")
-  if [[ -x "$cand_exp" ]]; then
-    CLANG_FORMAT="$cand_exp"
-    break
-  fi
-done
-
-# --- Staged files ---
+# --- Staged files list — used by steps 1-2 ---
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
 
-cpp_files() {
-  echo "$STAGED" | grep -E '\.(cpp|h|hpp)$' || true
-}
+# ============================================================
+# FINAL VERDICT — single line, unambiguous, machine-parseable.
+# Only printed in full mode (not --fast) because fast mode skips
+# the heavy hardware-dependent steps and a pass there is not
+# a comprehensive green light.
+# If the script crashes without printing this line (timeout,
+# SIGKILL, bash -e panic), the run is invalid — re-run with
+# a larger timeout.
+# ============================================================
+trap 'ec=$?; if [ "$fast_mode" = false ]; then echo ""; if [ $ec -eq 0 ]; then echo "=== PRE_COMMIT_VERDICT: PASS ==="; else echo "=== PRE_COMMIT_VERDICT: FAIL ==="; fi; fi; exit $ec' EXIT
+
+# ============================================================
 
 # ============================================================
 echo "=== 1. Staged files: merge conflict check ==="
-conflicts=$(cpp_files | xargs -r grep -ln '<<<<<<< \|=======\|>>>>>>> ' 2>/dev/null || true)
+conflicts=$(echo "$STAGED" | grep -E '\.(cpp|h|hpp)$' | xargs -r grep -ln '<<<<<<< \|=======\|>>>>>>> ' 2>/dev/null || true)
 if [[ -n "$conflicts" ]]; then
   echo "  ❌ FAIL: Merge conflict markers in:"
   echo "$conflicts" | sed 's/^/    /'
@@ -57,21 +53,10 @@ fi
 echo "  ✅ No trailing whitespace"
 
 # ============================================================
-CPP_STAGED=$(cpp_files)
-
-if [[ -z "$CPP_STAGED" ]]; then
-  echo "=== 3. Format check ==="
-  echo "  No staged C++ files — skipping"
-else
-  if [[ -z "$CLANG_FORMAT" ]]; then
-    echo "=== 3. Format check ==="
-    echo "  ❌ FAIL: clang-format not found"
-    echo "  Install esp-clang or system clang-format."
+echo "=== 3. Format check ==="
+if ! "$SCRIPT_DIR/idf.sh" format-check --staged; then
+    echo "  To fix: $SCRIPT_DIR/idf.sh format --staged && git add <files>"
     exit 1
-  fi
-  echo "=== 3. Format check ($CLANG_FORMAT) ==="
-  echo "$CPP_STAGED" | xargs "$CLANG_FORMAT" --dry-run --Werror
-  echo "  ✅ All staged C++ files are formatted"
 fi
 
 # ============================================================
@@ -140,10 +125,9 @@ if [ "$fast_mode" = false ]; then
 
   echo "=== 11. Serial API hardware test ==="
   if [[ -x "$PROJECT_DIR/scripts/testing/serial_api_test.py" ]]; then
-    timeout 60 python3 "$PROJECT_DIR/scripts/testing/serial_api_test.py" || true
+    timeout 60 python3 "$PROJECT_DIR/scripts/testing/serial_api_test.py"
   fi
 fi
 
 # ============================================================
-echo ""
-echo "=== All checks passed ==="
+exit 0

@@ -4,9 +4,11 @@
 #include "domain/calibration.hpp"
 #include "domain/errors.hpp"
 
-namespace ecotiter::infrastructure::storage {
+namespace ecotiter::infrastructure::storage
+{
 
-domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead() {
+domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead()
+{
     domain::CalibrationData cal{};
     cal.stepsPerMl = domain::CalibrationData::kDefaultStepsPerMl;
     cal.nominalVolumeMl = domain::CalibrationData::kDefaultNominalVolumeMl;
@@ -16,41 +18,49 @@ domain::Result<domain::CalibrationData, domain::ResourceError> calibrationRead()
     return cal;
 }
 
-domain::Result<void, domain::ResourceError> calibrationWrite(const domain::CalibrationData&) {
+domain::Result<void, domain::ResourceError> calibrationWrite(const domain::CalibrationData&)
+{
     return {};
 }
 
 static uint16_t s_stubAX1000 = 1000;
 static int16_t s_stubB = 0;
 
-void adcCalibrationRead(uint16_t& aX1000, int16_t& b) {
+void adcCalibrationRead(uint16_t& aX1000, int16_t& b)
+{
     aX1000 = s_stubAX1000;
     b = s_stubB;
 }
 
-domain::Result<void, domain::ResourceError> adcCalibrationWrite(uint16_t aX1000, int16_t b) {
+domain::Result<void, domain::ResourceError> adcCalibrationWrite(uint16_t aX1000, int16_t b)
+{
     s_stubAX1000 = aX1000;
     s_stubB = b;
     return {};
 }
 
-uint8_t stallguardReadThreshold() {
+uint8_t stallguardReadThreshold()
+{
     return 0;
 }
 
-domain::Result<void, domain::ResourceError> stallguardWriteThreshold(uint8_t) {
+domain::Result<void, domain::ResourceError> stallguardWriteThreshold(uint8_t)
+{
     return {};
 }
 
-domain::Result<uint8_t, domain::ResourceError> wifiReadCount() {
+domain::Result<uint8_t, domain::ResourceError> wifiReadCount()
+{
     return static_cast<uint8_t>(0);
 }
 
-domain::Result<void, domain::ResourceError> wifiWriteStr(const char*, const char*) {
+domain::Result<void, domain::ResourceError> wifiWriteStr(const char*, const char*)
+{
     return {};
 }
 
-domain::Result<void, domain::ResourceError> wifiWriteCount(uint8_t) {
+domain::Result<void, domain::ResourceError> wifiWriteCount(uint8_t)
+{
     return {};
 }
 

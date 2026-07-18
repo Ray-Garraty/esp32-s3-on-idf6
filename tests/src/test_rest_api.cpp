@@ -6,8 +6,8 @@
 #include <nlohmann/json.hpp>
 
 // Include the core logic header directly (no ESP-IDF dependency)
-#include "interface/rest_api.hpp"
 #include "domain/types.hpp"
+#include "interface/rest_api.hpp"
 
 // The *_Core functions are defined in rest_api.cpp which depends on ESP-IDF.
 // For host tests we need to provide our own implementations of the core functions
@@ -25,7 +25,8 @@ using json = nlohmann::json;
 // rest_api.cpp depends on ESP-IDF's httpd and application dispatch.
 // These tests verify the protocol handling independently.
 
-TEST_CASE("ping handler logic: returns status ok", "[rest_api]") {
+TEST_CASE("ping handler logic: returns status ok", "[rest_api]")
+{
     memory::ResponseBuffer buf{};
     auto result = handlePingCore(buf);
     REQUIRE(result);
@@ -47,7 +48,8 @@ TEST_CASE("ping handler logic: returns status ok", "[rest_api]") {
 //
 // The valve*Core functions are tested in test_valve.cpp for command parsing.
 
-TEST_CASE("handleCommandCore: valid ping command returns response", "[rest_api]") {
+TEST_CASE("handleCommandCore: valid ping command returns response", "[rest_api]")
+{
     // This test can run because rest_api.cpp links against application library
     // which provides parseCommand and dispatch.
     memory::ResponseBuffer buf{};
@@ -61,28 +63,32 @@ TEST_CASE("handleCommandCore: valid ping command returns response", "[rest_api]"
     REQUIRE(sv.find("\"status\":\"ok\"") != std::string_view::npos);
 }
 
-TEST_CASE("handleCommandCore: invalid JSON returns 400", "[rest_api]") {
+TEST_CASE("handleCommandCore: invalid JSON returns 400", "[rest_api]")
+{
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore("not json", buf);
     REQUIRE_FALSE(result);
     REQUIRE(result.error() == 400);
 }
 
-TEST_CASE("handleCommandCore: missing cmd field returns 400", "[rest_api]") {
+TEST_CASE("handleCommandCore: missing cmd field returns 400", "[rest_api]")
+{
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"foo":"bar"})", buf);
     REQUIRE_FALSE(result);
     REQUIRE(result.error() == 400);
 }
 
-TEST_CASE("handleCommandCore: unknown command returns 400", "[rest_api]") {
+TEST_CASE("handleCommandCore: unknown command returns 400", "[rest_api]")
+{
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"cmd":"unknown.command"})", buf);
     REQUIRE_FALSE(result);
     REQUIRE(result.error() == 400);
 }
 
-TEST_CASE("handleCommandCore: valve.getState returns current valve state", "[rest_api]") {
+TEST_CASE("handleCommandCore: valve.getState returns current valve state", "[rest_api]")
+{
     gValvePosition.store(ValvePosition::Input, std::memory_order_release);
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"cmd":"valve.getState"})", buf);
@@ -101,7 +107,8 @@ TEST_CASE("handleCommandCore: valve.getState returns current valve state", "[res
     REQUIRE(j["data"]["position"] == "output");
 }
 
-TEST_CASE("handleCommandCore: valve.setPosition updates position", "[rest_api]") {
+TEST_CASE("handleCommandCore: valve.setPosition accepted immediately", "[rest_api]")
+{
     gValvePosition.store(ValvePosition::Output, std::memory_order_release);
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"cmd":"valve.setPosition","position":"input"})", buf);
@@ -109,12 +116,15 @@ TEST_CASE("handleCommandCore: valve.setPosition updates position", "[rest_api]")
     REQUIRE(*result > 0);
     std::string_view sv(buf.data(), *result);
     auto j = json::parse(sv);
+    // Response is AckThen — "accepted" returned immediately, position set right away
     REQUIRE(j["status"] == "ok");
+    REQUIRE(j["data"]["status"] == "accepted");
     REQUIRE(j["data"]["position"] == "input");
     REQUIRE(gValvePosition.load(std::memory_order_acquire) == ValvePosition::Input);
 }
 
-TEST_CASE("handleCommandCore: valve.setPosition invalid param returns error", "[rest_api]") {
+TEST_CASE("handleCommandCore: valve.setPosition invalid param returns error", "[rest_api]")
+{
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"cmd":"valve.setPosition","position":"invalid"})", buf);
     REQUIRE_FALSE(result);

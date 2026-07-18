@@ -7,14 +7,16 @@
 
 using namespace ecotiter::interface;
 
-TEST_CASE("SerialReader: single line", "[serial]") {
+TEST_CASE("SerialReader: single line", "[serial]")
+{
     SerialReader reader;
     auto line = reader.process("hello\n");
     REQUIRE(line);
     CHECK(*line == "hello");
 }
 
-TEST_CASE("SerialReader: two lines in one call", "[serial]") {
+TEST_CASE("SerialReader: two lines in one call", "[serial]")
+{
     SerialReader reader;
     auto line1 = reader.process("line1\nline2\n");
     REQUIRE(line1);
@@ -25,7 +27,8 @@ TEST_CASE("SerialReader: two lines in one call", "[serial]") {
     CHECK(*line2 == "line2");
 }
 
-TEST_CASE("SerialReader: line across multiple calls", "[serial]") {
+TEST_CASE("SerialReader: line across multiple calls", "[serial]")
+{
     SerialReader reader;
     auto part1 = reader.process("hel");
     CHECK_FALSE(part1.has_value());
@@ -35,7 +38,8 @@ TEST_CASE("SerialReader: line across multiple calls", "[serial]") {
     CHECK(*part2 == "hello");
 }
 
-TEST_CASE("SerialReader: CR handling", "[serial]") {
+TEST_CASE("SerialReader: CR handling", "[serial]")
+{
     SerialReader reader;
     auto line = reader.process("line1\r\nline2\r\n");
     REQUIRE(line);
@@ -46,26 +50,30 @@ TEST_CASE("SerialReader: CR handling", "[serial]") {
     CHECK(*line2 == "line2");
 }
 
-TEST_CASE("SerialReader: CR in middle of line", "[serial]") {
+TEST_CASE("SerialReader: CR in middle of line", "[serial]")
+{
     SerialReader reader;
     auto line = reader.process("he\rllo\n");
     REQUIRE(line);
     CHECK(*line == "hello");
 }
 
-TEST_CASE("SerialReader: empty input", "[serial]") {
+TEST_CASE("SerialReader: empty input", "[serial]")
+{
     SerialReader reader;
     auto line = reader.process("");
     CHECK_FALSE(line.has_value());
 }
 
-TEST_CASE("SerialReader: multiple empty lines", "[serial]") {
+TEST_CASE("SerialReader: multiple empty lines", "[serial]")
+{
     SerialReader reader;
     auto line = reader.process("\n\n\n");
     CHECK_FALSE(line.has_value());
 }
 
-TEST_CASE("SerialReader: consecutive non-empty lines", "[serial]") {
+TEST_CASE("SerialReader: consecutive non-empty lines", "[serial]")
+{
     SerialReader reader;
     auto line1 = reader.process("a\nb\nc\n");
     REQUIRE(line1);
@@ -83,7 +91,8 @@ TEST_CASE("SerialReader: consecutive non-empty lines", "[serial]") {
     CHECK_FALSE(line4.has_value());
 }
 
-TEST_CASE("SerialReader: overflow reset", "[serial]") {
+TEST_CASE("SerialReader: overflow reset", "[serial]")
+{
     SerialReader reader;
     // Build a line longer than MAX_CMD_SIZE
     std::array<char, ecotiter::domain::memory::MAX_CMD_SIZE + 10> longLine{};
@@ -110,7 +119,8 @@ TEST_CASE("SerialReader: overflow reset", "[serial]") {
     CHECK(*result == "ok");
 }
 
-TEST_CASE("SerialReader: no newline no output", "[serial]") {
+TEST_CASE("SerialReader: no newline no output", "[serial]")
+{
     SerialReader reader;
     auto result = reader.process("no newline here");
     CHECK_FALSE(result.has_value());
@@ -120,10 +130,12 @@ TEST_CASE("SerialReader: no newline no output", "[serial]") {
     CHECK_FALSE(result.has_value());
 }
 
-TEST_CASE("SerialReader: exact max size without overflow", "[serial]") {
+TEST_CASE("SerialReader: exact max size without overflow", "[serial]")
+{
     SerialReader reader;
     std::array<char, ecotiter::domain::memory::MAX_CMD_SIZE> exact{};
-    for (size_t i = 0; i + 1 < exact.size(); ++i) {
+    for (size_t i = 0; i + 1 < exact.size(); ++i)
+    {
         exact[i] = 'a';
     }
     exact[exact.size() - 1] = '\n';

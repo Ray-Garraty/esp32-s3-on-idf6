@@ -1,5 +1,5 @@
-#include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
 #include <string_view>
@@ -12,7 +12,8 @@ using namespace ecotiter::interface;
 using namespace ecotiter::domain;
 using json = nlohmann::json;
 
-TEST_CASE("serializeBroadcastCompact: builds valid JSON", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: builds valid JSON", "[broadcast]")
+{
     BroadcastEvent evt{
         .tick = 42,
         .tempCX100 = 2345,
@@ -41,7 +42,8 @@ TEST_CASE("serializeBroadcastCompact: builds valid JSON", "[broadcast]") {
     REQUIRE(j.contains("empty") == false);
 }
 
-TEST_CASE("serializeBroadcastCompact: output position, liq_out, dosing", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: output position, liq_out, dosing", "[broadcast]")
+{
     BroadcastEvent evt{
         .tick = 1,
         .tempCX100 = 0,
@@ -64,7 +66,8 @@ TEST_CASE("serializeBroadcastCompact: output position, liq_out, dosing", "[broad
     REQUIRE(j["brt"]["vl"] == Catch::Approx(25.0));
 }
 
-TEST_CASE("serializeBroadcastExtended: full/empty fields", "[broadcast]") {
+TEST_CASE("serializeBroadcastExtended: full/empty fields", "[broadcast]")
+{
     BroadcastEvent evt{
         .tick = 1,
         .tempCX100 = 0,
@@ -88,7 +91,8 @@ TEST_CASE("serializeBroadcastExtended: full/empty fields", "[broadcast]") {
     REQUIRE(j.contains("buretteSteps") == true);
 }
 
-TEST_CASE("serializeBroadcastCompact: sensor not detected (tempCX100 = -99999)", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: sensor not detected (tempCX100 = -99999)", "[broadcast]")
+{
     BroadcastEvent evt{
         .tick = 0,
         .tempCX100 = -99999,
@@ -109,7 +113,8 @@ TEST_CASE("serializeBroadcastCompact: sensor not detected (tempCX100 = -99999)",
     REQUIRE(j["temp"].is_null());
 }
 
-TEST_CASE("serializeBroadcastCompact: all burette states round-trip", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: all burette states round-trip", "[broadcast]")
+{
     auto testState = [](BuretteState state, const char* expectedSts, bool expectVlNull) {
         BroadcastEvent evt{
             .tick = 0,
@@ -127,9 +132,12 @@ TEST_CASE("serializeBroadcastCompact: all burette states round-trip", "[broadcas
         REQUIRE_FALSE(sv.empty());
         auto j = json::parse(sv);
         REQUIRE(j["brt"]["sts"] == expectedSts);
-        if (expectVlNull) {
+        if (expectVlNull)
+        {
             REQUIRE(j["brt"]["vl"].is_null());
-        } else {
+        }
+        else
+        {
             REQUIRE(j["brt"]["vl"] == Catch::Approx(50.0));
         }
     };
@@ -144,14 +152,16 @@ TEST_CASE("serializeBroadcastCompact: all burette states round-trip", "[broadcas
     testState(BuretteState::Error, "error", false);
 }
 
-TEST_CASE("serializeBroadcastCompact: empty buffer returns empty view", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: empty buffer returns empty view", "[broadcast]")
+{
     memory::ResponseBuffer buf{};
     BroadcastEvent evt{};
     auto sv = serializeBroadcastCompact(evt, buf);
     REQUIRE_FALSE(sv.empty());
 }
 
-TEST_CASE("serializeBroadcastCompact: reads from domain atoms produce valid JSON", "[broadcast]") {
+TEST_CASE("serializeBroadcastCompact: reads from domain atoms produce valid JSON", "[broadcast]")
+{
     gTempCX100.store(2500, std::memory_order_release);
     gLastMv.store(1800, std::memory_order_release);
 

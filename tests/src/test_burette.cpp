@@ -1,33 +1,37 @@
 #include <catch2/catch_test_macros.hpp>
 #include <domain/burette.hpp>
-#include <domain/rinse_sm.hpp>
 #include <domain/cal_dose_sm.hpp>
-#include <domain/cal_speed_sm.hpp>
 #include <domain/cal_run_planner.hpp>
+#include <domain/cal_speed_sm.hpp>
+#include <domain/rinse_sm.hpp>
 
 using namespace ecotiter::domain;
 using namespace ecotiter::domain::sm;
 
-TEST_CASE("Burette starts in Idle", "[burette]") {
+TEST_CASE("Burette starts in Idle", "[burette]")
+{
     BuretteController ctrl;
     REQUIRE(ctrl.state == BuretteState::Idle);
 }
 
-TEST_CASE("Fill from Idle succeeds", "[burette]") {
+TEST_CASE("Fill from Idle succeeds", "[burette]")
+{
     BuretteController ctrl;
     auto result = ctrl.transition(BuretteCommand::Fill);
     REQUIRE(result);
     REQUIRE(ctrl.state == BuretteState::Filling);
 }
 
-TEST_CASE("Dose from Idle succeeds", "[burette]") {
+TEST_CASE("Dose from Idle succeeds", "[burette]")
+{
     BuretteController ctrl;
     auto result = ctrl.transition(BuretteCommand::Dose);
     REQUIRE(result);
     REQUIRE(ctrl.state == BuretteState::Dosing);
 }
 
-TEST_CASE("Stop during active state succeeds", "[burette]") {
+TEST_CASE("Stop during active state succeeds", "[burette]")
+{
     BuretteController ctrl;
     std::ignore = ctrl.transition(BuretteCommand::Fill);
     auto result = ctrl.transition(BuretteCommand::Stop);
@@ -35,14 +39,16 @@ TEST_CASE("Stop during active state succeeds", "[burette]") {
     REQUIRE(ctrl.state == BuretteState::Stopping);
 }
 
-TEST_CASE("Stop from Idle fails", "[burette]") {
+TEST_CASE("Stop from Idle fails", "[burette]")
+{
     BuretteController ctrl;
     auto result = ctrl.transition(BuretteCommand::Stop);
     REQUIRE(!result);
     REQUIRE(result.error() == StateError::InvalidTransition);
 }
 
-TEST_CASE("Fill when already busy fails", "[burette]") {
+TEST_CASE("Fill when already busy fails", "[burette]")
+{
     BuretteController ctrl;
     std::ignore = ctrl.transition(BuretteCommand::Fill);
     auto result = ctrl.transition(BuretteCommand::Dose);
@@ -50,7 +56,8 @@ TEST_CASE("Fill when already busy fails", "[burette]") {
     REQUIRE(result.error() == StateError::Busy);
 }
 
-TEST_CASE("Reset only from Error", "[burette]") {
+TEST_CASE("Reset only from Error", "[burette]")
+{
     BuretteController ctrl;
     auto result = ctrl.transition(BuretteCommand::Reset);
     REQUIRE(!result);
@@ -59,7 +66,8 @@ TEST_CASE("Reset only from Error", "[burette]") {
 
 // ── Rinse SM tests ──────────────────────────────────────────────
 
-TEST_CASE("RinseSm starts in PreFill when not full", "[rinse]") {
+TEST_CASE("RinseSm starts in PreFill when not full", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 0.0f, 8.14f);
     REQUIRE(sm.phase == RinseSm::Phase::PreFill);
@@ -67,13 +75,15 @@ TEST_CASE("RinseSm starts in PreFill when not full", "[rinse]") {
     REQUIRE(sm.currentCycle == 1);
 }
 
-TEST_CASE("RinseSm skips PreFill when near full", "[rinse]") {
+TEST_CASE("RinseSm skips PreFill when near full", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 8.14f, 8.14f);
     REQUIRE(sm.phase == RinseSm::Phase::Emptying);
 }
 
-TEST_CASE("RinseSm PreFill transitions to EmptyToLimit", "[rinse]") {
+TEST_CASE("RinseSm PreFill transitions to EmptyToLimit", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 0.0f, 8.14f);
     auto action = sm.onMotorComplete(0.0f, 8.14f);
@@ -81,7 +91,8 @@ TEST_CASE("RinseSm PreFill transitions to EmptyToLimit", "[rinse]") {
     REQUIRE(sm.phase == RinseSm::Phase::Emptying);
 }
 
-TEST_CASE("RinseSm Emptying transitions to FillToLimit", "[rinse]") {
+TEST_CASE("RinseSm Emptying transitions to FillToLimit", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 0.0f, 8.14f);
     std::ignore = sm.onMotorComplete(0.0f, 8.14f);
@@ -90,7 +101,8 @@ TEST_CASE("RinseSm Emptying transitions to FillToLimit", "[rinse]") {
     REQUIRE(sm.phase == RinseSm::Phase::Filling);
 }
 
-TEST_CASE("RinseSm cycles through correct number of operations", "[rinse]") {
+TEST_CASE("RinseSm cycles through correct number of operations", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 0.0f, 8.14f);
 
@@ -122,7 +134,8 @@ TEST_CASE("RinseSm cycles through correct number of operations", "[rinse]") {
     REQUIRE(sm.isComplete());
 }
 
-TEST_CASE("RinseSm one cycle", "[rinse]") {
+TEST_CASE("RinseSm one cycle", "[rinse]")
+{
     RinseSm sm;
     sm.start(1, 0.0f, 8.14f);
 
@@ -140,7 +153,8 @@ TEST_CASE("RinseSm one cycle", "[rinse]") {
     REQUIRE(sm.isComplete());
 }
 
-TEST_CASE("RinseSm skip PreFill when full cycles correctly", "[rinse]") {
+TEST_CASE("RinseSm skip PreFill when full cycles correctly", "[rinse]")
+{
     RinseSm sm;
     sm.start(2, 8.14f, 8.14f);
     REQUIRE(sm.phase == RinseSm::Phase::Emptying);
@@ -160,7 +174,8 @@ TEST_CASE("RinseSm skip PreFill when full cycles correctly", "[rinse]") {
     REQUIRE(sm.isComplete());
 }
 
-TEST_CASE("RinseSm isComplete returns false during operation", "[rinse]") {
+TEST_CASE("RinseSm isComplete returns false during operation", "[rinse]")
+{
     RinseSm sm;
     sm.start(3, 0.0f, 8.14f);
     REQUIRE_FALSE(sm.isComplete());
@@ -170,13 +185,15 @@ TEST_CASE("RinseSm isComplete returns false during operation", "[rinse]") {
 
 // ── CalDose SM tests ────────────────────────────────────────────
 
-TEST_CASE("CalDoseSm start sets phase to Idle", "[cal_dose]") {
+TEST_CASE("CalDoseSm start sets phase to Idle", "[cal_dose]")
+{
     CalDoseSm sm;
     sm.start();
     REQUIRE(sm.phase == CalDoseSm::Phase::Idle);
 }
 
-TEST_CASE("CalDoseSm onStart returns FillToLimit when not full", "[cal_dose]") {
+TEST_CASE("CalDoseSm onStart returns FillToLimit when not full", "[cal_dose]")
+{
     CalDoseSm sm;
     sm.start();
     auto a = sm.onStart(0.0f, 8.14f);
@@ -184,7 +201,8 @@ TEST_CASE("CalDoseSm onStart returns FillToLimit when not full", "[cal_dose]") {
     REQUIRE(sm.phase == CalDoseSm::Phase::Filling);
 }
 
-TEST_CASE("CalDoseSm onStart skips fill when near full", "[cal_dose]") {
+TEST_CASE("CalDoseSm onStart skips fill when near full", "[cal_dose]")
+{
     CalDoseSm sm;
     sm.start();
     auto a = sm.onStart(8.1f, 8.14f);
@@ -192,7 +210,8 @@ TEST_CASE("CalDoseSm onStart skips fill when near full", "[cal_dose]") {
     REQUIRE(sm.phase == CalDoseSm::Phase::Emptying);
 }
 
-TEST_CASE("CalDoseSm fill then empty records steps", "[cal_dose]") {
+TEST_CASE("CalDoseSm fill then empty records steps", "[cal_dose]")
+{
     CalDoseSm sm;
     sm.start();
 
@@ -211,7 +230,8 @@ TEST_CASE("CalDoseSm fill then empty records steps", "[cal_dose]") {
     REQUIRE(sm.isComplete());
 }
 
-TEST_CASE("CalDoseSm steps taken absolute value", "[cal_dose]") {
+TEST_CASE("CalDoseSm steps taken absolute value", "[cal_dose]")
+{
     CalDoseSm sm;
     sm.start();
     std::ignore = sm.onStart(0.0f, 8.14f);
@@ -225,13 +245,15 @@ TEST_CASE("CalDoseSm steps taken absolute value", "[cal_dose]") {
 
 // ── CalSpeedSingle SM tests ─────────────────────────────────────
 
-TEST_CASE("CalSpeedSingleSm start sets phase Idle", "[cal_speed]") {
+TEST_CASE("CalSpeedSingleSm start sets phase Idle", "[cal_speed]")
+{
     CalSpeedSingleSm sm;
     sm.start();
     REQUIRE(sm.phase == CalSpeedSingleSm::Phase::Idle);
 }
 
-TEST_CASE("CalSpeedSingleSm fill then empty measures speed", "[cal_speed]") {
+TEST_CASE("CalSpeedSingleSm fill then empty measures speed", "[cal_speed]")
+{
     CalSpeedSingleSm sm;
     sm.start();
 
@@ -251,7 +273,8 @@ TEST_CASE("CalSpeedSingleSm fill then empty measures speed", "[cal_speed]") {
     REQUIRE(sm.isComplete());
 }
 
-TEST_CASE("CalSpeedSingleSm skips fill when full", "[cal_speed]") {
+TEST_CASE("CalSpeedSingleSm skips fill when full", "[cal_speed]")
+{
     CalSpeedSingleSm sm;
     sm.start();
     auto a = sm.onStart(8.1f, 8.14f);
@@ -261,7 +284,8 @@ TEST_CASE("CalSpeedSingleSm skips fill when full", "[cal_speed]") {
 
 // ── CalSpeedSeq SM tests ─────────────────────────────────────────
 
-TEST_CASE("CalSpeedSeqSm start sets phase FillFirst", "[cal_speed_seq]") {
+TEST_CASE("CalSpeedSeqSm start sets phase FillFirst", "[cal_speed_seq]")
+{
     CalSpeedSeqSm sm;
     uint16_t freqs[3] = {100, 500, 1000};
     sm.start(freqs);
@@ -270,7 +294,8 @@ TEST_CASE("CalSpeedSeqSm start sets phase FillFirst", "[cal_speed_seq]") {
     REQUIRE_FALSE(sm.isComplete());
 }
 
-TEST_CASE("CalSpeedSeqSm progresses through fill, settle, empty cycle", "[cal_speed_seq]") {
+TEST_CASE("CalSpeedSeqSm progresses through fill, settle, empty cycle", "[cal_speed_seq]")
+{
     CalSpeedSeqSm sm;
     uint16_t freqs[3] = {100, 500, 1000};
     sm.start(freqs);
@@ -297,7 +322,8 @@ TEST_CASE("CalSpeedSeqSm progresses through fill, settle, empty cycle", "[cal_sp
     REQUIRE(sm.results[0] > 0.0f);
 }
 
-TEST_CASE("CalSpeedSeqSm completes after 3 points", "[cal_speed_seq]") {
+TEST_CASE("CalSpeedSeqSm completes after 3 points", "[cal_speed_seq]")
+{
     CalSpeedSeqSm sm;
     uint16_t freqs[3] = {100, 500, 1000};
     sm.start(freqs);
@@ -348,49 +374,57 @@ TEST_CASE("CalSpeedSeqSm completes after 3 points", "[cal_speed_seq]") {
 
 // ── CalRunPlanner tests ─────────────────────────────────────────
 
-TEST_CASE("planCalRun returns Reject for invalid mode", "[planner]") {
+TEST_CASE("planCalRun returns Reject for invalid mode", "[planner]")
+{
     auto p = planCalRun("invalid", 0.0f, 0, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::Reject);
     REQUIRE(p.rejectReason == CalRunRejectReason::InvalidMode);
 }
 
-TEST_CASE("planCalRun returns Reject when busy", "[planner]") {
+TEST_CASE("planCalRun returns Reject when busy", "[planner]")
+{
     auto p = planCalRun("dose", 0.0f, 0, 3000.0f, 0.03052f, true);
     REQUIRE(p.action == CalRunAction::Reject);
     REQUIRE(p.rejectReason == CalRunRejectReason::BuretteBusy);
 }
 
-TEST_CASE("planCalRun dose mode default freq = maxFreq/2", "[planner]") {
+TEST_CASE("planCalRun dose mode default freq = maxFreq/2", "[planner]")
+{
     auto p = planCalRun("dose", 0.0f, 0, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::CalDose);
     REQUIRE(p.freqHz == 1500);
     REQUIRE(p.speedMlMin > 45.0f);
 }
 
-TEST_CASE("planCalRun dose mode with freq", "[planner]") {
+TEST_CASE("planCalRun dose mode with freq", "[planner]")
+{
     auto p = planCalRun("dose", 0.0f, 2000, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::CalDose);
     REQUIRE(p.freqHz == 2000);
 }
 
-TEST_CASE("planCalRun speed mode requires freq_hz", "[planner]") {
+TEST_CASE("planCalRun speed mode requires freq_hz", "[planner]")
+{
     auto p = planCalRun("speed", 0.0f, 0, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::Reject);
 }
 
-TEST_CASE("planCalRun speed mode", "[planner]") {
+TEST_CASE("planCalRun speed mode", "[planner]")
+{
     auto p = planCalRun("speed", 0.0f, 2000, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::CalSpeed);
     REQUIRE(p.freqHz == 2000);
 }
 
-TEST_CASE("planCalRun speed mode with fill speed", "[planner]") {
+TEST_CASE("planCalRun speed mode with fill speed", "[planner]")
+{
     auto p = planCalRun("speed", 25.0f, 2000, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::CalSpeed);
     REQUIRE(p.speedMlMin == 25.0f);
 }
 
-TEST_CASE("planCalRun null mode returns invalid", "[planner]") {
+TEST_CASE("planCalRun null mode returns invalid", "[planner]")
+{
     auto p = planCalRun(nullptr, 0.0f, 0, 3000.0f, 0.03052f, false);
     REQUIRE(p.action == CalRunAction::Reject);
 }

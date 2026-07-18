@@ -116,12 +116,11 @@ void store_result(SmResult::Type type, int32_t stepsTaken, float measuredSpeed,
     // Push WS broadcast for motor completion (non-blocking, best-effort)
     if (gWsBroadcastQueue)
     {
-        struct WsBcEntry
+        static struct
         {
             char data[domain::memory::MAX_RSP_SIZE];
             size_t len;
-        };
-        WsBcEntry entry;
+        } entry;
         int n = std::snprintf(entry.data, sizeof(entry.data),
                               R"({"event":"motor_complete","type":%d,"steps":%ld})",
                               static_cast<int>(type), static_cast<long>(stepsTaken));

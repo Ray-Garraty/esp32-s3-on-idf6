@@ -173,7 +173,8 @@ extern "C" void netTaskEntry(void* pvParameters)
             {
                 ESP_LOGI("net_owner", "WiFi connected, restarting in STA mode");
                 // Drain broadcast queue to send result before restart
-                while (gWsBroadcastQueue && xQueueReceive(gWsBroadcastQueue, &wifiBcBuf, 0) == pdTRUE)
+                while (gWsBroadcastQueue &&
+                       xQueueReceive(gWsBroadcastQueue, &wifiBcBuf, 0) == pdTRUE)
                 {
                     auto* hsp = gHttpServerForWs.load(std::memory_order_acquire);
                     if (hsp)

@@ -390,6 +390,8 @@ function connectWs(){
         updateStepperUI({status:'idle'});
         var btn=document.getElementById('stepper-start-stop-btn');
         if(btn)btn.disabled=false;
+      }else if(data.event&&data.event==='valve_settled'){
+        if(data.position){APP_STATE.valve.position=data.position;setText('hw-valve',data.position);}
       }else if(data.event&&data.event==='wifi_connect_result'){
         console.log('WiFi connect result:', data.success?'success':'failed','SSID:',data.ssid);
       }else{
@@ -829,7 +831,7 @@ var toggleValve=async function(){
   try{
     console.log('[Valve] toggling to',newPos);
     var r=await fetch('/api/valve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:newPos})});
-    if(r.ok){var j=await r.json();console.log('[Valve] response:',JSON.stringify(j));if(j.valve){APP_STATE.valve.position=j.valve;setText('hw-valve',j.valve);}}else console.error('[Valve] HTTP',r.status);
+    if(r.ok){var j=await r.json();console.log('[Valve] response:',JSON.stringify(j));}else console.error('[Valve] HTTP',r.status);
   }catch(e){console.error('[Valve] fetch error:',e);}finally{if(btn){btn.disabled=false;btn.textContent='Toggle';}}
 };
 

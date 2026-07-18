@@ -4,12 +4,12 @@
 #include <cstring>
 
 #include "application/command.hpp"
+#include "application/send_motor_command.hpp"
 #include "domain/memory.hpp"
+#include "domain/motor_command.hpp"
 #include "domain/types.hpp"
 #include "infrastructure/config.hpp"
 #include "infrastructure/drivers/valve.hpp"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 namespace ecotiter::application::handlers::valve
 {
@@ -21,14 +21,28 @@ handleSetPosition(std::optional<domain::ValvePosition> pos)
     {
         return makeErrorResponse("invalid_params");
     }
+
+    // Queue settle + WS broadcast to motor task (non-blocking)
+    domain::MotorCommand cmd{};
+    cmd.type = domain::MotorCommandType::SetValvePosition;
+    cmd.valvePosition = *pos;
+    if (!application::sendMotorCommand(cmd))
+    {
+        return makeErrorResponse("busy");
+    }
+
+    // Set valve position immediately (fast GPIO write — no delay)
     infrastructure::drivers::gValve.setPosition(*pos);
     domain::gValvePosition.store(*pos, std::memory_order_release);
-    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
+
+    // Return accepted with position — serial/BLE clients read position from response,
+    // HTTP clients get position via WS valve_settled event after settle delay.
     const char* posStr = (*pos == domain::ValvePosition::Input) ? "input" : "output";
     CommandResponse rsp;
-    rsp.kind = ResponseKind::Single;
+    rsp.kind = ResponseKind::AckThen;
     rsp.bodySize = static_cast<size_t>(std::snprintf(
-        rsp.body.data(), rsp.body.size(), R"({"status":"ok","data":{"position":"%s"}})", posStr));
+        rsp.body.data(), rsp.body.size(),
+        R"({"status":"ok","data":{"status":"accepted","position":"%s"}})", posStr));
     return rsp;
 }
 

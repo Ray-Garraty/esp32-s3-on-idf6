@@ -14,33 +14,41 @@
 #include <vector>
 
 // Absolute path via CMake compile definition — works from any CWD
-static constexpr auto BLE_SRC_PATH = TESTS_SOURCE_DIR "/../components/infrastructure/network/src/ble.cpp";
+static constexpr auto BLE_SRC_PATH =
+    TESTS_SOURCE_DIR "/../components/infrastructure/network/src/ble.cpp";
 
-static std::vector<std::string> readFileLines(const std::string& path) {
+static std::vector<std::string> readFileLines(const std::string& path)
+{
     std::vector<std::string> lines;
     std::ifstream file(path);
-    if (!file.is_open()) {
+    if (!file.is_open())
+    {
         // If file can't be opened, return empty — tests will fail with clear message
         return lines;
     }
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(file, line))
+    {
         lines.push_back(line);
     }
     return lines;
 }
 
-TEST_CASE("BLE src includes GAP and GATT service headers", "[ble][regression]") {
+TEST_CASE("BLE src includes GAP and GATT service headers", "[ble][regression]")
+{
     auto lines = readFileLines(BLE_SRC_PATH);
     REQUIRE_FALSE(lines.empty());
 
-    bool hasGapInclude  = false;
+    bool hasGapInclude = false;
     bool hasGattInclude = false;
-    for (const auto& line : lines) {
-        if (line.find("#include \"services/gap/ble_svc_gap.h\"") != std::string::npos) {
+    for (const auto& line : lines)
+    {
+        if (line.find("#include \"services/gap/ble_svc_gap.h\"") != std::string::npos)
+        {
             hasGapInclude = true;
         }
-        if (line.find("#include \"services/gatt/ble_svc_gatt.h\"") != std::string::npos) {
+        if (line.find("#include \"services/gatt/ble_svc_gatt.h\"") != std::string::npos)
+        {
             hasGattInclude = true;
         }
     }
@@ -50,22 +58,27 @@ TEST_CASE("BLE src includes GAP and GATT service headers", "[ble][regression]") 
 }
 
 TEST_CASE("BLE init calls ble_svc_gap_init and ble_svc_gatt_init after nimble_port_init",
-          "[ble][regression]") {
+          "[ble][regression]")
+{
     auto lines = readFileLines(BLE_SRC_PATH);
     REQUIRE_FALSE(lines.empty());
 
     size_t nimbleDoneLine = 0;
-    size_t gapInitLine    = 0;
-    size_t gattInitLine   = 0;
+    size_t gapInitLine = 0;
+    size_t gattInitLine = 0;
 
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (lines[i].find("nimble_port_init done") != std::string::npos) {
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        if (lines[i].find("nimble_port_init done") != std::string::npos)
+        {
             nimbleDoneLine = i;
         }
-        if (lines[i].find("ble_svc_gap_init()") != std::string::npos) {
+        if (lines[i].find("ble_svc_gap_init()") != std::string::npos)
+        {
             gapInitLine = i;
         }
-        if (lines[i].find("ble_svc_gatt_init()") != std::string::npos) {
+        if (lines[i].find("ble_svc_gatt_init()") != std::string::npos)
+        {
             gattInitLine = i;
         }
     }
@@ -81,18 +94,22 @@ TEST_CASE("BLE init calls ble_svc_gap_init and ble_svc_gatt_init after nimble_po
 }
 
 TEST_CASE("BLE init checks return values of ble_gatts_count_cfg and ble_gatts_add_svcs",
-          "[ble][regression]") {
+          "[ble][regression]")
+{
     auto lines = readFileLines(BLE_SRC_PATH);
     REQUIRE_FALSE(lines.empty());
 
     bool hasCountErrorCheck = false;
-    bool hasAddErrorCheck   = false;
+    bool hasAddErrorCheck = false;
 
-    for (const auto& line : lines) {
-        if (line.find("ble_gatts_count_cfg failed") != std::string::npos) {
+    for (const auto& line : lines)
+    {
+        if (line.find("ble_gatts_count_cfg failed") != std::string::npos)
+        {
             hasCountErrorCheck = true;
         }
-        if (line.find("ble_gatts_add_svcs failed") != std::string::npos) {
+        if (line.find("ble_gatts_add_svcs failed") != std::string::npos)
+        {
             hasAddErrorCheck = true;
         }
     }
@@ -101,23 +118,28 @@ TEST_CASE("BLE init checks return values of ble_gatts_count_cfg and ble_gatts_ad
     REQUIRE(hasAddErrorCheck);
 }
 
-TEST_CASE("BLE advertising has scan response with NUS service UUID", "[ble][regression]") {
+TEST_CASE("BLE advertising has scan response with NUS service UUID", "[ble][regression]")
+{
     auto lines = readFileLines(BLE_SRC_PATH);
     REQUIRE_FALSE(lines.empty());
 
-    bool hasRspFieldsDecl  = false;
-    bool hasRspSetFields   = false;
-    bool hasNusInRsp       = false;
+    bool hasRspFieldsDecl = false;
+    bool hasRspSetFields = false;
+    bool hasNusInRsp = false;
 
-    for (const auto& line : lines) {
-        if (line.find("ble_hs_adv_fields rsp_fields") != std::string::npos) {
+    for (const auto& line : lines)
+    {
+        if (line.find("ble_hs_adv_fields rsp_fields") != std::string::npos)
+        {
             hasRspFieldsDecl = true;
         }
-        if (line.find("ble_gap_adv_rsp_set_fields") != std::string::npos) {
+        if (line.find("ble_gap_adv_rsp_set_fields") != std::string::npos)
+        {
             hasRspSetFields = true;
         }
         if (line.find("NUS_SVC_UUID") != std::string::npos &&
-            line.find("rsp_fields.uuids128") != std::string::npos) {
+            line.find("rsp_fields.uuids128") != std::string::npos)
+        {
             hasNusInRsp = true;
         }
     }
