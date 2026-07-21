@@ -384,6 +384,7 @@ stepper.moveSteps(STEPS_HOMING, Hz{HOMING_SPEED_HZ});
 - [ ] Code follows layered architecture (`domain/` -> no `esp_*.h` includes)
 - [ ] State machine uses exhaustive switch on enum
 - [ ] No circular dependencies between components
+- [ ] No `#include` violations: `python3 scripts/check_arch.py` exits 0
 
 ### Memory
 - [ ] No `std::vector`/`std::string` in main loop or motor thread

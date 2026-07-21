@@ -1,0 +1,147 @@
+# arch_config.toml
+# Read by scripts/check_arch.py via tomllib. Zero external dependencies.
+# WARNING: This file is declarative only. Do not add Python logic here.
+
+# Headers generated at build time — always whitelisted, never checked
+generated_headers = [
+    "sdkconfig.h",
+    "esp_app_desc.h",
+    "cxxabi.h",
+]
+
+# SRP thresholds for file-level metrics
+[srp_thresholds]
+max_loc = 800
+max_fan_out = 12
+max_public_methods = 25
+
+# Component definitions with allowed dependency targets
+[components]
+domain = { path = "components/domain", allowed = ["domain"] }
+application = { path = "components/application", allowed = [
+    "domain", "application", "json",
+] }
+infrastructure = { path = "components/infrastructure", allowed = [
+    "domain", "application", "infrastructure", "diag", "json",
+    "freertos", "esp_system", "esp_driver", "esp_timer",
+    "esp_wifi", "esp_http", "esp_netif", "bt", "nvs_flash",
+    "esp_pm", "esp_event", "lwip", "mbedtls", "mdns",
+    "hal", "soc", "driver",
+] }
+interface = { path = "components/interface", allowed = [
+    "domain", "application", "interface", "json", "esp_http", "freertos",
+] }
+diag = { path = "components/diag", allowed = [
+    "domain", "diag", "freertos", "esp_system", "esp_timer", "esp_hal",
+    "hal", "soc",
+] }
+main = { path = "main", allowed = ["*"] }
+
+# How #include paths map to virtual component tags.
+# Order matters: first match wins. Specific entries MUST come before
+# generic ones (e.g. "esp_wifi" before "esp_") to avoid dead entries.
+[[virtual_prefix]]
+prefix = "domain/"
+tag = "domain"
+[[virtual_prefix]]
+prefix = "application/"
+tag = "application"
+[[virtual_prefix]]
+prefix = "infrastructure/"
+tag = "infrastructure"
+[[virtual_prefix]]
+prefix = "interface/"
+tag = "interface"
+[[virtual_prefix]]
+prefix = "diag/"
+tag = "diag"
+[[virtual_prefix]]
+prefix = "nlohmann/"
+tag = "json"
+[[virtual_prefix]]
+prefix = "main/"
+tag = "main"
+# Specific ESP-IDF subsystems BEFORE generic "esp_" fallback
+[[virtual_prefix]]
+prefix = "esp_wifi"
+tag = "esp_wifi"
+[[virtual_prefix]]
+prefix = "esp_http"
+tag = "esp_http"
+[[virtual_prefix]]
+prefix = "esp_netif"
+tag = "esp_netif"
+[[virtual_prefix]]
+prefix = "esp_timer"
+tag = "esp_timer"
+[[virtual_prefix]]
+prefix = "esp_pm"
+tag = "esp_pm"
+[[virtual_prefix]]
+prefix = "esp_event"
+tag = "esp_event"
+[[virtual_prefix]]
+prefix = "esp_bt"
+tag = "bt"
+[[virtual_prefix]]
+prefix = "esp_driver"
+tag = "esp_driver"
+[[virtual_prefix]]
+prefix = "esp_hal"
+tag = "esp_hal"
+[[virtual_prefix]]
+prefix = "esp_"
+tag = "esp_system"  # generic fallback
+# Third-party
+[[virtual_prefix]]
+prefix = "freertos/"
+tag = "freertos"
+[[virtual_prefix]]
+prefix = "driver/"
+tag = "esp_driver"
+[[virtual_prefix]]
+prefix = "hal/"
+tag = "hal"
+[[virtual_prefix]]
+prefix = "soc/"
+tag = "soc"
+[[virtual_prefix]]
+prefix = "nvs_flash.h"
+tag = "nvs_flash"
+[[virtual_prefix]]
+prefix = "bt/"
+tag = "bt"
+[[virtual_prefix]]
+prefix = "lwip/"
+tag = "lwip"
+[[virtual_prefix]]
+prefix = "mbedtls/"
+tag = "mbedtls"
+[[virtual_prefix]]
+prefix = "mdns.h"
+tag = "mdns"
+# Apache NimBLE BLE stack
+[[virtual_prefix]]
+prefix = "host/"
+tag = "bt"
+[[virtual_prefix]]
+prefix = "nimble/"
+tag = "bt"
+[[virtual_prefix]]
+prefix = "services/"
+tag = "bt"
+[[virtual_prefix]]
+prefix = "os/"
+tag = "bt"  # Apache MyNewt OS core (os_mbuf.h etc.)
+# Xtensa architecture headers
+[[virtual_prefix]]
+prefix = "xtensa/"
+tag = "esp_system"
+# Specific xtensa files included by bare filename (no dir prefix)
+[[virtual_prefix]]
+prefix = "xtensa_context.h"
+tag = "esp_system"
+# ROM headers
+[[virtual_prefix]]
+prefix = "rom/"
+tag = "esp_system"

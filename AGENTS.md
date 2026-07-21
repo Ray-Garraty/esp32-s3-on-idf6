@@ -72,11 +72,12 @@ NEVER call `idf.py` directly. Always use `scripts/idf.sh`.
 | `scripts/idf.sh test` | Host unit tests (Catch2) |
 | `scripts/idf.sh tidy` | clang-tidy static analysis (requires build first) |
 | `scripts/pre_commit.sh` | Pre-commit validation suite (see §3.5) |
+| `python3 scripts/check_arch.py` | Architecture layering + SRP + cycle check |
 
 ### 3.5 Pre-Commit Script
 | Mode | Steps included |
 |---|---|
-| `scripts/pre_commit.sh --fast` | Staged files scan → clang-format → semgrep → unit tests → docs OKF → sdkconfig constraint → stack watermark check (~30s) |
+| `scripts/pre_commit.sh --fast` | Staged files scan → clang-format → semgrep → arch check → unit tests → docs OKF → sdkconfig constraint → stack watermark check (~30s) |
 | `scripts/pre_commit.sh` (full) | Fast + build + clang-tidy + serial API hardware test (~5 min) |
 
 Each step fails fast with a clear error message. All steps are fatal — a serial API protocol regression will abort the commit.

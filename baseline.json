@@ -1,0 +1,106 @@
+{
+  "components/application/include/application/esp_check.hpp": {
+    "includes": ["esp_err.h", "esp_log.h"],
+    "severity": "high",
+    "tier": "A",
+    "sunset": "2026-10-01",
+    "note": "Public header — extract ESP error/log helpers behind infrastructure sink"
+  },
+  "components/application/include/application/send_motor_command.hpp": {
+    "includes": ["infrastructure/motor_task.hpp"],
+    "severity": "high",
+    "tier": "A",
+    "sunset": "2026-10-01",
+    "note": "Public header — abstract motor task queue access"
+  },
+  "components/application/src/dispatch.cpp": {
+    "includes": ["infrastructure/storage/nvs.hpp"],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/handlers/burette_cal.cpp": {
+    "includes": ["infrastructure/config.hpp"],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/handlers/burette_ops.cpp": {
+    "includes": [
+      "infrastructure/cal_cache.hpp", "infrastructure/config.hpp",
+      "infrastructure/storage/nvs.hpp"
+    ],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/handlers/sensors.cpp": {
+    "includes": [
+      "esp_log.h", "infrastructure/config.hpp",
+      "infrastructure/motor_task.hpp",
+      "infrastructure/storage/nvs.hpp"
+    ],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/handlers/valve.cpp": {
+    "includes": ["infrastructure/config.hpp", "infrastructure/drivers/valve.hpp"],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/response.cpp": {
+    "includes": ["infrastructure/storage/nvs.hpp"],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/application/src/state_machine.cpp": {
+    "includes": ["freertos/FreeRTOS.h"],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/domain/include/domain/log_buffer.hpp": {
+    "includes": ["freertos/FreeRTOS.h", "freertos/queue.h"],
+    "severity": "high",
+    "tier": "A",
+    "sunset": "2026-10-01",
+    "note": "Public header — extract FreeRTOS queue behind callback/sink"
+  },
+  "components/domain/src/log_buffer.cpp": {
+    "includes": [
+      "freertos/FreeRTOS.h", "freertos/queue.h",
+      "freertos/task.h", "diag/stack_monitor.hpp"
+    ],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never",
+    "note": "Source-only, no fix planned"
+  },
+  "components/infrastructure/network/src/http_server.cpp": {
+    "includes": ["interface/rest_api.hpp", "interface/webui.hpp"],
+    "severity": "low",
+    "tier": "C",
+    "sunset": "never",
+    "note": "Intentional wiring seam — REST handler registration"
+  },
+  "components/interface/src/rest_api.cpp": {
+    "includes": [
+      "esp_log.h", "infrastructure/memory/psram_buffer.hpp"
+    ],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  },
+  "components/interface/src/serial.cpp": {
+    "includes": [
+      "driver/uart.h", "driver/uart_vfs.h", "esp_log.h",
+      "esp_vfs_dev.h", "infrastructure/config.hpp"
+    ],
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
+  }
+}

@@ -61,26 +61,76 @@ fi
 
 # ============================================================
 echo "=== 4. Semgrep (main loop blocking) ==="
-if ! command -v semgrep &>/dev/null; then
-  echo "  ❌ FAIL: semgrep not installed"
-  echo "  Install: pip install --break-system-packages semgrep"
-  exit 1
+SEMGREP=""
+for candidate in \
+  "$HOME/.local/bin/semgrep" \
+  "$HOME/.local/pipx/venvs/semgrep/bin/semgrep" \
+  /usr/bin/semgrep \
+  /usr/local/bin/semgrep; do
+  cand_exp=$(eval echo "$candidate")
+  if [[ -x "$cand_exp" ]]; then
+    SEMGREP="$cand_exp"
+    break
+  fi
+done
+if [[ -z "$SEMGREP" ]]; then
+  # Check if module is available (works even with broken entry-point symlinks)
+  if python3 -m semgrep --version >/dev/null 2>&1; then
+    SEMGREP="python3 -m semgrep"
+  else
+    echo "  ⚠️  semgrep not found — attempting auto-install..."
+    pip3 install --break-system-packages semgrep 2>&1 | tail -1
+    # Re-check
+    if command -v semgrep &>/dev/null; then
+      SEMGREP="semgrep"
+    elif python3 -m semgrep --version >/dev/null 2>&1; then
+      SEMGREP="python3 -m semgrep"
+    else
+      echo "  ❌ FAIL: semgrep not installed and auto-install failed"
+      echo "  Manual: pip install --break-system-packages semgrep"
+      exit 1
+    fi
+  fi
 fi
-semgrep --config "$PROJECT_DIR/.semgrep/main_loop_blocking.yaml" --error "$PROJECT_DIR/main/main.cpp"
+echo "  🔍 semgrep: $SEMGREP"
+$SEMGREP --config "$PROJECT_DIR/.semgrep/main_loop_blocking.yaml" --error "$PROJECT_DIR/main/main.cpp"
 echo "  ✅ No main loop blocking violations"
 
 # ============================================================
-echo "=== 5. Host unit tests ==="
+echo "=== 5. Architecture dependency check ==="
+UNCOMMITTED_CPP=$(
+  {
+    git diff --name-only HEAD
+    git ls-files --others --exclude-standard
+  } 2>/dev/null \
+  | grep -E '\.(cpp|hpp|h)$' \
+  | sort -u \
+  | head -200 \
+  || true
+)
+if [[ -z "$UNCOMMITTED_CPP" ]]; then
+    echo "  ⏭️  No uncommitted C++ files — skipping"
+else
+    if ! echo "$UNCOMMITTED_CPP" | python3 "$PROJECT_DIR/scripts/check_arch.py" --quiet --files; then
+        echo "  ❌ FAIL: Architecture dependency violation detected"
+        echo "  Run: python3 scripts/check_arch.py"
+        exit 1
+    fi
+    echo "  ✅ No architecture dependency violations in uncommitted files"
+fi
+
+# ============================================================
+echo "=== 6. Host unit tests ==="
 "$SCRIPT_DIR/idf.sh" test
 echo "  ✅ All unit tests pass"
 
 # ============================================================
-echo "=== 6. Docs OKF validation ==="
+echo "=== 7. Docs OKF validation ==="
 python "$PROJECT_DIR/docs/validate_okf.py"
 echo "  ✅ All docs valid"
 
 # ============================================================
-echo "=== 7. sdkconfig constraint ==="
+echo "=== 8. sdkconfig constraint ==="
 SDKCONFIG="$PROJECT_DIR/sdkconfig.defaults"
 if [[ ! -f "$SDKCONFIG" ]]; then
   echo "  ❌ FAIL: $SDKCONFIG not found"
@@ -103,18 +153,18 @@ echo "  ✅ CONFIG_ESP_WIFI_RX_BA_WIN ($rx_ba_win) ≤ CONFIG_ESP_WIFI_DYNAMIC_R
 # ============================================================
 # Full mode
 if [ "$fast_mode" = false ]; then
-  echo "=== 8. Smoke test (build + flash + 70s monitor) ==="
+  echo "=== 9. Smoke test (build + flash + 70s monitor) ==="
   "$SCRIPT_DIR/idf.sh" smoke
   echo "  ✅ Smoke test passed"
 
-  echo "=== 9. Stack watermark check ==="
+  echo "=== 10. Stack watermark check ==="
   if ls "$PROJECT_DIR"/logs/serial_*.log >/dev/null 2>&1; then
       python3 "$SCRIPT_DIR/check_watermarks.py"
   else
       echo "  ⏭️  No serial log found — skipping watermark check"
   fi
 
-  echo "=== 10. clang-tidy ==="
+  echo "=== 11. clang-tidy ==="
   if [[ ! -f "$PROJECT_DIR/build/compile_commands.json" ]]; then
     echo "  ❌ FAIL: build/compile_commands.json not found"
     echo "  Run build first or check build output."
@@ -123,7 +173,7 @@ if [ "$fast_mode" = false ]; then
   "$SCRIPT_DIR/idf.sh" tidy
   echo "  ✅ clang-tidy clean"
 
-  echo "=== 11. Serial API hardware test ==="
+  echo "=== 12. Serial API hardware test ==="
   if [[ -x "$PROJECT_DIR/scripts/testing/serial_api_test.py" ]]; then
     timeout 60 python3 "$PROJECT_DIR/scripts/testing/serial_api_test.py"
   fi
