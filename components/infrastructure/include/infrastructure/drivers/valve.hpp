@@ -27,4 +27,9 @@ private:
 
 extern Valve gValve;
 
+// Valve settle timer — non-blocking esp_timer one-shot
+// Callable from any layer; implemented in infrastructure
+void armValveSettleTimer(domain::ValvePosition pos);
+void cancelValveSettleTimer();
+
 } // namespace ecotiter::infrastructure::drivers

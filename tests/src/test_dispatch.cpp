@@ -7,6 +7,13 @@
 using namespace ecotiter::application;
 using namespace ecotiter::domain;
 
+// Reset global state between tests
+static void resetState()
+{
+    gBuretteState.store(BuretteState::Idle, std::memory_order_release);
+    gValveIsSettling.store(false, std::memory_order_release);
+}
+
 TEST_CASE("dispatch: serial.ping returns ok", "[dispatch]")
 {
     Command cmd{CommandType::SerialPing};
@@ -19,6 +26,7 @@ TEST_CASE("dispatch: serial.ping returns ok", "[dispatch]")
 
 TEST_CASE("dispatch: fill returns AckThen", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::Fill};
     auto rsp = dispatch(cmd);
     REQUIRE(rsp);
@@ -27,6 +35,7 @@ TEST_CASE("dispatch: fill returns AckThen", "[dispatch]")
 
 TEST_CASE("dispatch: empty returns AckThen", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::Empty};
     auto rsp = dispatch(cmd);
     REQUIRE(rsp);
@@ -43,6 +52,7 @@ TEST_CASE("dispatch: doseVolume missing param returns error", "[dispatch]")
 
 TEST_CASE("dispatch: doseVolume with param returns AckThen", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::DoseVolume};
     cmd.volume = Ml{10.0f};
     auto rsp = dispatch(cmd);
@@ -52,6 +62,7 @@ TEST_CASE("dispatch: doseVolume with param returns AckThen", "[dispatch]")
 
 TEST_CASE("dispatch: rinse with cycles returns AckThen", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::Rinse};
     cmd.volume = Ml{3.0f};
     auto rsp = dispatch(cmd);
@@ -61,6 +72,7 @@ TEST_CASE("dispatch: rinse with cycles returns AckThen", "[dispatch]")
 
 TEST_CASE("dispatch: stop returns Single", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::Stop};
     auto rsp = dispatch(cmd);
     REQUIRE(rsp);
@@ -96,6 +108,7 @@ TEST_CASE("dispatch: setDirection returns error without param", "[dispatch]")
 
 TEST_CASE("dispatch: setDirection with param returns Single", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::SetDirection};
     cmd.direction = Direction::LiqIn;
     auto rsp = dispatch(cmd);
@@ -113,6 +126,7 @@ TEST_CASE("dispatch: setSpeed returns error without param", "[dispatch]")
 
 TEST_CASE("dispatch: setSpeed with param returns Single", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::SetSpeed};
     cmd.speed = 1500;
     auto rsp = dispatch(cmd);
@@ -122,6 +136,7 @@ TEST_CASE("dispatch: setSpeed with param returns Single", "[dispatch]")
 
 TEST_CASE("dispatch: setAccel with param returns Single", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::SetAccel};
     cmd.accel = 200;
     auto rsp = dispatch(cmd);
@@ -139,6 +154,7 @@ TEST_CASE("dispatch: moveSteps returns error without param", "[dispatch]")
 
 TEST_CASE("dispatch: moveSteps with param returns AckThen", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::MoveSteps};
     cmd.steps = Steps{200};
     auto rsp = dispatch(cmd);
@@ -156,6 +172,7 @@ TEST_CASE("dispatch: valve.setPosition returns error without param", "[dispatch]
 
 TEST_CASE("dispatch: valve.setPosition with param returns Single", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::ValveSetPosition};
     cmd.valvePos = ValvePosition::Output;
     auto rsp = dispatch(cmd);
@@ -229,6 +246,7 @@ TEST_CASE("dispatch: system.getStatus returns JSON", "[dispatch]")
 
 TEST_CASE("dispatch: MoveToStop returns AckThen (not Single)", "[dispatch]")
 {
+    resetState();
     Command cmd{CommandType::MoveToStop};
     cmd.direction = Direction::LiqIn;
     cmd.freqHz = 300.0f;

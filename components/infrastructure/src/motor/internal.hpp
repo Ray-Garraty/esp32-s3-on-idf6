@@ -6,6 +6,7 @@
 #include "domain/types.hpp"
 #include "infrastructure/drivers/limitswitch.hpp"
 #include "infrastructure/drivers/stepper.hpp"
+#include "infrastructure/drivers/valve.hpp"
 #include "infrastructure/motor_task.hpp"
 
 namespace ecotiter::infrastructure::motor
@@ -16,6 +17,7 @@ void assert_rmt_preconditions();
 
 // ── motion.cpp ──────────────────────────────────────────────────
 void set_valve(domain::ValvePosition pos);
+void settle_valve(std::atomic<bool>& stopFlag);
 uint32_t ml_min_to_hz(float speedMlMin);
 void move_to_endstop(drivers::StepperMotor& stepper, domain::Direction dir, uint32_t speedHz,
                      std::atomic<bool>& stopFlag);

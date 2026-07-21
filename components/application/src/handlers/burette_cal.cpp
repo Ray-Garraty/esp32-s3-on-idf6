@@ -188,6 +188,16 @@ handleRunCalibration(const float* freqs, size_t freqsCount, float speedMlMin)
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Dosing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     size_t count =
         (freqsCount > config::MAX_CAL_SEQ_POINTS) ? config::MAX_CAL_SEQ_POINTS : freqsCount;
     domain::MotorCommand cmd{};
@@ -201,6 +211,7 @@ handleRunCalibration(const float* freqs, size_t freqsCount, float speedMlMin)
     }
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("start_failed");
     }
     return makeAckThenResponse();

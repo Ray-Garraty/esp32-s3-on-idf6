@@ -120,7 +120,7 @@ std::string_view serializeBroadcastExtended(const BroadcastEvent& evt,
         R"("limitSwitch":{"full":%s,"empty":%s},)"
         R"("usbSerialConnected":%s,"bleConnected":%s,)"
         R"("stepperDrv":{"isConnected":%s,"otpw":%s,"ot":%s,)"
-        R"("motor":{"stallGuard":{"value":%u,"isStalled":%s,"threshold":%u},"isMoving":%s}},)"
+        R"("motor":{"stallGuard":{"value":%u,"isStalled":%s,"threshold":%u}}},)"
         R"("buretteSteps":{"taken":%lu})"
         R"(})",
         static_cast<unsigned long>(evt.tick), tempStr, static_cast<double>(evt.mv),
@@ -130,7 +130,7 @@ std::string_view serializeBroadcastExtended(const BroadcastEvent& evt,
         evt.stepperDrvConnected ? "true" : "false", evt.stepperDrvOtpw ? "true" : "false",
         evt.stepperDrvOt ? "true" : "false", static_cast<unsigned>(evt.stallGuardValue),
         evt.isStalled ? "true" : "false", static_cast<unsigned>(evt.stallGuardThreshold),
-        evt.motorIsMoving ? "true" : "false", static_cast<unsigned long>(evt.stepsTaken));
+        static_cast<unsigned long>(evt.stepsTaken));
 
     if (n < 0 || static_cast<size_t>(n) >= buf.size())
     {

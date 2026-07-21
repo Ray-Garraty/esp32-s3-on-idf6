@@ -13,8 +13,9 @@ static constexpr auto MOTION_SRC =
     TESTS_SOURCE_DIR "/../components/infrastructure/src/motor/motion.cpp";
 static constexpr auto TASK_SRC =
     TESTS_SOURCE_DIR "/../components/infrastructure/src/motor/task.cpp";
-static constexpr auto MAIN_SRC =
-    TESTS_SOURCE_DIR "/../main/main.cpp";
+static constexpr auto MAIN_SRC = TESTS_SOURCE_DIR "/../main/main.cpp";
+static constexpr auto VALVE_SRC =
+    TESTS_SOURCE_DIR "/../components/infrastructure/src/drivers/valve.cpp";
 
 static std::vector<std::string> readFileLines(const std::string& path)
 {
@@ -34,18 +35,8 @@ TEST_CASE("motion.cpp: store_result logs Motor complete", "[motion][logging][reg
     REQUIRE_FALSE(lines.empty());
     bool found = false;
     for (const auto& l : lines)
-        if (l.find("Motor complete") != std::string::npos && l.find("ESP_LOGI") != std::string::npos)
-            found = true;
-    REQUIRE(found);
-}
-
-TEST_CASE("task.cpp: handleSetValvePosition logs Valve settled", "[task][logging][regression]")
-{
-    auto lines = readFileLines(TASK_SRC);
-    REQUIRE_FALSE(lines.empty());
-    bool found = false;
-    for (const auto& l : lines)
-        if (l.find("Valve settled") != std::string::npos && l.find("ESP_LOGI") != std::string::npos)
+        if (l.find("Motor complete") != std::string::npos &&
+            l.find("ESP_LOGI") != std::string::npos)
             found = true;
     REQUIRE(found);
 }
@@ -59,6 +50,39 @@ TEST_CASE("task.cpp: handleReadTmcRegister logs SG result", "[task][logging][reg
         if (l.find("SG result") != std::string::npos && l.find("ESP_LOGI") != std::string::npos)
             found = true;
     REQUIRE(found);
+}
+
+TEST_CASE("valve.cpp: valveSettleCallback logs Valve settled", "[valve][logging][regression]")
+{
+    auto lines = readFileLines(VALVE_SRC);
+    REQUIRE_FALSE(lines.empty());
+    bool found = false;
+    for (const auto& l : lines)
+        if (l.find("Valve settled") != std::string::npos && l.find("ESP_LOGI") != std::string::npos)
+            found = true;
+    REQUIRE(found);
+}
+
+TEST_CASE("task.cpp: SetValvePosition dispatch case removed", "[task][logging][regression]")
+{
+    auto lines = readFileLines(TASK_SRC);
+    REQUIRE_FALSE(lines.empty());
+    bool foundSetValve = false;
+    for (const auto& l : lines)
+        if (l.find("SetValvePosition") != std::string::npos)
+            foundSetValve = true;
+    REQUIRE_FALSE(foundSetValve);
+}
+
+TEST_CASE("task.cpp: handleSetValvePosition function removed", "[task][logging][regression]")
+{
+    auto lines = readFileLines(TASK_SRC);
+    REQUIRE_FALSE(lines.empty());
+    bool foundHandler = false;
+    for (const auto& l : lines)
+        if (l.find("handleSetValvePosition") != std::string::npos)
+            foundHandler = true;
+    REQUIRE_FALSE(foundHandler);
 }
 
 TEST_CASE("main.cpp: waitResult loop logs SM result", "[main][logging][regression]")

@@ -244,7 +244,7 @@ bool dispatchCalSpeedAction(StepperMotor& stepper, domain::sm::CalSpeedAction ac
     }
 
     case domain::sm::CalSpeedAction::SettleValve:
-        vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
+        settle_valve(domain::gStopFull);
         return true;
 
     case domain::sm::CalSpeedAction::Complete:

@@ -38,6 +38,17 @@ void set_valve(ValvePosition pos)
     domain::gValvePosition.store(pos, std::memory_order_release);
 }
 
+void settle_valve(std::atomic<bool>& stopFlag)
+{
+    int steps = config::VALVE_SETTLE_MS / 10;
+    for (int i = 0; i < steps; ++i)
+    {
+        if (stopFlag.load(std::memory_order_acquire))
+            break;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 uint32_t ml_min_to_hz(float speedMlMin)
 {
     float speedCoeff = domain::CalibrationData::kDefaultSpeedCoeff;
@@ -86,7 +97,7 @@ void move_fill(StepperMotor& stepper, uint32_t speedHz)
 {
     ESP_LOGI("motor_task", "fill: valve=INPUT, dir=LIQ_IN");
     set_valve(ValvePosition::Input);
-    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
+    settle_valve(domain::gStopFull);
     domain::gBuretteState.store(BuretteState::Filling, std::memory_order_release);
     move_to_endstop(stepper, Direction::LiqIn, speedHz, domain::gStopFull);
 }
@@ -95,7 +106,7 @@ void move_empty(StepperMotor& stepper, uint32_t speedHz)
 {
     ESP_LOGI("motor_task", "empty: valve=OUTPUT, dir=LIQ_OUT");
     set_valve(ValvePosition::Output);
-    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
+    settle_valve(domain::gStopEmpty);
     domain::gBuretteState.store(BuretteState::Emptying, std::memory_order_release);
     move_to_endstop(stepper, Direction::LiqOut, speedHz, domain::gStopEmpty);
 }
@@ -131,7 +142,8 @@ void store_result(SmResult::Type type, int32_t stepsTaken, float measuredSpeed,
         }
     }
 
-    ESP_LOGI("motor_task", "Motor complete: type=%d steps=%ld", static_cast<int>(type), static_cast<long>(stepsTaken));
+    ESP_LOGI("motor_task", "Motor complete: type=%d steps=%ld", static_cast<int>(type),
+             static_cast<long>(stepsTaken));
     domain::gBuretteState.store(BuretteState::Idle, std::memory_order_release);
 }
 

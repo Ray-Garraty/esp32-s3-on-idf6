@@ -23,6 +23,13 @@ using namespace ecotiter::domain;
 using namespace ecotiter::domain::memory;
 using json = nlohmann::json;
 
+// Reset global state between tests
+static void resetState()
+{
+    gBuretteState.store(BuretteState::Idle, std::memory_order_release);
+    gValveIsSettling.store(false, std::memory_order_release);
+}
+
 // We test the core command processing logic inline since the actual
 // rest_api.cpp depends on ESP-IDF's httpd and application dispatch.
 // These tests verify the protocol handling independently.
@@ -111,6 +118,7 @@ TEST_CASE("handleCommandCore: valve.getState returns current valve state", "[res
 
 TEST_CASE("handleCommandCore: valve.setPosition accepted immediately", "[rest_api]")
 {
+    resetState();
     gValvePosition.store(ValvePosition::Output, std::memory_order_release);
     memory::ResponseBuffer buf{};
     auto result = handleCommandCore(R"({"cmd":"valve.setPosition","position":"input"})", buf);
@@ -156,7 +164,8 @@ TEST_CASE("rest_api.cpp: command_handler logs HTTP commands", "[rest_api][loggin
     {
         if (line.find("ESP_LOGI") != std::string::npos && line.find("HTTP RX") != std::string::npos)
             hasRxLog = true;
-        if (line.find("ESP_LOGI") != std::string::npos && line.find("HTTP RSP") != std::string::npos)
+        if (line.find("ESP_LOGI") != std::string::npos &&
+            line.find("HTTP RSP") != std::string::npos)
             hasRspLog = true;
     }
     INFO("Checking logs in: " << path);

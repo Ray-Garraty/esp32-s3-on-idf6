@@ -9,6 +9,7 @@
 #include "domain/types.hpp"
 #include "infrastructure/cal_cache.hpp"
 #include "infrastructure/config.hpp"
+#include "infrastructure/drivers/valve.hpp"
 #include "infrastructure/storage/nvs.hpp"
 
 namespace ecotiter::application::handlers::burette_ops
@@ -19,6 +20,16 @@ static constexpr auto kStatusOk = R"({"status":"ok"})";
 
 std::expected<CommandResponse, domain::AppError> handleFill()
 {
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Filling,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
     if (!cached)
         return makeErrorResponse("start_failed");
@@ -35,6 +46,7 @@ std::expected<CommandResponse, domain::AppError> handleFill()
     cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
     return makeAckThenResponse();
@@ -42,6 +54,16 @@ std::expected<CommandResponse, domain::AppError> handleFill()
 
 std::expected<CommandResponse, domain::AppError> handleEmpty()
 {
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Emptying,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
     if (!cached)
         return makeErrorResponse("start_failed");
@@ -61,18 +83,29 @@ std::expected<CommandResponse, domain::AppError> handleEmpty()
     cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
     return makeAckThenResponse();
 }
 
 std::expected<CommandResponse, domain::AppError> handleDoseVolume(std::optional<domain::Ml> volume,
-                                                                  std::optional<float> speedMlMin)
+                                                                   std::optional<float> speedMlMin)
 {
     if (!volume)
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Dosing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
     if (!cached)
         return makeErrorResponse("start_failed");
@@ -102,6 +135,7 @@ std::expected<CommandResponse, domain::AppError> handleDoseVolume(std::optional<
     cmd.accelHzPerS = domain::gAccel.load(std::memory_order_acquire);
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
 
@@ -114,6 +148,16 @@ std::expected<CommandResponse, domain::AppError> handleRinse(std::optional<uint3
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Rinsing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
     if (!cached)
         return makeErrorResponse("start_failed");
@@ -124,6 +168,7 @@ std::expected<CommandResponse, domain::AppError> handleRinse(std::optional<uint3
     cmd.startRinse.speedMlMin = config::RINSE_DEFAULT_SPEED_ML_MIN;
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
     return makeAckThenResponse();
@@ -137,6 +182,8 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(std::optional<std:
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
 
     auto* cached = infrastructure::gCalCache.load(std::memory_order_acquire);
     if (!cached)
@@ -170,6 +217,15 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(std::optional<std:
         return makeErrorResponse(reason);
     }
 
+    // CAS from Idle to Dosing to claim burette
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Dosing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     if (plan.action == domain::sm::CalRunAction::CalDose)
     {
         domain::MotorCommand cmd{};
@@ -177,6 +233,7 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(std::optional<std:
         cmd.startCalDose.speedMlMin = plan.speedMlMin;
         if (!application::sendMotorCommand(cmd))
         {
+            domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
             return makeErrorResponse("busy");
         }
     }
@@ -188,6 +245,7 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(std::optional<std:
         cmd.startCalSpeed.testFreqHz = plan.freqHz;
         if (!application::sendMotorCommand(cmd))
         {
+            domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
             return makeErrorResponse("busy");
         }
     }
@@ -197,10 +255,22 @@ std::expected<CommandResponse, domain::AppError> handleCalRun(std::optional<std:
 
 std::expected<CommandResponse, domain::AppError> handleStop()
 {
+    // Standalone valve settle has no motor to stop
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("valve_settling_try_again");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Stopping,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::Stop;
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
     return makeSingleResponse(std::string_view(R"({"status":"stopped"})"),
@@ -209,6 +279,16 @@ std::expected<CommandResponse, domain::AppError> handleStop()
 
 std::expected<CommandResponse, domain::AppError> handleEmergencyStop()
 {
+    // Emergency stop bypasses ALL checks — always allowed
+    // Cancel any pending valve settle timer
+    infrastructure::drivers::cancelValveSettleTimer();
+    domain::gValveIsSettling.store(false, std::memory_order_release);
+
+    // Reset burette state if it was busy (but proceed even if idle)
+    auto expected = domain::BuretteState::Idle;
+    domain::gBuretteState.compare_exchange_strong(expected, domain::BuretteState::Error,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+
     domain::gStopFull.store(true, std::memory_order_release);
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::EmergencyStop;
@@ -235,11 +315,22 @@ std::expected<CommandResponse, domain::AppError> handleMoveSteps(std::optional<d
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Dosing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::MoveSteps;
     cmd.steps = steps->value;
     if (!application::sendMotorCommand(cmd))
     {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
     }
     return makeAckThenResponse();
@@ -252,6 +343,11 @@ handleSetDirection(std::optional<domain::Direction> dir)
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    if (domain::gBuretteState.load(std::memory_order_acquire) != domain::BuretteState::Idle)
+        return makeErrorResponse("burette_busy");
+
     domain::gDirection.store(*dir, std::memory_order_release);
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::SetDirection;
@@ -269,6 +365,11 @@ std::expected<CommandResponse, domain::AppError> handleSetSpeed(std::optional<ui
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    if (domain::gBuretteState.load(std::memory_order_acquire) != domain::BuretteState::Idle)
+        return makeErrorResponse("burette_busy");
+
     domain::gSpeed.store(*speedHz, std::memory_order_release);
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::SetSpeed;
@@ -286,6 +387,11 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(std::optional<ui
     {
         return makeErrorResponse("invalid_params");
     }
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    if (domain::gBuretteState.load(std::memory_order_acquire) != domain::BuretteState::Idle)
+        return makeErrorResponse("burette_busy");
+
     domain::gAccel.store(*accelSteps, std::memory_order_release);
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::SetAccel;
@@ -302,12 +408,25 @@ std::expected<CommandResponse, domain::AppError> handleMoveContinuous(
 {
     if (!dir || !freqHz || *freqHz == 0)
         return makeErrorResponse("invalid_params");
+    if (domain::gValveIsSettling.load(std::memory_order_acquire))
+        return makeErrorResponse("burette_busy");
+    {
+        auto expected = domain::BuretteState::Idle;
+        if (!domain::gBuretteState.compare_exchange_strong(expected,
+                domain::BuretteState::Dosing,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return makeErrorResponse("burette_busy");
+    }
+
     domain::MotorCommand cmd{};
     cmd.type = domain::MotorCommandType::MoveContinuous;
     cmd.direction = *dir;
     cmd.speedHz = *freqHz;
     if (!application::sendMotorCommand(cmd))
+    {
+        domain::gBuretteState.store(domain::BuretteState::Idle, std::memory_order_release);
         return makeErrorResponse("busy");
+    }
     return makeAckThenResponse();
 }
 

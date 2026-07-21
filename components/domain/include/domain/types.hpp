@@ -142,7 +142,7 @@ inline std::atomic<uint32_t> gDispensedSteps{0};
 inline std::atomic<bool> gUsbHandshakeReceived{false};
 inline std::atomic<bool> gBleError{false};
 inline std::atomic<uint8_t> gStallGuardThreshold{0};
-inline std::atomic<bool> gMotorIsMoving{false};
+inline std::atomic<bool> gValveIsSettling{false};
 
 // Result delivery for serial/BLE — motor task pushes to gSmResultQueue
 inline std::atomic<uint64_t> gLastCmdId{0};

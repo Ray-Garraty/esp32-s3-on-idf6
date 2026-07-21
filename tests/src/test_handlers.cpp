@@ -15,6 +15,13 @@ using namespace ecotiter::application;
 using namespace ecotiter::application::handlers;
 using namespace ecotiter::domain;
 
+// Reset global state between tests
+static void resetState()
+{
+    gBuretteState.store(BuretteState::Idle, std::memory_order_release);
+    gValveIsSettling.store(false, std::memory_order_release);
+}
+
 static constexpr float TOLERANCE = 0.01f;
 static bool approx(float a, float b)
 {
@@ -37,6 +44,7 @@ TEST_CASE("handler: serial.ping returns ok", "[handlers][serial]")
 
 TEST_CASE("handler: fill returns AckThen", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleFill();
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -44,6 +52,7 @@ TEST_CASE("handler: fill returns AckThen", "[handlers][burette]")
 
 TEST_CASE("handler: empty returns AckThen", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleEmpty();
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -51,6 +60,7 @@ TEST_CASE("handler: empty returns AckThen", "[handlers][burette]")
 
 TEST_CASE("handler: doseVolume with param returns AckThen", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleDoseVolume(Ml{10.0f});
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -72,6 +82,7 @@ TEST_CASE("handler: rinse cycles required", "[handlers][burette]")
 
 TEST_CASE("handler: rinse with cycles returns AckThen", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleRinse(3);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -79,6 +90,7 @@ TEST_CASE("handler: rinse with cycles returns AckThen", "[handlers][burette]")
 
 TEST_CASE("handler: setDirection liq_in", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleSetDirection(Direction::LiqIn);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -95,6 +107,7 @@ TEST_CASE("handler: setDirection missing param returns error", "[handlers][buret
 
 TEST_CASE("handler: setSpeed", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleSetSpeed(1500u);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -104,6 +117,7 @@ TEST_CASE("handler: setSpeed", "[handlers][burette]")
 
 TEST_CASE("handler: setAccel", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleSetAccel(200u);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -113,6 +127,7 @@ TEST_CASE("handler: setAccel", "[handlers][burette]")
 
 TEST_CASE("handler: moveSteps", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleMoveSteps(Steps{500});
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -140,6 +155,7 @@ TEST_CASE("handler: getStatus returns correct fields", "[handlers][burette]")
 
 TEST_CASE("handler: stop", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleStop();
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -147,6 +163,7 @@ TEST_CASE("handler: stop", "[handlers][burette]")
 
 TEST_CASE("handler: emergencyStop", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleEmergencyStop();
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -154,6 +171,7 @@ TEST_CASE("handler: emergencyStop", "[handlers][burette]")
 
 TEST_CASE("handler: handleMoveContinuous returns AckThen", "[handlers][burette]")
 {
+    resetState();
     auto rsp = burette_ops::handleMoveContinuous(Direction::LiqOut, 500);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::AckThen);
@@ -228,6 +246,7 @@ TEST_CASE("handler: cal.reset restores defaults", "[handlers][cal]")
 
 TEST_CASE("handler: cal.run returns AckThen", "[handlers][cal]")
 {
+    resetState();
     float freqs[] = {250.0f, 500.0f, 750.0f};
     auto rsp = burette_cal::handleRunCalibration(freqs, 3, 20.0f);
     REQUIRE(rsp);
@@ -482,6 +501,7 @@ TEST_CASE("handler: adc.cal.get", "[handlers][sensors]")
 
 TEST_CASE("handler: valve.setPosition output returns Single", "[handlers][valve]")
 {
+    resetState();
     auto rsp = valve::handleSetPosition(ValvePosition::Output);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -491,6 +511,7 @@ TEST_CASE("handler: valve.setPosition output returns Single", "[handlers][valve]
 
 TEST_CASE("handler: valve.setPosition input returns Single", "[handlers][valve]")
 {
+    resetState();
     auto rsp = valve::handleSetPosition(ValvePosition::Input);
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
@@ -521,6 +542,109 @@ TEST_CASE("handler: valve.getState output", "[handlers][valve]")
     REQUIRE(rsp->kind == ResponseKind::Single);
     std::string_view sv(rsp->body.data(), rsp->bodySize);
     REQUIRE(sv.find("\"position\"") != std::string_view::npos);
+}
+
+// --- valve gatekeeper ---
+
+TEST_CASE("handler: valve.setPosition rejects when gValveIsSettling",
+          "[handlers][valve][gatekeeper]")
+{
+    resetState();
+    // First call succeeds
+    auto rsp1 = valve::handleSetPosition(ValvePosition::Input);
+    REQUIRE(rsp1);
+    REQUIRE(rsp1->kind == ResponseKind::Single);
+    // gValveIsSettling is now true (CAS succeeded but timer hasn't fired)
+    // Second call should be rejected
+    auto rsp2 = valve::handleSetPosition(ValvePosition::Output);
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Error);
+    std::string_view sv2(rsp2->body.data(), rsp2->bodySize);
+    REQUIRE(sv2.find("burette_busy") != std::string_view::npos);
+}
+
+TEST_CASE("handler: handleFill rejects when gValveIsSettling", "[handlers][burette][gatekeeper]")
+{
+    resetState();
+    // Acquire valve settle slot via handleSetPosition
+    auto rsp = valve::handleSetPosition(ValvePosition::Input);
+    REQUIRE(rsp);
+    // Now try fill — should fail
+    auto rsp2 = burette_ops::handleFill();
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Error);
+    std::string_view sv(rsp2->body.data(), rsp2->bodySize);
+    REQUIRE(sv.find("burette_busy") != std::string_view::npos);
+}
+
+TEST_CASE("handler: handleEmergencyStop bypasses all checks", "[handlers][burette][gatekeeper]")
+{
+    resetState();
+    // Acquire burette state first
+    auto rsp1 = burette_ops::handleFill();
+    REQUIRE(rsp1);
+    // Now emergency stop should still succeed
+    auto rsp2 = burette_ops::handleEmergencyStop();
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Single);
+}
+
+TEST_CASE("handler: two concurrent handleSetPosition — CAS rejects second",
+          "[handlers][valve][gatekeeper]")
+{
+    resetState();
+    // First succeeds
+    auto rsp1 = valve::handleSetPosition(ValvePosition::Input);
+    REQUIRE(rsp1);
+    REQUIRE(rsp1->kind == ResponseKind::Single);
+    // Second fails — gValveIsSettling is true
+    auto rsp2 = valve::handleSetPosition(ValvePosition::Output);
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Error);
+    std::string_view sv(rsp2->body.data(), rsp2->bodySize);
+    REQUIRE(sv.find("burette_busy") != std::string_view::npos);
+}
+
+TEST_CASE("handler: handleStop returns valve_settling_try_again during settle",
+          "[handlers][burette][gatekeeper]")
+{
+    resetState();
+    // Acquire valve settle slot
+    auto rsp1 = valve::handleSetPosition(ValvePosition::Input);
+    REQUIRE(rsp1);
+    // Stop should return valve_settling_try_again
+    auto rsp2 = burette_ops::handleStop();
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Error);
+    std::string_view sv(rsp2->body.data(), rsp2->bodySize);
+    REQUIRE(sv.find("valve_settling_try_again") != std::string_view::npos);
+}
+
+TEST_CASE("handler: emergencyStop clears gValveIsSettling", "[handlers][burette][gatekeeper]")
+{
+    resetState();
+    // Acquire valve settle slot via handleSetPosition
+    auto rsp1 = valve::handleSetPosition(ValvePosition::Input);
+    REQUIRE(rsp1);
+    REQUIRE(gValveIsSettling.load(std::memory_order_acquire));
+    // Emergency stop should cancel timer and clear flag
+    auto rsp2 = burette_ops::handleEmergencyStop();
+    REQUIRE(rsp2);
+    REQUIRE_FALSE(gValveIsSettling.load(std::memory_order_acquire));
+}
+
+TEST_CASE("handler: valve.setPosition rejects when burette is busy",
+          "[handlers][valve][gatekeeper]")
+{
+    resetState();
+    auto rsp1 = burette_ops::handleFill();
+    REQUIRE(rsp1);
+    // gBuretteState is now Filling, gValveIsSettling is false
+    auto rsp2 = valve::handleSetPosition(ValvePosition::Output);
+    REQUIRE(rsp2);
+    REQUIRE(rsp2->kind == ResponseKind::Error);
+    std::string_view sv(rsp2->body.data(), rsp2->bodySize);
+    REQUIRE(sv.find("burette_busy") != std::string_view::npos);
 }
 
 // --- system ---

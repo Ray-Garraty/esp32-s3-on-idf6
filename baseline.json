@@ -20,6 +20,7 @@
   "components/application/src/handlers/burette_ops.cpp": {
     "includes": [
       "infrastructure/cal_cache.hpp", "infrastructure/config.hpp",
+      "infrastructure/drivers/valve.hpp",
       "infrastructure/storage/nvs.hpp"
     ],
     "severity": "low",
@@ -37,7 +38,7 @@
     "sunset": "never"
   },
   "components/application/src/handlers/valve.cpp": {
-    "includes": ["infrastructure/config.hpp", "infrastructure/drivers/valve.hpp"],
+    "includes": ["infrastructure/drivers/valve.hpp"],
     "severity": "low",
     "tier": "B",
     "sunset": "never"

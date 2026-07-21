@@ -28,7 +28,6 @@ struct BroadcastEvent
     uint8_t stallGuardValue;
     bool isStalled;
     uint8_t stallGuardThreshold;
-    bool motorIsMoving;
     uint32_t stepsTaken;
 };
 

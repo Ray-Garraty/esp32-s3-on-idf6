@@ -110,7 +110,7 @@ inline constexpr uint8_t MOTOR_CMD_QUEUE_LEN = 4;
 inline constexpr uint32_t MOTOR_POLL_MS = 100;
 inline constexpr uint32_t STOP_SETTLE_MS = 50;
 inline constexpr uint32_t DIR_SETUP_MS = 1;
-inline constexpr uint32_t VALVE_SETTLE_MS = 50;
+inline constexpr uint32_t VALVE_SETTLE_MS = 500;
 
 // ── Memory safety margins ────────────────────────────────────────
 inline constexpr uint32_t DRAM_SAFETY_MARGIN = 4096;

@@ -123,6 +123,8 @@ void handleStop()
 void handleEmergencyStop()
 {
     ESP_LOGW(TAG, "EMERGENCY STOP");
+    drivers::cancelValveSettleTimer();
+    domain::gValveIsSettling.store(false, std::memory_order_release);
     domain::gStopFull.store(true, std::memory_order_release);
     domain::gStopEmpty.store(true, std::memory_order_release);
     domain::gBuretteState.store(BuretteState::Error, std::memory_order_release);
@@ -205,32 +207,6 @@ void handleStartCalSpeedSeq(StepperMotor& stepper, const MotorCommand& cmd)
     float nominalVol = cal.nominalVolumeMl;
     float curVol = domain::gVolumeMl.load(std::memory_order_acquire);
     run_cal_speed_seq_sm(stepper, p.freqs, p.fillSpeedMlMin, curVol, nominalVol);
-}
-
-void handleSetValvePosition(const MotorCommand& cmd)
-{
-    ESP_LOGI(TAG, "valve settle: %s",
-             (cmd.valvePosition == domain::ValvePosition::Input) ? "input" : "output");
-    vTaskDelay(pdMS_TO_TICKS(config::VALVE_SETTLE_MS));
-    const char* posStr =
-        (cmd.valvePosition == domain::ValvePosition::Input) ? "input" : "output";
-    // Push WS broadcast with settled position (non-blocking, best-effort)
-    if (gWsBroadcastQueue)
-    {
-        static struct
-        {
-            char data[domain::memory::MAX_RSP_SIZE];
-            size_t len;
-        } entry;
-        int n = std::snprintf(entry.data, sizeof(entry.data),
-                              R"({"event":"valve_settled","position":"%s"})", posStr);
-        if (n > 0 && static_cast<size_t>(n) < sizeof(entry.data))
-        {
-            entry.len = static_cast<size_t>(n);
-            xQueueSend(gWsBroadcastQueue, &entry, 0);
-        }
-    }
-    ESP_LOGI(TAG, "Valve settled: position=%s", posStr);
 }
 
 void handleReadTmcRegister(const MotorCommand& cmd)
@@ -363,10 +339,6 @@ extern "C" void motorTaskEntry(void* pvParameters)
 
             case MotorCommandType::StartCalSpeedSeq:
                 handleStartCalSpeedSeq(stepper, cmd);
-                break;
-
-            case MotorCommandType::SetValvePosition:
-                handleSetValvePosition(cmd);
                 break;
 
             case MotorCommandType::ReadTmcRegister:

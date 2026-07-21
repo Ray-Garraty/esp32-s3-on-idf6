@@ -24,7 +24,7 @@
 #include "diag/rtc_watchdog.hpp"
 #include "diag/stack_monitor.hpp"
 #include "diag/tick_watchdog.hpp"
-#include "domain/broadcast_helpers.hpp"
+
 #include "domain/calibration.hpp"
 #include "domain/log_buffer.hpp"
 #include "infrastructure/cal_cache.hpp"
@@ -306,7 +306,9 @@ extern "C" void app_main(void)
 
             if (scheduler.shouldBroadcast())
             {
-                domain::updateBroadcastState();
+                domain::gSpeedMlMin.store(
+                    domain::gSpeed.load(std::memory_order_acquire) > 0 ? 10.0f : 0.0f,
+                    std::memory_order_release);
 
                 ecotiter::interface::BroadcastEvent evt{
                     .tick = ecotiter::application::gTick.load(std::memory_order_acquire),
@@ -328,8 +330,6 @@ extern "C" void app_main(void)
                     .isStalled = false,
                     .stallGuardThreshold =
                         ecotiter::domain::gStallGuardThreshold.load(std::memory_order_acquire),
-                    .motorIsMoving =
-                        ecotiter::domain::gMotorIsMoving.load(std::memory_order_acquire),
                     .stepsTaken =
                         ecotiter::domain::gDispensedSteps.load(std::memory_order_acquire)};
 

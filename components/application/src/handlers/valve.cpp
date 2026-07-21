@@ -1,20 +1,15 @@
 #include "application/handlers/valve.hpp"
 
 #include <cstdio>
-#include <cstring>
 
 #include "application/command.hpp"
-#include "application/send_motor_command.hpp"
-#include "domain/memory.hpp"
-#include "domain/motor_command.hpp"
 #include "domain/types.hpp"
-#include "infrastructure/config.hpp"
 #include "infrastructure/drivers/valve.hpp"
 
 namespace ecotiter::application::handlers::valve
 {
-using domain::ResponseKind;
 using domain::CommandResponse;
+using domain::ResponseKind;
 
 std::expected<CommandResponse, domain::AppError>
 handleSetPosition(std::optional<domain::ValvePosition> pos)
@@ -24,25 +19,35 @@ handleSetPosition(std::optional<domain::ValvePosition> pos)
         return makeErrorResponse("invalid_params");
     }
 
-    // Queue settle + WS broadcast to motor task (non-blocking)
-    domain::MotorCommand cmd{};
-    cmd.type = domain::MotorCommandType::SetValvePosition;
-    cmd.valvePosition = *pos;
-    if (!application::sendMotorCommand(cmd))
+    // Mutual exclusion: burette must be idle AND no concurrent settle
+    // TOCTOU: gBuretteState load and gValveIsSettling CAS are not atomic.
+    //         A concurrent burette op may CAS-succeed on gBuretteState
+    //         between these two checks. HW is safe (motor task sets correct
+    //         valve), but the valve_settled WS event 500ms later may show
+    //         a stale position. Next broadcast corrects it.
+    if (domain::gBuretteState.load(std::memory_order_acquire) != domain::BuretteState::Idle)
     {
-        return makeErrorResponse("busy");
+        return makeErrorResponse("burette_busy");
+    }
+    bool expected = false;
+    if (!domain::gValveIsSettling.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                          std::memory_order_acquire))
+    {
+        return makeErrorResponse("burette_busy");
     }
 
-    // Set valve position immediately (fast GPIO write — no delay)
+    // GPIO write — immediate
     infrastructure::drivers::gValve.setPosition(*pos);
     domain::gValvePosition.store(*pos, std::memory_order_release);
+
+    // Arm settle timer (fires after VALVE_SETTLE_MS, clears gValveIsSettling)
+    infrastructure::drivers::armValveSettleTimer(*pos);
 
     const char* posStr = (*pos == domain::ValvePosition::Input) ? "input" : "output";
     CommandResponse rsp;
     rsp.kind = ResponseKind::Single;
     rsp.bodySize = static_cast<size_t>(std::snprintf(
-        rsp.body.data(), rsp.body.size(),
-        R"({"status":"ok","data":{"position":"%s"}})", posStr));
+        rsp.body.data(), rsp.body.size(), R"({"status":"ok","data":{"position":"%s"}})", posStr));
     return rsp;
 }
 

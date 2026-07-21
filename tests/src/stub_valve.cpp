@@ -25,3 +25,16 @@ domain::ValvePosition Valve::getPosition() const noexcept
 }
 
 } // namespace ecotiter::infrastructure::drivers
+
+// Stub implementations for valve settle timer (host tests)
+void ecotiter::infrastructure::drivers::armValveSettleTimer(domain::ValvePosition)
+{
+    // No-op: timer requires esp_timer which is unavailable in host tests
+    domain::gValveIsSettling.store(true, std::memory_order_release);
+}
+
+void ecotiter::infrastructure::drivers::cancelValveSettleTimer()
+{
+    // No-op: timer requires esp_timer which is unavailable in host tests
+    domain::gValveIsSettling.store(false, std::memory_order_release);
+}
