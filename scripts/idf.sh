@@ -328,17 +328,47 @@ case "$CMD" in
     test)
         test_cmd="${2:-run}"
         shift 2 2>/dev/null || true
+
+        mkdir -p "$PROJECT_DIR/logs"
+        test_build_log="$PROJECT_DIR/logs/test-build.log"
+
+        # Fresh log per run (overwrite, not multiply)
+        > "$test_build_log"
+
+        # Auto-populate dependency cache (idempotent, silent if already cached)
+        "$SCRIPT_DIR/setup-test-deps.sh" --quiet 2>/dev/null || true
+
+        # Configure (log only, compact status)
         if [ ! -f "$PROJECT_DIR/build-tests/CMakeCache.txt" ]; then
-            cmake -B "$PROJECT_DIR/build-tests" -S "$PROJECT_DIR/tests"
+            printf "Configuring test build... "
+            timeout 90 cmake -B "$PROJECT_DIR/build-tests" -S "$PROJECT_DIR/tests" \
+                >> "$test_build_log" 2>&1 \
+                && echo "done" \
+                || {
+                echo "failed"
+                echo "❌ cmake configure failed — see $test_build_log"
+                exit 1
+            }
         fi
-        cmake --build "$PROJECT_DIR/build-tests" 2>&1 | tail -1
+
+        # Build (log only, errors on failure)
+        cmake --build "$PROJECT_DIR/build-tests" >> "$test_build_log" 2>&1 || {
+            build_exit=$?
+            echo ""
+            echo "❌ Test build FAILED (exit $build_exit) — log:"
+            echo "       $test_build_log"
+            echo ""
+            tail -20 "$test_build_log" | sed 's/^/   | /'
+            exit 1
+        }
+
         case "$test_cmd" in
             --build) ;;
             --list) "$PROJECT_DIR/build-tests/unit_tests" --list-tests ;;
             run)    "$PROJECT_DIR/build-tests/unit_tests" ;;
             --)     "$PROJECT_DIR/build-tests/unit_tests" "$@" ;;
             *)
-                echo "Usage: $0 test {run|--build|--list|-- <filter>}"
+                echo "Usage: $0 test {run|--list|-- <filter>}"
                 exit 1
                 ;;
         esac

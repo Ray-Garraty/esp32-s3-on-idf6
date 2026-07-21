@@ -5,21 +5,46 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# --- nlohmann_json via FetchContent ---
-include(FetchContent)
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3
-)
-FetchContent_MakeAvailable(nlohmann_json)
+# Suppress FetchContent DOWNLOAD_EXTRACT_TIMESTAMP warning (cmake ≥3.24)
+cmake_policy(SET CMP0135 NEW)
 
-# --- Catch2 via FetchContent ---
-FetchContent_Declare(
-    Catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.15.1
-)
+# --- Dependency cache (avoids GitHub CDN at configure time) ---
+# Populate with: scripts/setup-test-deps.sh
+# Override cache dir: export ESP_TEST_DEPS_CACHE_DIR=/path/to/cache
+set(ESP_TEST_DEPS_CACHE "$ENV{HOME}/.cache/esp-test-deps")
+if(DEFINED ENV{ESP_TEST_DEPS_CACHE_DIR})
+    set(ESP_TEST_DEPS_CACHE "$ENV{ESP_TEST_DEPS_CACHE_DIR}")
+endif()
+
+include(FetchContent)
+
+# --- nlohmann_json: cached tarball → GitHub fallback ---
+set(NLOHMANN_ARCHIVE "${ESP_TEST_DEPS_CACHE}/nlohmann_json-3.11.3.tar.gz")
+if(EXISTS "${NLOHMANN_ARCHIVE}")
+    message(STATUS "nlohmann_json: using cached ${NLOHMANN_ARCHIVE}")
+    FetchContent_Declare(nlohmann_json URL "file://${NLOHMANN_ARCHIVE}")
+else()
+    FetchContent_Declare(nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+        GIT_SHALLOW TRUE
+    )
+endif()
+
+# --- Catch2: cached tarball → GitHub fallback ---
+set(CATCH2_ARCHIVE "${ESP_TEST_DEPS_CACHE}/Catch2-3.15.1.tar.gz")
+if(EXISTS "${CATCH2_ARCHIVE}")
+    message(STATUS "Catch2: using cached ${CATCH2_ARCHIVE}")
+    FetchContent_Declare(Catch2 URL "file://${CATCH2_ARCHIVE}")
+else()
+    FetchContent_Declare(Catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.15.1
+        GIT_SHALLOW TRUE
+    )
+endif()
+
+FetchContent_MakeAvailable(nlohmann_json)
 FetchContent_MakeAvailable(Catch2)
 
 # --- Application library (host-compilable subset) ---
