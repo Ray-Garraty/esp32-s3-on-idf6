@@ -519,6 +519,7 @@ extern "C" void app_main(void)
 
                         ecotiter::domain::memory::ResponseBuffer buf{};
                         size_t off = ecotiter::application::formatSmResult(buf, resultId, smResult);
+                        ESP_LOGI(TAG, "SM result: %s", std::string_view(buf.data(), off > buf.size() ? buf.size() : off).data());
 
                         if (off > 0 && off < buf.size())
                         {

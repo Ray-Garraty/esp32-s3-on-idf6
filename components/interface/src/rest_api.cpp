@@ -136,6 +136,7 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req)
         return ESP_FAIL;
     }
     bodyLen = static_cast<size_t>(ret);
+    ESP_LOGI(TAG, "HTTP RX: %.*s", (int)bodyLen, body.data());
 
     auto sv = std::string_view(body.data(), bodyLen);
     auto cmd = application::parseCommand(sv);
@@ -169,6 +170,7 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req)
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "serialize failed");
             return ESP_FAIL;
         }
+        ESP_LOGI(TAG, "HTTP RSP: %s", rspBuf.data());
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, rspBuf.data(), static_cast<ssize_t>(*serialized));
         return ESP_OK;
@@ -177,6 +179,7 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req)
     // AckThen: return immediately — result arrives via WS broadcast
     ecotiter::memory::PsramBuffer<domain::memory::MAX_RSP_SIZE> _buf{};
     auto& buf = *reinterpret_cast<domain::memory::ResponseBuffer*>(_buf.data());
+    ESP_LOGI(TAG, "HTTP RSP: {\"status\":\"accepted\"}");
     std::snprintf(buf.data(), buf.size(), R"({"status":"accepted"})");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf.data(), HTTPD_RESP_USE_STRLEN);

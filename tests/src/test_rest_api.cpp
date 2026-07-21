@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <fstream>
 #include <string_view>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -128,4 +130,36 @@ TEST_CASE("handleCommandCore: valve.setPosition invalid param returns error", "[
     auto result = handleCommandCore(R"({"cmd":"valve.setPosition","position":"invalid"})", buf);
     REQUIRE_FALSE(result);
     REQUIRE(result.error() == 400);
+}
+
+static std::vector<std::string> readFileLines(const std::string& path)
+{
+    std::vector<std::string> lines;
+    std::ifstream file(path);
+    if (!file.is_open())
+        return lines;
+    std::string line;
+    while (std::getline(file, line))
+        lines.push_back(line);
+    return lines;
+}
+
+TEST_CASE("rest_api.cpp: command_handler logs HTTP commands", "[rest_api][logging][regression]")
+{
+    auto path = TESTS_SOURCE_DIR "/../components/interface/src/rest_api.cpp";
+    auto lines = readFileLines(path);
+    REQUIRE_FALSE(lines.empty());
+
+    bool hasRxLog = false;
+    bool hasRspLog = false;
+    for (const auto& line : lines)
+    {
+        if (line.find("ESP_LOGI") != std::string::npos && line.find("HTTP RX") != std::string::npos)
+            hasRxLog = true;
+        if (line.find("ESP_LOGI") != std::string::npos && line.find("HTTP RSP") != std::string::npos)
+            hasRspLog = true;
+    }
+    INFO("Checking logs in: " << path);
+    REQUIRE(hasRxLog);
+    REQUIRE(hasRspLog);
 }
