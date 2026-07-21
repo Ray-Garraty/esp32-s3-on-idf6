@@ -89,7 +89,9 @@ std::expected<CommandResponse, domain::AppError> dispatch(const Command& cmd)
     case CommandType::Stop:
         return withId(burette_ops::handleStop());
     case CommandType::MoveToStop:
-        return withId(burette_ops::handleStop());
+        return withId(burette_ops::handleMoveContinuous(
+            cmd.direction,
+            cmd.freqHz ? std::optional<uint32_t>{static_cast<uint32_t>(*cmd.freqHz)} : std::nullopt));
     case CommandType::EmergencyStop:
         return withId(burette_ops::handleEmergencyStop());
     case CommandType::GetStatus:

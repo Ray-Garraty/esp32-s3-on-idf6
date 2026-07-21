@@ -310,3 +310,27 @@ TEST_CASE("serializeToBuffer: NoResponse produces empty", "[command]")
     REQUIRE(result);
     REQUIRE(*result == 0);
 }
+
+TEST_CASE("parseCommand: burette.moveToStop parses freq field", "[command]")
+{
+    auto cmd = parseCommand(
+        R"({"cmd":"burette.moveToStop","direction":"LIQ_IN","freq":300})");
+    REQUIRE(cmd);
+    REQUIRE(cmd->type == CommandType::MoveToStop);
+    REQUIRE(cmd->direction.has_value());
+    REQUIRE(*cmd->direction == Direction::LiqIn);
+    REQUIRE(cmd->freqHz.has_value());
+    REQUIRE(approx(*cmd->freqHz, 300.0f));
+}
+
+TEST_CASE("parseCommand: burette.moveToStop parses freq_hz field", "[command]")
+{
+    auto cmd = parseCommand(
+        R"({"cmd":"burette.moveToStop","direction":"liq_out","freq_hz":500})");
+    REQUIRE(cmd);
+    REQUIRE(cmd->type == CommandType::MoveToStop);
+    REQUIRE(cmd->direction.has_value());
+    REQUIRE(*cmd->direction == Direction::LiqOut);
+    REQUIRE(cmd->freqHz.has_value());
+    REQUIRE(approx(*cmd->freqHz, 500.0f));
+}

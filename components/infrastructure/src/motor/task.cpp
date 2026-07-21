@@ -104,6 +104,12 @@ void handleMoveSteps(StepperMotor& stepper, const MotorCommand& cmd)
     store_result(SmResult::Type::None, stepsTaken);
 }
 
+void handleMoveContinuous(StepperMotor& stepper, const MotorCommand& cmd)
+{
+    move_to_endstop(stepper, cmd.direction, cmd.speedHz, domain::gStopFull);
+    store_result(SmResult::Type::None, 0);
+}
+
 void handleStop()
 {
     ESP_LOGI(TAG, "Stop requested");
@@ -305,6 +311,10 @@ extern "C" void motorTaskEntry(void* pvParameters)
 
             case MotorCommandType::MoveSteps:
                 handleMoveSteps(stepper, cmd);
+                break;
+
+            case MotorCommandType::MoveContinuous:
+                handleMoveContinuous(stepper, cmd);
                 break;
 
             case MotorCommandType::Stop:

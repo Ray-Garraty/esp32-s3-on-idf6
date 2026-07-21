@@ -1,5 +1,5 @@
 ---
-type: Known Issue (Resolved)
+type: Known Issue
 title: "HTTP POST /api/command handler does not log received commands or responses"
 description: "command_handler() in rest_api.cpp parses and dispatches HTTP commands without ESP_LOGI. Commands from WebUI invisible in serial monitor, LogBuffer, and WebUI log panel."
 tags: [webui, rest_api, logging, http]

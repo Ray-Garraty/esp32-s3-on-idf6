@@ -226,3 +226,13 @@ TEST_CASE("dispatch: system.getStatus returns JSON", "[dispatch]")
     REQUIRE(rsp);
     REQUIRE(rsp->kind == ResponseKind::Single);
 }
+
+TEST_CASE("dispatch: MoveToStop returns AckThen (not Single)", "[dispatch]")
+{
+    Command cmd{CommandType::MoveToStop};
+    cmd.direction = Direction::LiqIn;
+    cmd.freqHz = 300.0f;
+    auto rsp = dispatch(cmd);
+    REQUIRE(rsp);
+    REQUIRE(rsp->kind == ResponseKind::AckThen);
+}

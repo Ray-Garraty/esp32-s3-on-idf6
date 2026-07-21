@@ -222,6 +222,15 @@ parseCommand(
             cmd.freqHz = static_cast<float>(it->get<double>());
         }
     }
+    // Fallback for WebUI which sends "freq" instead of "freq_hz"
+    if (!cmd.freqHz || *cmd.freqHz == 0.0f)
+    {
+        auto it = j.find("freq");
+        if (it != j.end() && it->is_number())
+        {
+            cmd.freqHz = static_cast<float>(it->get<double>());
+        }
+    }
     {
         auto it = j.find("ref_mv");
         if (it != j.end() && it->is_number())

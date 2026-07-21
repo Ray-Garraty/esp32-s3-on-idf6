@@ -297,4 +297,18 @@ std::expected<CommandResponse, domain::AppError> handleSetAccel(std::optional<ui
     return makeSingleResponse(std::string_view(kStatusOk), std::string_view(kStatusOk).size());
 }
 
+std::expected<CommandResponse, domain::AppError> handleMoveContinuous(
+    std::optional<domain::Direction> dir, std::optional<uint32_t> freqHz)
+{
+    if (!dir || !freqHz || *freqHz == 0)
+        return makeErrorResponse("invalid_params");
+    domain::MotorCommand cmd{};
+    cmd.type = domain::MotorCommandType::MoveContinuous;
+    cmd.direction = *dir;
+    cmd.speedHz = *freqHz;
+    if (!application::sendMotorCommand(cmd))
+        return makeErrorResponse("busy");
+    return makeAckThenResponse();
+}
+
 } // namespace ecotiter::application::handlers::burette_ops

@@ -12,6 +12,7 @@ namespace ecotiter::domain
 enum class MotorCommandType : uint8_t
 {
     MoveSteps,
+    MoveContinuous,
     Stop,
     EmergencyStop,
     Home,

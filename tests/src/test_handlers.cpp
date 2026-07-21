@@ -152,6 +152,27 @@ TEST_CASE("handler: emergencyStop", "[handlers][burette]")
     REQUIRE(rsp->kind == ResponseKind::Single);
 }
 
+TEST_CASE("handler: handleMoveContinuous returns AckThen", "[handlers][burette]")
+{
+    auto rsp = burette_ops::handleMoveContinuous(Direction::LiqOut, 500);
+    REQUIRE(rsp);
+    REQUIRE(rsp->kind == ResponseKind::AckThen);
+}
+
+TEST_CASE("handler: handleMoveContinuous missing param returns error", "[handlers][burette]")
+{
+    auto rsp = burette_ops::handleMoveContinuous(std::nullopt, std::nullopt);
+    REQUIRE(rsp);
+    REQUIRE(rsp->kind == ResponseKind::Error);
+}
+
+TEST_CASE("handler: handleMoveContinuous zero freq returns error", "[handlers][burette]")
+{
+    auto rsp = burette_ops::handleMoveContinuous(Direction::LiqIn, 0);
+    REQUIRE(rsp);
+    REQUIRE(rsp->kind == ResponseKind::Error);
+}
+
 TEST_CASE("handler: cal.get returns error when NVS unavailable", "[handlers][cal]")
 {
     auto stubFail = []() -> std::expected<CalibrationData, ResourceError> {

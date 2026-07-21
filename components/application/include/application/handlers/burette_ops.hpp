@@ -29,6 +29,8 @@ handleGetStatus(domain::BuretteState state, int32_t tempCX100, domain::ValvePosi
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>
 handleMoveSteps(std::optional<domain::Steps> steps);
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>
+handleMoveContinuous(std::optional<domain::Direction> dir, std::optional<uint32_t> freqHz);
+[[nodiscard]] std::expected<CommandResponse, domain::AppError>
 handleSetDirection(std::optional<domain::Direction> dir);
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>
 handleSetSpeed(std::optional<uint32_t> speedHz);
