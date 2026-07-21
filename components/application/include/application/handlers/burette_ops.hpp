@@ -10,6 +10,8 @@
 namespace ecotiter::application::handlers::burette_ops
 {
 
+using domain::CommandResponse;
+
 [[nodiscard]] std::expected<CommandResponse, domain::AppError> handleFill();
 [[nodiscard]] std::expected<CommandResponse, domain::AppError> handleEmpty();
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>

@@ -13,7 +13,7 @@
 #include "lwip/sockets.h"
 #include "mdns.h"
 
-#include "application/esp_check.hpp"
+#include "infrastructure/esp_check.hpp"
 #include "diag/ffi_guard.hpp"
 #include "domain/dns.hpp"
 #include "infrastructure/config.hpp"

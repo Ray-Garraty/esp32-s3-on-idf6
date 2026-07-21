@@ -7,13 +7,13 @@
 #include <cerrno>
 #include <cstring>
 
-#include "infrastructure/config.hpp"
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
 #include "esp_log.h"
 #include "esp_vfs_dev.h"
 
 static constexpr auto TAG = "serial";
+static constexpr size_t UART_TX_RINGBUF_SIZE = 1024;
 
 namespace ecotiter::interface
 {
@@ -40,7 +40,7 @@ Result<void> SerialReader::init() noexcept
         .flags = {.allow_pd = 0, .backup_before_sleep = 0},
     };
 
-    esp_err_t err = uart_driver_install(UART_NUM_0, INPUT_BUF_SIZE, config::UART_TX_RINGBUF_SIZE,
+    esp_err_t err = uart_driver_install(UART_NUM_0, INPUT_BUF_SIZE, UART_TX_RINGBUF_SIZE,
                                         10, nullptr, 0);
     if (err != ESP_OK)
     {

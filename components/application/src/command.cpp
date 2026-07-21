@@ -1,5 +1,7 @@
 #include "application/command.hpp"
 
+#include "domain/command_types.hpp"
+
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -9,6 +11,11 @@
 
 namespace ecotiter::application
 {
+using domain::CommandType;
+using domain::Command;
+using domain::ResponseKind;
+using domain::CommandResponse;
+
 namespace
 {
 

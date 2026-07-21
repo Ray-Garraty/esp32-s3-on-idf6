@@ -10,6 +10,8 @@
 namespace ecotiter::application::handlers::sensors
 {
 
+using domain::CommandResponse;
+
 using AdcCalReadCb = void (*)(uint16_t& aX1000, int16_t& b);
 using AdcCalWriteCb = std::expected<void, domain::ResourceError> (*)(uint16_t aX1000, int16_t b);
 using AdcSampleReadCb = uint16_t (*)(void);

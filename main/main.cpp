@@ -264,7 +264,7 @@ extern "C" void app_main(void)
     TickType_t lastWake = xTaskGetTickCount();
     constexpr TickType_t PACING_TICK = pdMS_TO_TICKS(10);
 
-    auto sendResponse = [&](const ecotiter::application::CommandResponse& rsp) {
+    auto sendResponse = [&](const ecotiter::domain::CommandResponse& rsp) {
         ecotiter::domain::memory::ResponseBuffer buf{};
         auto written = ecotiter::application::serializeToBuffer(rsp, buf);
         if (written && *written > 0)
@@ -450,7 +450,7 @@ extern "C" void app_main(void)
                         if (rsp)
                         {
                             // Save cmd id for result correlation
-                            if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
+                            if (rsp->kind == ecotiter::domain::ResponseKind::AckThen)
                             {
                                 ecotiter::domain::gLastCmdId.store(cmd->id,
                                                                    std::memory_order_release);
@@ -487,7 +487,7 @@ extern "C" void app_main(void)
                     auto rsp = ecotiter::application::dispatch(*cmd);
                     if (rsp)
                     {
-                        if (rsp->kind == ecotiter::application::ResponseKind::AckThen)
+                        if (rsp->kind == ecotiter::domain::ResponseKind::AckThen)
                         {
                             ecotiter::domain::gLastCmdId.store(cmd->id, std::memory_order_release);
                         }

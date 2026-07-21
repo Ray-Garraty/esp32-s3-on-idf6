@@ -12,6 +12,10 @@
 
 namespace ecotiter::application
 {
+using domain::CommandType;
+using domain::Command;
+using domain::ResponseKind;
+using domain::CommandResponse;
 
 namespace
 {

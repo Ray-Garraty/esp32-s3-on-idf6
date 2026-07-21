@@ -1,17 +1,9 @@
 {
-  "components/application/include/application/esp_check.hpp": {
-    "includes": ["esp_err.h", "esp_log.h"],
-    "severity": "high",
-    "tier": "A",
-    "sunset": "2026-10-01",
-    "note": "Public header — extract ESP error/log helpers behind infrastructure sink"
-  },
-  "components/application/include/application/send_motor_command.hpp": {
+  "components/application/src/send_motor_command.cpp": {
     "includes": ["infrastructure/motor_task.hpp"],
-    "severity": "high",
-    "tier": "A",
-    "sunset": "2026-10-01",
-    "note": "Public header — abstract motor task queue access"
+    "severity": "low",
+    "tier": "B",
+    "sunset": "never"
   },
   "components/application/src/dispatch.cpp": {
     "includes": ["infrastructure/storage/nvs.hpp"],
@@ -97,7 +89,7 @@
   "components/interface/src/serial.cpp": {
     "includes": [
       "driver/uart.h", "driver/uart_vfs.h", "esp_log.h",
-      "esp_vfs_dev.h", "infrastructure/config.hpp"
+      "esp_vfs_dev.h"
     ],
     "severity": "low",
     "tier": "B",

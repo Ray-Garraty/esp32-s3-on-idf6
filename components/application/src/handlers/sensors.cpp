@@ -18,6 +18,9 @@
 
 namespace ecotiter::application::handlers::sensors
 {
+using domain::ResponseKind;
+using domain::CommandResponse;
+
 namespace
 {
 

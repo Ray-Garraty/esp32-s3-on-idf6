@@ -13,6 +13,7 @@
 
 namespace ecotiter::application::handlers::burette_ops
 {
+using domain::CommandResponse;
 
 static constexpr auto kStatusOk = R"({"status":"ok"})";
 

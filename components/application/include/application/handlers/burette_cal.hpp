@@ -11,6 +11,8 @@
 namespace ecotiter::application::handlers::burette_cal
 {
 
+using domain::CommandResponse;
+
 // Callback type: read current calibration from NVS
 using ReadCalCb = std::expected<domain::CalibrationData, domain::ResourceError> (*)();
 // Callback type: write calibration to NVS

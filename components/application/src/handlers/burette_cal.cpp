@@ -17,6 +17,10 @@
 
 namespace ecotiter::application::handlers::burette_cal
 {
+using domain::Command;
+using domain::ResponseKind;
+using domain::CommandResponse;
+
 namespace
 {
 

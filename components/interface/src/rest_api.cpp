@@ -6,6 +6,7 @@
 
 #include "application/command.hpp"
 #include "application/dispatch.hpp"
+#include "domain/command_types.hpp"
 #include "application/response.hpp"
 #include "domain/types.hpp"
 #include "nlohmann/json.hpp"
@@ -72,7 +73,7 @@ std::expected<size_t, int> handleCommandCore(std::string_view body,
     {
         return std::unexpected(500);
     }
-    if (rsp->kind == application::ResponseKind::Error)
+    if (rsp->kind == domain::ResponseKind::Error)
     {
         return std::unexpected(400);
     }
@@ -158,7 +159,7 @@ esp_err_t ecotiter::interface::command_handler(httpd_req_t* req)
     }
 
     // For synchronous commands (Single, Error), return immediately
-    if (rsp->kind != application::ResponseKind::AckThen)
+    if (rsp->kind != domain::ResponseKind::AckThen)
     {
         ecotiter::memory::PsramBuffer<domain::memory::MAX_RSP_SIZE> _rspBuf{};
         auto& rspBuf = *reinterpret_cast<domain::memory::ResponseBuffer*>(_rspBuf.data());

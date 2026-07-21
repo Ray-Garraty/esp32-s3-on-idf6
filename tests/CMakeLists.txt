@@ -59,6 +59,7 @@ set(APPLICATION_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/src/handlers/system.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/src/handlers/valve.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/src/handlers/serial.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/application/src/send_motor_command.cpp
 )
 
 set(DOMAIN_SRCS

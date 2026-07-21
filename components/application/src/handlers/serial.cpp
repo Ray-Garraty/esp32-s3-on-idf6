@@ -8,6 +8,7 @@
 
 namespace ecotiter::application::handlers::serial
 {
+using domain::CommandResponse;
 
 std::expected<CommandResponse, domain::AppError> handlePing()
 {

@@ -10,6 +10,8 @@
 namespace ecotiter::application::handlers::valve
 {
 
+using domain::CommandResponse;
+
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>
 handleSetPosition(std::optional<domain::ValvePosition> pos);
 [[nodiscard]] std::expected<CommandResponse, domain::AppError>

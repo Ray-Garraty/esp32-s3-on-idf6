@@ -503,6 +503,14 @@ esp_err_t api_logs_download_handler(httpd_req_t* req)
     return ESP_OK;
 }
 
+static void removeWsSession(httpd_req_t* req, int fd)
+{
+    if (fd >= 0 && req && req->user_ctx)
+    {
+        static_cast<HttpServer*>(req->user_ctx)->removeSession(fd);
+    }
+}
+
 esp_err_t ws_handler(httpd_req_t* req)
 {
     diag::FfiGuard guard(83);
@@ -547,20 +555,13 @@ esp_err_t ws_handler(httpd_req_t* req)
             return ESP_FAIL;
         }
         ESP_LOGW(TAG, "ws_handler: recv failed (fd=%d, err=%d)", fd, err);
-        if (fd >= 0 && req->user_ctx)
-        {
-            static_cast<HttpServer*>(req->user_ctx)->removeSession(fd);
-        }
+        removeWsSession(req, fd);
         return ESP_FAIL;
     }
 
     if (frame.type == HTTPD_WS_TYPE_CLOSE)
     {
-        if (fd >= 0 && req->user_ctx)
-        {
-            auto* server = static_cast<HttpServer*>(req->user_ctx);
-            server->removeSession(fd);
-        }
+        removeWsSession(req, fd);
         return ESP_OK;
     }
 

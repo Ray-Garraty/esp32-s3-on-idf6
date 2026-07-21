@@ -8,6 +8,8 @@
 
 namespace ecotiter::application::handlers::system
 {
+using domain::ResponseKind;
+using domain::CommandResponse;
 
 std::expected<CommandResponse, domain::AppError>
 handleGetStatus(domain::BuretteState state, int32_t tempCX100, domain::ValvePosition valvePos,

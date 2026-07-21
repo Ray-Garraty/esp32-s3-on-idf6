@@ -774,51 +774,107 @@ def count_fan_out(includes: list[IncludeDirective],
 
 
 def count_public_methods(lines: list[str]) -> int:
-    """Heuristic: count method declarations in public: sections.
+    """Count method declarations in public: sections.
 
-    Lines containing '(' but not matching if/for/while/switch/return patterns.
-    C++ structs have public access by default.
+    Uses a simple state machine to track access level, brace depth,
+    and struct/class nesting to avoid counting function-call lines
+    inside method bodies as method declarations.
     """
     in_public = False
     count = 0
+    brace_depth = 0          # tracks {} nesting
+    prev_line_was_method_decl = False   # True if previous line was counted as method
 
     for line in lines:
         stripped = line.strip()
 
-        # struct → public by default
+        if not stripped:
+            continue
+
+        # struct → public by default, but track nesting
         if re.match(r'\s*struct\s+\w+', stripped):
             in_public = True
+            brace_depth += 1  # struct opens a scope
+            prev_line_was_method_decl = False
             continue
 
-        # class → private by default
+        # class → private by default, track nesting
         if re.match(r'\s*class\s+\w+', stripped):
             in_public = False
+            brace_depth += 1  # class opens a scope
+            prev_line_was_method_decl = False
             continue
 
-        # Track public:/private:/protected: sections
+        # Track closing braces for classes/structs
+        # Count all '}' characters to handle `};` and `}`
+        close_count = stripped.count('}')
+        open_count = stripped.count('{')
+        if close_count > 0:
+            brace_depth = max(0, brace_depth - close_count)
+            if brace_depth == 0:
+                # Exited the outermost scope — reset access
+                in_public = False
+        if open_count > 0:
+            brace_depth += open_count
+
+        # Track access specifiers
         if stripped.startswith("public:"):
             in_public = True
+            prev_line_was_method_decl = False
             continue
         if stripped.startswith("private:") or stripped.startswith("protected:"):
             in_public = False
+            prev_line_was_method_decl = False
             continue
 
+        # Skip if not in a public section
         if not in_public:
+            prev_line_was_method_decl = False
             continue
 
-        # Skip empty, comments, preprocessor
-        if not stripped or stripped.startswith("//") or stripped.startswith("#"):
+        # Skip preprocessor directives, comments
+        if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*'):
+            prev_line_was_method_decl = False
             continue
 
-        # Count lines with '(' for method declarations
+        # If we're inside a method body (brace_depth > 1 for struct/class),
+        # don't count function calls as declarations
+        # At top-level (brace_depth == 1 for class body), count declarations
+        # At nested level (brace_depth > 1), skip function-call lines
+        if brace_depth > 1:
+            # Inside a method body — skip function calls
+            prev_line_was_method_decl = False
+            continue
+
+        # Count lines with '(' for method declarations at class level
         if '(' not in stripped:
+            prev_line_was_method_decl = False
             continue
 
         # Exclude control flow statements
-        if re.match(r'\s*(if|for|while|switch|return)\s*\(', stripped):
+        if re.match(r'\s*(if|for|while|switch|catch)\s*\(', stripped):
+            prev_line_was_method_decl = False
             continue
 
+        # Exclude return statements
+        if stripped.startswith('return '):
+            prev_line_was_method_decl = False
+            continue
+
+        # Exclude using declarations/aliases with function pointers
+        if stripped.startswith('using '):
+            prev_line_was_method_decl = False
+            continue
+
+        # Count as method declaration
         count += 1
+        prev_line_was_method_decl = True
+
+        # If the method declaration continues on the next line (no { yet),
+        # keep prev_line_was_method_decl True so we can detect continuation
+
+        # Check if this line opens a brace (inline method definition)
+        # If it does, brace_depth will be > 1 for subsequent lines
 
     return count
 
